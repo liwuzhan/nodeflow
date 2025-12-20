@@ -1,0 +1,78 @@
+name: NodeFlow 自动化测试
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ['3.9', '3.10', '3.11']
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v3
+
+      - name: 设置 Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: 缓存 pip 包
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pyyaml
+
+      - name: 运行测试
+        run: |
+          bash tools/run_tests.sh quick
+
+      - name: 生成测试报告
+        if: always()
+        run: |
+          mkdir -p test-reports
+          echo "# NodeFlow 测试报告" > test-reports/summary.md
+          echo "- OS: ${{ matrix.os }}" >> test-reports/summary.md
+          echo "- Python: ${{ matrix.python-version }}" >> test-reports/summary.md
+          echo "- 时间: $(date)" >> test-reports/summary.md
+
+      - name: 上传测试报告
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: test-reports-${{ matrix.os }}-${{ matrix.python-version }}
+          path: .test-reports/
+          retention-days: 30
+
+      - name: 评论 PR
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            let comment = `## ✅ NodeFlow 自动测试结果\n\n`;
+            comment += `- **操作系统**: ${{ matrix.os }}\n`;
+            comment += `- **Python 版本**: ${{ matrix.python-version }}\n`;
+            comment += `- **时间**: ${new Date().toLocaleString()}\n`;
+            comment += `- **状态**: ${{ job.status }}\n\n`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
