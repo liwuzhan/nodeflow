@@ -1,0 +1,29 @@
+graph_id: rtk_controller_demo
+graph_version: 1
+node_hub_path: ./node-hub
+
+nodes:
+  - id: rtk_main
+    package: rtk
+    params:
+      device: "/dev/ttyUSB0"
+      baudrate: 115200
+      update_rate_hz: 10.0
+      simulation_mode: true
+
+  - id: controller_main
+    package: controller
+    params:
+      vehicle_type: "tracked"
+      max_speed: 2.0
+      target_heading: 90.0
+      enable_control: true
+
+edges:
+  - from: rtk_main.gps_fix
+    to: controller_main.gps_fix
+    type: gps.fix
+
+restart_policy:
+  max_retries: 3
+  backoff_ms: 500

@@ -1,0 +1,106 @@
+# Test Scenario 7: Multi-Layer Pipeline Test
+# 目标: 验证复杂的多层处理管道
+#
+# 验证方法:
+# - 整个管道数据流畅通
+# - 无任何节点阻塞或超时
+# - logger正确记录三个并发数据流
+
+graph_id: test_mock_pipeline
+graph_version: 1
+node_hub_path: ./node-hub
+
+nodes:
+  # 输入层：传感器
+  - id: joystick_0
+    package: mock_joystick
+    params:
+      mode: sine
+      update_rate_hz: 50
+
+  - id: gps_0
+    package: mock_gps
+    params:
+      mode: moving
+      update_rate_hz: 10
+      velocity_mps: 1.0
+      heading_deg: 45.0
+
+  - id: imu_0
+    package: mock_imu
+    params:
+      mode: stationary
+      update_rate_hz: 100
+
+  # 处理层
+  - id: fusion_0
+    package: mock_sensor_fusion
+    params:
+      fusion_algorithm: simple_avg
+      update_rate_hz: 50
+
+  - id: controller_0
+    package: mock_controller_sim
+    params:
+      control_mode: pure_pursuit
+      lookahead_distance: 2.0
+      update_rate_hz: 50
+
+  - id: planner_0
+    package: mock_path_planner
+    params:
+      plan_mode: direct_line
+      path_length: 10
+      computation_delay_ms: 50
+
+  # 输出层
+  - id: motor_0
+    package: mock_motor_controller
+    params:
+      motor_count: 2
+      response_delay_ms: 100
+
+  - id: logger_0
+    package: logger
+    params:
+      web_port: 8004
+
+edges:
+  # Sensor fusion inputs
+  - from: gps_0.gps_fix
+    to: fusion_0.gps_fix
+
+  - from: imu_0.imu_data
+    to: fusion_0.imu_data
+
+  # Controller inputs
+  - from: fusion_0.fused_pose
+    to: controller_0.gps_fix
+
+  - from: joystick_0.control_input
+    to: controller_0.joystick_input
+
+  # Path planner
+  - from: gps_0.gps_fix
+    to: planner_0.target
+
+  - from: planner_0.path
+    to: controller_0.path_reference
+
+  # Motor execution
+  - from: controller_0.control_command
+    to: motor_0.control_cmd
+
+  # Logging (multiple inputs)
+  - from: gps_0.gps_fix
+    to: logger_0.input1
+
+  - from: controller_0.control_command
+    to: logger_0.input2
+
+  - from: imu_0.imu_data
+    to: logger_0.input3
+
+restart_policy:
+  max_retries: 3
+  retry_delay_sec: 5

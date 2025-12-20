@@ -1,0 +1,33 @@
+name: rtk
+version: 0.1.0
+description: RTK GPS定位输入节点 - 模拟RTK定位接收器
+
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+
+ports:
+  inputs: []
+  outputs:
+    - name: gps_fix
+      type: gps.fix
+      description: RTK GPS定位数据输出
+
+params:
+  device:
+    type: string
+    required: true
+    description: 串口设备路径，如/dev/ttyUSB0
+  baudrate:
+    type: int
+    default: 115200
+    description: 波特率
+  update_rate_hz:
+    type: float
+    default: 10.0
+    description: 数据发布频率（Hz）
+  simulation_mode:
+    type: bool
+    default: true
+    description: 是否使用模拟数据（仅用于演示）

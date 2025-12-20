@@ -1,0 +1,35 @@
+# Test Scenario 6: Error Injection Test
+# 目标: 验证框架对数据流中断/错误的容忍性
+#
+# 验证方法:
+# - 验证器检测数据丢失事件
+# - 系统继续正常运行（不崩溃）
+# - 日志记录错误事件
+
+graph_id: test_mock_errors
+graph_version: 1
+node_hub_path: ./node-hub
+
+nodes:
+  - id: data_gen_0
+    package: mock_data_generator
+    params:
+      data_type: generic_json
+      rate_hz: 20
+      error_injection: dropout
+      error_rate: 0.05
+
+  - id: validator_0
+    package: mock_data_validator
+    params:
+      min_frequency_hz: 15
+      check_seq_continuity: true
+      report_interval_sec: 5
+
+edges:
+  - from: data_gen_0.data_out
+    to: validator_0.data_in
+
+restart_policy:
+  max_retries: 3
+  retry_delay_sec: 5

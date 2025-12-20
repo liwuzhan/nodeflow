@@ -1,0 +1,31 @@
+# Test Scenario 2: Chain Data Flow Test
+# 目标: 验证数据在多个节点间正确流动
+#
+# 验证方法:
+# - logger节点接收GPS数据
+# - 无socket连接错误
+# - 数据持续更新（查看日志中的数据序列号）
+
+graph_id: test_mock_chain
+graph_version: 1
+node_hub_path: ./node-hub
+
+nodes:
+  - id: gps_0
+    package: mock_gps
+    params:
+      mode: stationary
+      update_rate_hz: 5
+
+  - id: logger_0
+    package: logger
+    params:
+      web_port: 8001
+
+edges:
+  - from: gps_0.gps_fix
+    to: logger_0.input1
+
+restart_policy:
+  max_retries: 3
+  retry_delay_sec: 5

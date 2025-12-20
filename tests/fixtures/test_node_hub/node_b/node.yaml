@@ -1,0 +1,18 @@
+name: node_b
+version: 0.1.0
+description: Test node B - depends on A
+
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+
+ports:
+  inputs:
+    - name: input1
+      type: test.data
+  outputs:
+    - name: output1
+      type: test.data
+
+params: {}

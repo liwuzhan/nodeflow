@@ -1,0 +1,62 @@
+name: mock_gps
+version: "1.0"
+description: "Mock GPS/RTK positioning simulator for testing location-based functionality"
+
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+  darwin:
+    kind: python
+    cmd: ["python3", "run.py"]
+  windows:
+    kind: python
+    cmd: ["python", "run.py"]
+
+ports:
+  inputs: []
+  outputs:
+    - name: gps_fix
+      type: json
+      description: "Simulated GPS/RTK fix data with position and accuracy"
+
+params:
+  mode:
+    type: string
+    default: "stationary"
+    description: "Position generation mode: 'stationary', 'moving', 'trajectory'"
+
+  update_rate_hz:
+    type: number
+    default: 10
+    description: "Publishing frequency in Hz"
+
+  start_latitude:
+    type: number
+    default: 39.9042
+    description: "Starting latitude (decimal degrees)"
+
+  start_longitude:
+    type: number
+    default: 116.4074
+    description: "Starting longitude (decimal degrees)"
+
+  start_altitude:
+    type: number
+    default: 50.0
+    description: "Starting altitude (meters)"
+
+  velocity_mps:
+    type: number
+    default: 1.0
+    description: "Velocity for moving mode (meters per second)"
+
+  heading_deg:
+    type: number
+    default: 45.0
+    description: "Heading for moving mode (degrees, 0=North, 90=East)"
+
+  accuracy_meters:
+    type: number
+    default: 0.05
+    description: "Simulated horizontal accuracy (meters)"

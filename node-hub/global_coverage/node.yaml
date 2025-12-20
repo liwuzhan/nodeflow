@@ -1,0 +1,23 @@
+name: global_coverage
+version: 0.1.0
+description: 全局全覆盖路径规划节点 - 基于往复式扫描算法
+
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+  windows:
+    kind: python
+    cmd: ["python", "run.py"]
+
+ports:
+  inputs:
+    - name: task_request
+      type: planning.task
+      description: 包含地块信息和车辆配置的规划任务请求
+  outputs:
+    - name: global_path
+      type: planning.path
+      description: 规划生成的WGS84经纬度路径点列表
+
+params: []

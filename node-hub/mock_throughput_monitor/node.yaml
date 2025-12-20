@@ -1,0 +1,32 @@
+name: mock_throughput_monitor
+version: "1.0"
+description: "Throughput and latency monitor for performance testing"
+
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+  darwin:
+    kind: python
+    cmd: ["python3", "run.py"]
+  windows:
+    kind: python
+    cmd: ["python", "run.py"]
+
+ports:
+  inputs:
+    - name: data_in
+      type: json
+      description: "Input data stream to monitor"
+  outputs: []
+
+params:
+  window_size:
+    type: number
+    default: 100
+    description: "Sample window size for statistics"
+
+  log_stats_interval_sec:
+    type: number
+    default: 10
+    description: "Stats logging interval (seconds)"

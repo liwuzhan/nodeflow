@@ -1,0 +1,61 @@
+name: mock_controller_sim
+version: "1.0"
+description: "Mock control algorithm simulator implementing pure pursuit steering"
+
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+  darwin:
+    kind: python
+    cmd: ["python3", "run.py"]
+  windows:
+    kind: python
+    cmd: ["python", "run.py"]
+
+ports:
+  inputs:
+    - name: gps_fix
+      type: json
+      description: "Current GPS position from localization"
+    - name: path_reference
+      type: json
+      description: "Reference path from path planner"
+    - name: joystick_input
+      type: json
+      description: "Optional joystick override commands"
+  outputs:
+    - name: control_command
+      type: json
+      description: "Generated control command (velocity and steering angle)"
+
+params:
+  control_mode:
+    type: string
+    default: "pure_pursuit"
+    description: "Control mode: 'pure_pursuit', 'pid', 'manual'"
+
+  lookahead_distance:
+    type: number
+    default: 2.0
+    description: "Lookahead distance for pure pursuit (meters)"
+
+  max_steering_angle:
+    type: number
+    default: 0.5
+    description: "Maximum steering angle (radians)"
+
+  max_velocity:
+    type: number
+    default: 2.0
+    description: "Maximum velocity (m/s)"
+
+  update_rate_hz:
+    type: number
+    default: 50
+    description: "Control update frequency (Hz)"
+
+  wheelbase:
+    type: number
+    default: 1.0
+    description: "Vehicle wheelbase (meters)"

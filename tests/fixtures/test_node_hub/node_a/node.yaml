@@ -1,0 +1,16 @@
+name: node_a
+version: 0.1.0
+description: Test node A - no dependencies
+
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+
+ports:
+  inputs: []
+  outputs:
+    - name: output1
+      type: test.data
+
+params: {}

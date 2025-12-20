@@ -1,0 +1,67 @@
+name: mock_imu
+version: "1.0"
+description: "Mock IMU (Inertial Measurement Unit) simulator for testing sensor fusion and orientation estimation"
+
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+  darwin:
+    kind: python
+    cmd: ["python3", "run.py"]
+  windows:
+    kind: python
+    cmd: ["python", "run.py"]
+
+ports:
+  inputs: []
+  outputs:
+    - name: imu_data
+      type: json
+      description: "Simulated IMU data with accelerometer, gyroscope, and magnetometer readings"
+
+params:
+  mode:
+    type: string
+    default: "stationary"
+    description: "Motion mode: 'stationary', 'accelerating', 'rotating', 'vibrating'"
+
+  update_rate_hz:
+    type: number
+    default: 100
+    description: "Publishing frequency in Hz (typical: 50-200 Hz)"
+
+  noise_level:
+    type: number
+    default: 0.01
+    description: "Sensor noise standard deviation (0.0 = no noise)"
+
+  accel_bias_x:
+    type: number
+    default: 0.0
+    description: "Accelerometer X-axis bias (m/s^2)"
+
+  accel_bias_y:
+    type: number
+    default: 0.0
+    description: "Accelerometer Y-axis bias (m/s^2)"
+
+  accel_bias_z:
+    type: number
+    default: 0.0
+    description: "Accelerometer Z-axis bias (m/s^2)"
+
+  gyro_bias_x:
+    type: number
+    default: 0.0
+    description: "Gyroscope X-axis bias (rad/s)"
+
+  gyro_bias_y:
+    type: number
+    default: 0.0
+    description: "Gyroscope Y-axis bias (rad/s)"
+
+  gyro_bias_z:
+    type: number
+    default: 0.0
+    description: "Gyroscope Z-axis bias (rad/s)"

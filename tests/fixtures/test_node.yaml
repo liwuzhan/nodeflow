@@ -1,0 +1,32 @@
+name: test_node
+version: 0.1.0
+description: Test node for unit tests
+
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+
+ports:
+  inputs:
+    - name: input1
+      type: test.input
+      description: Test input port
+
+  outputs:
+    - name: output1
+      type: test.output
+      description: Test output port
+
+params:
+  param1:
+    type: string
+    required: true
+    description: Required parameter
+  param2:
+    type: int
+    default: 100
+    description: Optional integer parameter
+  param3:
+    type: float
+    default: 3.14

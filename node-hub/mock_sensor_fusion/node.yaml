@@ -1,0 +1,38 @@
+name: mock_sensor_fusion
+version: "1.0"
+description: "Mock sensor fusion node that combines GPS and IMU data"
+
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+  darwin:
+    kind: python
+    cmd: ["python3", "run.py"]
+  windows:
+    kind: python
+    cmd: ["python", "run.py"]
+
+ports:
+  inputs:
+    - name: gps_fix
+      type: json
+      description: "GPS position data"
+    - name: imu_data
+      type: json
+      description: "IMU sensor data"
+  outputs:
+    - name: fused_pose
+      type: json
+      description: "Fused position and orientation estimate"
+
+params:
+  fusion_algorithm:
+    type: string
+    default: "simple_avg"
+    description: "Fusion algorithm: 'simple_avg', 'ekf', 'ukf'"
+
+  update_rate_hz:
+    type: number
+    default: 50
+    description: "Output update frequency (Hz)"

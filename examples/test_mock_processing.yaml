@@ -1,0 +1,41 @@
+# Test Scenario 4: Processing Node Test
+# 目标: 验证有输入输出的处理节点正确工作
+#
+# 验证方法:
+# - 路径规划器接收GPS目标
+# - 输出规划路径给logger
+# - 处理延迟在预期范围内
+
+graph_id: test_mock_processing
+graph_version: 1
+node_hub_path: ./node-hub
+
+nodes:
+  - id: gps_0
+    package: mock_gps
+    params:
+      mode: stationary
+      update_rate_hz: 2
+
+  - id: planner_0
+    package: mock_path_planner
+    params:
+      plan_mode: direct_line
+      path_length: 10
+      computation_delay_ms: 50
+
+  - id: logger_0
+    package: logger
+    params:
+      web_port: 8003
+
+edges:
+  - from: gps_0.gps_fix
+    to: planner_0.target
+
+  - from: planner_0.path
+    to: logger_0.input1
+
+restart_policy:
+  max_retries: 3
+  retry_delay_sec: 5

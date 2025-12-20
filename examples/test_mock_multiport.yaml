@@ -1,0 +1,40 @@
+# Test Scenario 3: Multi-Port Convergence Test
+# 目标: 验证多个输入端口的并发数据接收
+#
+# 验证方法:
+# - logger同时接收来自两个源的数据
+# - 数据无丢失（检查seq号连续性）
+# - 两个输入独立流动，互不阻塞
+
+graph_id: test_mock_multiport
+graph_version: 1
+node_hub_path: ./node-hub
+
+nodes:
+  - id: joystick_0
+    package: mock_joystick
+    params:
+      mode: sine
+      update_rate_hz: 50
+
+  - id: gps_0
+    package: mock_gps
+    params:
+      mode: stationary
+      update_rate_hz: 10
+
+  - id: logger_0
+    package: logger
+    params:
+      web_port: 8002
+
+edges:
+  - from: joystick_0.control_input
+    to: logger_0.input1
+
+  - from: gps_0.gps_fix
+    to: logger_0.input2
+
+restart_policy:
+  max_retries: 3
+  retry_delay_sec: 5
