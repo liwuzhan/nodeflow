@@ -29,7 +29,7 @@ def test_message_protocol_encode_decode():
         "latitude": 39.9042,
         "longitude": 116.4074,
         "fix_type": "RTK",
-        "message": "This is a test message"
+        "message": "This is a test message",
     }
 
     # 编码
@@ -37,18 +37,21 @@ def test_message_protocol_encode_decode():
     print(f"✓ 编码成功: {len(encoded)} 字节")
 
     # 验证格式
-    assert len(encoded) >= 4, "编码数据太短"
+    # 验证消息格式（MsgPack + 版本号）
+    assert len(encoded) > 5, "消息至少包含1字节版本 + 4字节长度"
 
-    # 解析长度前缀
-    length = int.from_bytes(encoded[:4], byteorder='little')
+    # 解析版本号
+    version = encoded[0]
+    print(f"✓ 编码格式: MsgPack v{version:#x}")
+
+    # 解析长度前缀（从第 1 字节开始）
+    length = int.from_bytes(encoded[1:5], byteorder="little")
     print(f"✓ 消息体长度: {length} 字节")
 
-    # 验证消息体
-    message_body = encoded[4:4 + length]
-    print(f"✓ 消息体: {message_body.decode('utf-8')}")
-
-    # 验证编码格式
-    assert encoded[4:].startswith(b'{'), "消息体应该是JSON"
+    # 验证版本号和总长度
+    assert version == 0x01, f"协议版本应为 0x01，实际为 {version:#x}"
+    assert len(encoded) == 5 + length, f"消息总长度应为 {5 + length}，实际为 {len(encoded)}"
+    print(f"✓ 消息格式正确: v={version:#x}, total_len={len(encoded)}, msgpack_len={length}")
 
     print("✓ 消息编解码测试通过\n")
 
@@ -200,6 +203,7 @@ def test_server_client_channels():
                 # 通过原始Socket发送消息
                 msg_data = {"test": "data", "value": 42}
                 encoded = MessageProtocol.encode(msg_data)
+                client_channel.sock.setblocking(True)  # 设置为阻塞模式便于测试
                 client_channel.sock.sendall(encoded)
                 print("✓ 客户端发送消息完成")
 
@@ -219,8 +223,8 @@ def test_server_client_channels():
         print("✓ 服务端接受了客户端连接")
 
         # 接收消息
-        if server_channel.client_sock:
-            msg = MessageProtocol.decode(server_channel.client_sock)
+        if server_channel.client_socks:
+            msg = MessageProtocol.decode(server_channel.client_socks[0])
             if msg:
                 print(f"✓ 服务端接收到消息: {msg}")
                 assert msg["test"] == "data"
@@ -246,5 +250,6 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"测试失败: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)

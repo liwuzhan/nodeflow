@@ -1,10 +1,10 @@
 """
 IPC消息协议模块
-实现Socket通信的消息格式和编解码
+实现Socket通信的消息格式和编解码（MsgPack + 版本控制）
 """
 
 import struct
-import json
+import msgpack
 import socket
 from typing import Dict, Optional, Any
 
@@ -16,64 +16,74 @@ logger = get_logger(__name__)
 
 class MessageProtocol:
     """
-    消息协议实现
-    格式：[4字节小端序长度] + [JSON消息体]
+    消息协议实现（MsgPack 格式 + 版本控制）
 
-    例如：
+    格式: [1字节版本] + [4字节小端序长度] + [MsgPack数据]
+
+    示例（IMU 消息）:
     {
-        "data": "value",
+        "accel": {"x": 0.1, "y": 0.2, "z": 9.8},
         "timestamp": 1234567890
     }
 
-    编码后为：
-    [0x1D, 0x00, 0x00, 0x00] + {"data":"value","timestamp":1234567890}
+    编码后:
+    [0x01] + [0x28, 0x00, 0x00, 0x00] + [MsgPack 二进制 40 字节]
+
+    版本历史:
+    - v0x01: MsgPack 格式（当前版本）
+    - v0x02: 预留给分片传输协议（未来）
     """
+
+    PROTOCOL_VERSION = 0x01  # 当前协议版本
 
     @staticmethod
     def encode(data: Dict[str, Any]) -> bytes:
         """
-        编码消息
+        编码消息为 MsgPack 格式
 
         参数：
         - data: 要发送的数据字典
 
         返回：
-        - 编码后的字节流（长度前缀 + JSON数据）
+        - 编码后的字节流（版本 + 长度前缀 + MsgPack数据）
 
         异常：
         - ProtocolError: 编码失败
         """
         try:
-            # JSON序列化
-            json_str = json.dumps(data)
-            json_bytes = json_str.encode('utf-8')
+            # MsgPack 序列化
+            msgpack_bytes = msgpack.packb(data, use_bin_type=True)
 
-            # 计算长度
-            length = len(json_bytes)
+            # 验证大小限制
+            length = len(msgpack_bytes)
+            if length > 1024 * 1024:  # 1MB
+                raise ProtocolError(f"Message too large: {length} bytes")
 
-            # 创建长度前缀（4字节小端序）
-            length_prefix = struct.pack('<I', length)
+            # 构造消息: [版本] + [长度] + [数据]
+            version_byte = struct.pack("B", MessageProtocol.PROTOCOL_VERSION)
+            length_prefix = struct.pack("<I", length)
+            message = version_byte + length_prefix + msgpack_bytes
 
-            # 返回长度前缀 + JSON数据
-            message = length_prefix + json_bytes
-
-            logger.debug(f"Encoded message: length={length}, data={json_str[:50]}...")
+            logger.debug(
+                f"Encoded message: v={MessageProtocol.PROTOCOL_VERSION}, len={length}"
+            )
             return message
 
         except (TypeError, ValueError) as e:
-            raise ProtocolError(f"Failed to encode message: {e}")
+            raise ProtocolError(f"Failed to encode with MsgPack: {e}")
         except Exception as e:
             raise ProtocolError(f"Unexpected error encoding message: {e}")
 
     @staticmethod
     def decode(sock: socket.socket) -> Optional[Dict[str, Any]]:
         """
-        从socket解码一条消息
+        从socket解码一条消息（MsgPack 格式）
 
         步骤：
-        1. 读取4字节长度前缀
-        2. 根据长度读取JSON消息体
-        3. JSON反序列化
+        1. 读取1字节版本号
+        2. 读取4字节长度前缀
+        3. 根据长度读取MsgPack消息体
+        4. 根据版本号反序列化
 
         参数：
         - sock: Socket对象（应该处于可读状态）
@@ -85,42 +95,50 @@ class MessageProtocol:
         - ProtocolError: 解码失败
         """
         try:
-            # 读取4字节长度前缀
+            # 读取版本字节
+            version_data = MessageProtocol._recv_exact(sock, 1)
+            if not version_data:
+                logger.debug("Connection closed or no data (version byte)")
+                return None
+
+            version = struct.unpack("B", version_data)[0]
+
+            # 读取长度前缀（4 字节）
             length_data = MessageProtocol._recv_exact(sock, 4)
             if not length_data:
-                # 连接关闭或无数据
                 logger.debug("Connection closed or no data (length prefix)")
                 return None
 
-            # 解析长度
-            length = struct.unpack('<I', length_data)[0]
+            length = struct.unpack("<I", length_data)[0]
 
+            # 验证长度
             if length == 0:
                 raise ProtocolError("Invalid message length: 0")
 
-            if length > 1024 * 1024:  # 最大1MB
+            if length > 1024 * 1024:  # 最大 1MB
                 raise ProtocolError(f"Message too large: {length} bytes")
 
-            # 读取JSON消息体
-            json_data = MessageProtocol._recv_exact(sock, length)
-            if not json_data:
-                # 连接在读取消息体时关闭
+            # 读取 MsgPack 数据
+            msgpack_data = MessageProtocol._recv_exact(sock, length)
+            if not msgpack_data:
                 logger.debug("Connection closed while reading message body")
                 return None
 
-            # JSON反序列化
-            json_str = json_data.decode('utf-8')
-            data = json.loads(json_str)
+            # 根据版本号解码
+            if version == 0x01:
+                data = msgpack.unpackb(msgpack_data, raw=False)
+                logger.debug(f"Decoded message: v={version}, len={length}")
+                return data
+            else:
+                raise ProtocolError(f"Unsupported protocol version: {version}")
 
-            logger.debug(f"Decoded message: length={length}, data={json_str[:50]}...")
-            return data
-
-        except json.JSONDecodeError as e:
-            raise ProtocolError(f"Failed to decode JSON: {e}")
+        except BlockingIOError:
+            # 保持透传（latest-value 语义依赖此行为）
+            raise
+        except msgpack.UnpackException as e:
+            raise ProtocolError(f"Failed to decode MsgPack: {e}")
         except struct.error as e:
-            raise ProtocolError(f"Failed to parse length prefix: {e}")
-        except UnicodeDecodeError as e:
-            raise ProtocolError(f"Failed to decode UTF-8: {e}")
+            raise ProtocolError(f"Failed to parse message header: {e}")
         except Exception as e:
             raise ProtocolError(f"Unexpected error decoding message: {e}")
 
@@ -138,7 +156,7 @@ class MessageProtocol:
         返回：
         - 读取的字节流，如果连接关闭返回None
         """
-        data = b''
+        data = b""
 
         while len(data) < n:
             try:
@@ -149,13 +167,18 @@ class MessageProtocol:
                         return None
                     else:
                         # 部分数据已读取，但连接突然关闭
-                        raise ProtocolError(f"Connection closed unexpectedly (got {len(data)}/{n} bytes)")
+                        raise ProtocolError(
+                            f"Connection closed unexpectedly (got {len(data)}/{n} bytes)"
+                        )
 
                 data += chunk
 
             except socket.timeout:
                 # 超时
                 raise ProtocolError(f"Socket timeout (got {len(data)}/{n} bytes)")
+            except BlockingIOError:
+                # 非阻塞Socket无数据 - 直接抛出不包装，让上层处理
+                raise
             except Exception as e:
                 raise ProtocolError(f"Socket error: {e}")
 
@@ -164,7 +187,7 @@ class MessageProtocol:
     @staticmethod
     def validate_json(data: Dict[str, Any]) -> bool:
         """
-        验证数据是否可被JSON序列化
+        验证数据是否可被序列化（现使用 MsgPack）
 
         参数：
         - data: 要验证的数据字典
@@ -173,7 +196,7 @@ class MessageProtocol:
         - True表示可以序列化，False表示不行
         """
         try:
-            json.dumps(data)
+            msgpack.packb(data, use_bin_type=True)
             return True
         except (TypeError, ValueError):
             return False
