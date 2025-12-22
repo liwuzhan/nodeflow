@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3.12
 """
 NodeFlow Runtime主入口
 机器人节点化框架的启动程序
@@ -8,6 +8,7 @@ import sys
 import argparse
 import signal
 import time
+import os
 from pathlib import Path
 
 from runtime.config.yaml_parser import YAMLParser
@@ -28,16 +29,19 @@ logger = setup_logger("nodeflow")
 class NodeFlowRuntime:
     """NodeFlow运行时主类"""
 
-    def __init__(self, config_path: str, log_level: str = "INFO"):
+    def __init__(self, config_path: str, log_level: str = "INFO", duration: int = None):
         """
         初始化运行时
 
         参数：
         - config_path: 运行配置文件路径
         - log_level: 日志级别
+        - duration: 可选，运行时长（秒），到期后自动关机
         """
         self.config_path = config_path
         self.log_level = log_level
+        self.duration = duration
+        self.start_time = None
 
         # 组件
         self.config = None
@@ -178,9 +182,15 @@ class NodeFlowRuntime:
             self.monitor = NodeMonitor(self.config.restart_policy)
             self.monitor.start_monitoring(self.processes, restart_node)
 
+            # 写入 PID 文件
+            self.start_time = time.time()
+            self._write_pid_file()
+
             # 9. 主循环
             logger.info("=" * 60)
             logger.info("Runtime is RUNNING")
+            if self.duration:
+                logger.info(f"Auto-shutdown in {self.duration}s")
             logger.info("Press Ctrl+C to stop")
             logger.info("=" * 60)
 
@@ -189,6 +199,11 @@ class NodeFlowRuntime:
             try:
                 while self.running:
                     time.sleep(1)
+
+                    # 检查定时关机
+                    if self.duration and (time.time() - self.start_time) >= self.duration:
+                        logger.info(f"Duration {self.duration}s reached, shutting down...")
+                        self.running = False
 
             except KeyboardInterrupt:
                 logger.info("Received keyboard interrupt")
@@ -221,11 +236,34 @@ class NodeFlowRuntime:
             logger.info("Cleaning up sockets...")
             self.socket_manager.cleanup()
 
+        # 清理 PID 文件
+        self._cleanup_pid_file()
+
         logger.info("=" * 60)
         logger.info("NodeFlow Runtime Stopped")
         logger.info("=" * 60)
 
         return 0
+
+    def _write_pid_file(self):
+        """写入 PID 文件"""
+        try:
+            pid_file = Path("/tmp/nodeflow_runtime.pid")
+            with open(pid_file, 'w') as f:
+                f.write(f"{os.getpid()}\n{self.start_time}")
+            logger.debug(f"PID file written: {os.getpid()}")
+        except Exception as e:
+            logger.error(f"Failed to write PID file: {e}")
+
+    def _cleanup_pid_file(self):
+        """清理 PID 文件"""
+        try:
+            pid_file = Path("/tmp/nodeflow_runtime.pid")
+            if pid_file.exists():
+                pid_file.unlink()
+                logger.debug("PID file cleaned up")
+        except Exception as e:
+            logger.error(f"Failed to cleanup PID file: {e}")
 
 
 def main():
@@ -243,11 +281,16 @@ def main():
         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
         help='日志级别（默认：INFO）'
     )
+    parser.add_argument(
+        '--duration',
+        type=int,
+        help='自动关机时间（秒），到期后自动关机'
+    )
 
     args = parser.parse_args()
 
     # 创建并运行
-    runtime = NodeFlowRuntime(args.config, args.log_level)
+    runtime = NodeFlowRuntime(args.config, args.log_level, args.duration)
     return runtime.run()
 
 

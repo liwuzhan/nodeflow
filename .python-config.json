@@ -1,0 +1,29 @@
+{
+  "python_version": "3.12.0",
+  "min_version": "3.10",
+  "recommended_version": "3.12",
+  "reason": "MCP Python SDK requires Python 3.10+. Python 3.12 is recommended for best compatibility and performance.",
+  "installation_note": "Install Python 3.12 from https://www.python.org/downloads/ or use package managers",
+  "verification_commands": [
+    "python3.12 --version",
+    "python3.12 -m pip --version",
+    "python3.12 -c \"import mcp; print('MCP SDK OK')\""
+  ],
+  "dependencies": {
+    "core": [
+      "PyYAML>=6.0",
+      "types-PyYAML>=6.0",
+      "msgpack>=1.0.0,<2.0.0",
+      "psutil>=5.8.0"
+    ],
+    "mcp": [
+      "mcp[cli]>=1.0.0"
+    ],
+    "development": [
+      "pytest>=7.0",
+      "pytest-cov>=4.0",
+      "black>=23.0",
+      "mypy>=1.0"
+    ]
+  }
+}
