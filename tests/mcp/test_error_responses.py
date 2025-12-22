@@ -21,8 +21,10 @@ from mcp_server import (
 )
 
 
-async def test_error_response(test_name: str, handler_func, arguments: dict) -> bool:
-    """测试单个错误响应的格式"""
+async def run_error_response_test(
+    test_name: str, handler_func, arguments: dict
+) -> bool:
+    """运行单个错误响应格式测试 (非 pytest 测试用例)"""
     print(f"\n测试: {test_name}")
     try:
         result = await handler_func(arguments)
@@ -66,6 +68,7 @@ async def test_error_response(test_name: str, handler_func, arguments: dict) -> 
     except Exception as e:
         print(f"  ✗ 测试异常: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 
@@ -79,58 +82,54 @@ async def main():
     results = []
 
     # 1. 不存在的节点包
-    result1 = await test_error_response(
+    result1 = await run_error_response_test(
         "1️⃣  handle_get_node_info - 不存在的节点包",
         handle_get_node_info,
-        {"hub_path": "./node-hub", "package": "nonexistent_package_xyz"}
+        {"hub_path": "./node-hub", "package": "nonexistent_package_xyz"},
     )
     results.append(("不存在的节点包", result1))
 
     # 2. 不存在的节点库路径
-    result2 = await test_error_response(
+    result2 = await run_error_response_test(
         "2️⃣  handle_get_node_info - 不存在的节点库路径",
         handle_get_node_info,
-        {"hub_path": "/nonexistent/path"}
+        {"hub_path": "/nonexistent/path"},
     )
     results.append(("不存在的节点库路径", result2))
 
     # 3. 不存在的 YAML 文件（验证）
-    result3 = await test_error_response(
+    result3 = await run_error_response_test(
         "3️⃣  handle_validate_yaml - 不存在的 YAML 文件",
         handle_validate_yaml,
-        {"yaml_path": "/nonexistent/config.yaml"}
+        {"yaml_path": "/nonexistent/config.yaml"},
     )
     results.append(("不存在的YAML文件(验证)", result3))
 
     # 4. 不存在的 YAML 文件（编辑）
-    result4 = await test_error_response(
+    result4 = await run_error_response_test(
         "4️⃣  handle_edit_yaml - 不存在的 YAML 文件",
         handle_edit_yaml,
-        {"yaml_path": "/nonexistent/config.yaml", "changes": {"key": "value"}}
+        {"yaml_path": "/nonexistent/config.yaml", "changes": {"key": "value"}},
     )
     results.append(("不存在的YAML文件(编辑)", result4))
 
     # 5. 不存在的 YAML 文件（运行）
-    result5 = await test_error_response(
+    result5 = await run_error_response_test(
         "5️⃣  handle_run_runtime - 不存在的 YAML 文件",
         handle_run_runtime,
-        {"yaml_path": "/nonexistent/config.yaml"}
+        {"yaml_path": "/nonexistent/config.yaml"},
     )
     results.append(("不存在的YAML文件(运行)", result5))
 
     # 6. 缺少 node_id（日志读取）
-    result6 = await test_error_response(
-        "6️⃣  handle_read_logs - 缺少 node_id",
-        handle_read_logs,
-        {"node_id": ""}
+    result6 = await run_error_response_test(
+        "6️⃣  handle_read_logs - 缺少 node_id", handle_read_logs, {"node_id": ""}
     )
     results.append(("缺少node_id", result6))
 
     # 7. 缺少 node_id（日志读取，未提供）
-    result7 = await test_error_response(
-        "7️⃣  handle_read_logs - 未提供 node_id",
-        handle_read_logs,
-        {}
+    result7 = await run_error_response_test(
+        "7️⃣  handle_read_logs - 未提供 node_id", handle_read_logs, {}
     )
     results.append(("未提供node_id", result7))
 
