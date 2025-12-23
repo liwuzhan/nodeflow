@@ -1,0 +1,139 @@
+version: "1.0"
+description: "300米长距离仿真 + Logger - 完整数据流可视化"
+
+nodes:
+  # 1. RTK GPS传感器（20Hz）
+  - name: rtk_sensor
+    node: sim_rtk
+    params:
+      simulator_host: localhost
+      simulator_port: 5555
+      frequency: 20
+      timeout: 1000
+
+  # 2. 纯追踪速度控制器（20Hz）
+  - name: controller
+    node: velocity_controller
+    params:
+      max_speed: 1.0
+      min_speed: 0.2
+      lookahead_distance: 2.0
+      heading_p_gain: 2.0
+      goal_tolerance: 0.5
+      control_frequency: 20
+      enable_control: true
+    inputs:
+      rtk_fix: rtk_sensor.rtk_fix
+      target_point: null  # 将通过Python脚本发送
+
+  # 3. 速度执行器（50Hz）
+  - name: actuator
+    node: sim_velocity
+    params:
+      simulator_host: localhost
+      simulator_port: 5555
+      control_frequency: 50
+      max_linear_velocity: 2.0
+      max_angular_velocity: 1.0
+    inputs:
+      velocity_cmd: controller.velocity_cmd
+
+  # 4. Logger节点 - 记录所有关键数据
+  - name: data_logger
+    node: logger
+    params:
+      web_port: 8001
+      buffer_size: 5000
+      enable_file_log: true
+      log_file_path: "./logs/300m_test.jsonl"
+    inputs:
+      input1: rtk_sensor.rtk_fix          # RTK GPS数据 (20Hz)
+      input2: controller.velocity_cmd     # 速度命令 (20Hz)
+      input3: null                        # 可选的第三个输入
+
+# 数据流图：
+#
+# ┌──────────────────────────────────────┐
+# │    仿真器 (ZMQ :5555)                │
+# │  - 物理仿真                          │
+# │  - RTK GPS生成                       │
+# │  - 打滑模型                          │
+# └──────────┬───────────────────────────┘
+#            │
+#     ┌──────▼──────┐
+#     │  rtk_sensor │ (20Hz)
+#     └──────┬──────┘
+#            │ rtk_fix
+#            │
+#     ┌──────▼────────────┐
+#     │   controller      │ (纯追踪)
+#     │  (velocity_cmd)   │ (20Hz)
+#     └─────┬──────┬──────┘
+#           │      │
+#        (v,ω)     │
+#           │      │
+#    ┌──────▼──┐   │
+#    │ actuator│   │
+#    │ (velocity)  │
+#    │   (50Hz)    │
+#    └────────┘    │
+#                  │
+#     ┌────────────▼────────────┐
+#     │   data_logger           │
+#     │  (3个输入端口)           │
+#     │  input1: RTK GPS        │
+#     │  input2: 速度命令        │
+#     │  input3: 可选扩展        │
+#     │                         │
+#     │  Web: :8001             │
+#     │  File: logs/300m_test.jsonl
+#     └─────────────────────────┘
+#
+# 功能说明：
+# 1. RTK传感器以20Hz采样仿真器的RTK GPS数据
+# 2. 控制器接收RTK数据，计算速度命令(v, ω)
+# 3. 执行器以50Hz发送速度命令给仿真器
+# 4. Logger同步记录所有中间数据：
+#    - input1: 每条RTK数据（位置、精度、状态）
+#    - input2: 每条速度命令（线速度、角速度、航向误差）
+#    - input3: 可选的其他状态数据
+#
+# Logger会：
+# ✓ 在Web界面(http://localhost:8001)实时显示数据流
+# ✓ 保存到JSON Lines文件供后期分析
+# ✓ 支持按端口过滤、关键字搜索、数据导出
+
+# 使用说明：
+#
+# 1. 启动仿真器：
+#    cd simulator
+#    python3 server.py
+#
+# 2. 运行NodeFlow工作流：
+#    nodeflow run test_300m_with_logger.yaml
+#
+# 3. 在另一个终端发送目标点（300米北偏）：
+#    python3 << 'EOF'
+#    import time
+#    from sdk.nodeflow_sdk import NodeFlowSDK
+#    with NodeFlowSDK() as sdk:
+#        sdk.send("target_point", {
+#            "latitude": 40.7128 + 0.0027,  # 约300米
+#            "longitude": -74.0060
+#        })
+#        print("✓ 目标点已发送")
+#        time.sleep(30)  # 等待运动完成
+#    EOF
+#
+# 4. 打开浏览器查看Logger：
+#    http://localhost:8001
+#
+#    你会看到：
+#    - input1: RTK GPS数据每20Hz更新
+#    - input2: 速度命令每20Hz更新
+#    - 时间戳严格对齐
+#    - 可以实时观察小车的完整运动过程
+#
+# 5. 运动完成后检查日志：
+#    cat logs/300m_test.jsonl | jq . | head -50
+#    wc -l logs/300m_test.jsonl  # 总条数

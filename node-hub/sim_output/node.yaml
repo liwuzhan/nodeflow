@@ -1,0 +1,130 @@
+name: sim_output
+version: "1.0"
+description: "仿真器输出节点 - 统一提供所有传感器数据和环境信息"
+
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+  windows:
+    kind: python
+    cmd: ["python", "run.py"]
+
+ports:
+  outputs:
+    # 传感器输出（持续更新）
+    - name: gps_fix
+      type: json
+      description: "普通GPS定位数据 (米级精度)"
+
+    - name: imu_data
+      type: json
+      description: "IMU数据 (加速度、角速度、磁力计)"
+
+    - name: rtk_fix
+      type: json
+      description: "RTK GPS数据 (厘米级精度 + 航向角 + 俯仰角)"
+
+    - name: odometry
+      type: json
+      description: "里程计数据 (编码器级精度)"
+
+    # 环境和任务输出（初始化后固定）
+    - name: task_request
+      type: planning.task
+      description: "规划任务请求 (地块信息 + 车辆配置)"
+
+    - name: state_info
+      type: json
+      description: "完整机器人状态 (调试用)"
+
+params:
+  # 仿真器连接
+  simulator_host:
+    type: string
+    default: "localhost"
+    description: "仿真器主机地址"
+
+  simulator_port:
+    type: integer
+    default: 5555
+    description: "仿真器端口"
+
+  timeout:
+    type: integer
+    default: 1000
+    description: "ZMQ超时时间 (毫秒)"
+
+  # 坐标系参考点
+  ref_longitude:
+    type: float
+    default: 121.5
+    description: "参考经度（WGS84），用于坐标转换"
+
+  ref_latitude:
+    type: float
+    default: 31.2
+    description: "参考纬度（WGS84），用于坐标转换"
+
+  # 传感器开关
+  enable_gps:
+    type: bool
+    default: true
+    description: "启用GPS输出"
+
+  enable_imu:
+    type: bool
+    default: true
+    description: "启用IMU输出"
+
+  enable_rtk:
+    type: bool
+    default: true
+    description: "启用RTK输出"
+
+  enable_odometry:
+    type: bool
+    default: false
+    description: "启用里程计输出"
+
+  enable_state:
+    type: bool
+    default: false
+    description: "启用状态信息输出"
+
+  # 频率控制
+  output_frequency:
+    type: float
+    default: 50.0
+    description: "输出频率 (Hz)"
+
+  # 车辆配置（用于组装 task_request）
+  implement_width_m:
+    type: float
+    default: 3.0
+    description: "作业幅宽 (米)"
+
+  overlap_ratio:
+    type: float
+    default: 0.1
+    description: "重叠率 (0-1)"
+
+  path_inset_m:
+    type: float
+    default: 1.0
+    description: "路径内缩距离 (米)"
+
+  pivot_turn:
+    type: bool
+    default: true
+    description: "是否使用原地转向"
+
+  yaw_rate_max_deg_s:
+    type: float
+    default: 60.0
+    description: "最大偏航率 (度/秒)"
+
+  min_turn_radius_m:
+    type: float
+    default: 2.0
+    description: "最小转弯半径 (米)"

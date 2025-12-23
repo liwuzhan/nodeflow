@@ -1,0 +1,36 @@
+name: sim_imu
+version: "1.0"
+description: "仿真 IMU 节点 - 从仿真器读取惯性测量单元数据"
+
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+
+ports:
+  inputs: []
+  outputs:
+    - name: imu_data
+      type: json
+      description: "IMU 数据 (accel, gyro, mag)"
+
+params:
+  simulator_host:
+    type: string
+    default: "localhost"
+    description: "仿真器服务器地址"
+
+  simulator_port:
+    type: integer
+    default: 5555
+    description: "仿真器服务器端口"
+
+  frequency:
+    type: integer
+    default: 100
+    description: "数据发布频率 (Hz)"
+
+  timeout:
+    type: integer
+    default: 1000
+    description: "ZMQ 请求超时 (毫秒)"

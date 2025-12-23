@@ -102,15 +102,16 @@ class NodeFlowSDK:
         - ValueError: 端口未配置
         """
         env_var_name = f'NODE_IN_{port_name}'
-        socket_path = os.getenv(env_var_name)
+        zmq_address = os.getenv(env_var_name)
 
-        if not socket_path:
+        if not zmq_address:
             raise ValueError(
                 f"Input port '{port_name}' not configured. "
                 f"Environment variable '{env_var_name}' not found."
             )
 
-        port = InputPort(port_name, socket_path)
+        # 创建InputPort，传入zmq_address（ZeroMQ版本）
+        port = InputPort(port_name, zmq_address)
         self.inputs[port_name] = port
 
         self.logger.info(f"Created input port: {port_name}")
@@ -130,15 +131,16 @@ class NodeFlowSDK:
         - ValueError: 端口未配置
         """
         env_var_name = f'NODE_OUT_{port_name}'
-        socket_path = os.getenv(env_var_name)
+        zmq_address = os.getenv(env_var_name)
 
-        if not socket_path:
+        if not zmq_address:
             raise ValueError(
                 f"Output port '{port_name}' not configured. "
                 f"Environment variable '{env_var_name}' not found."
             )
 
-        port = OutputPort(port_name, socket_path)
+        # 创建OutputPort，传入zmq_address（ZeroMQ版本）
+        port = OutputPort(port_name, zmq_address)
         self.outputs[port_name] = port
 
         self.logger.info(f"Created output port: {port_name}")
@@ -167,6 +169,39 @@ class NodeFlowSDK:
         - OutputPort对象，如果不存在返回None
         """
         return self.outputs.get(port_name)
+
+    def is_input_port_connected(self, port_name: str) -> bool:
+        """
+        检查输入端口是否已连接
+
+        参数：
+        - port_name: 端口名
+
+        返回：
+        - True表示已连接，False表示未连接或端口不存在
+        """
+        port = self.inputs.get(port_name)
+        if port is None:
+            return False
+        return port.is_connected()
+
+    def get_input_port_status(self, port_name: str) -> Optional[str]:
+        """
+        获取输入端口的连接状态
+
+        参数：
+        - port_name: 端口名
+
+        返回：
+        - "connecting": 初始化中
+        - "connected": 已连接
+        - "disconnected": 已断开
+        - None: 端口不存在
+        """
+        port = self.inputs.get(port_name)
+        if port is None:
+            return None
+        return port.get_connection_state()
 
     def shutdown(self):
         """

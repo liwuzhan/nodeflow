@@ -128,7 +128,6 @@ const arrowPoints = computed(() => {
   const angle = Math.atan2(dy, dx)
 
   const arrowLength = 10
-  const arrowWidth = 6
 
   // 箭头尖端
   const tipX = props.toX

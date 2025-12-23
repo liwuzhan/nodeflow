@@ -1,0 +1,72 @@
+# NodeFlow 最小化规划闭环仿真
+# 只包含核心的规划+控制闭环，无logger
+graph_id: planning_minimal
+graph_version: 1.0
+node_hub_path: ./node-hub
+
+nodes:
+  - id: sim_output
+    package: sim_output
+    description: "从仿真器读取传感器数据和地块信息"
+    params:
+      simulator_host: localhost
+      simulator_port: 5555
+      timeout: 2000
+      enable_gps: false
+      enable_imu: false
+      enable_rtk: true
+      enable_odometry: false
+      enable_state: false
+      output_frequency: 50.0
+      implement_width_m: 3.0
+      overlap_ratio: 0.1
+      path_inset_m: 1.0
+      pivot_turn: true
+      yaw_rate_max_deg_s: 60.0
+      min_turn_radius_m: 2.0
+
+  - id: global_coverage
+    package: global_coverage
+    description: "根据地块和车辆配置生成全覆盖路径"
+    params: {}
+
+  - id: velocity_controller
+    package: velocity_controller
+    description: "基于纯追踪算法的速度控制"
+    params:
+      max_speed: 1.0
+      min_speed: 0.2
+      lookahead_distance: 2.0
+      goal_tolerance: 0.3
+      heading_p_gain: 2.0
+      max_angular_velocity: 1.0
+      control_frequency: 20
+
+  - id: sim_input
+    package: sim_input
+    description: "将控制命令发送到仿真器"
+    params:
+      simulator_host: localhost
+      simulator_port: 5555
+      timeout: 2000
+      default_linear_velocity: 0.0
+      default_angular_velocity: 0.0
+      control_mode: velocity
+      input_frequency: 50.0
+
+edges:
+  # 地块 + 车辆配置 → 规划器
+  - from: sim_output.task_request
+    to: global_coverage.task_request
+
+  # RTK定位 → 速度控制器
+  - from: sim_output.rtk_fix
+    to: velocity_controller.rtk_fix
+
+  # 规划路径 → 速度控制器
+  - from: global_coverage.global_path
+    to: velocity_controller.global_path
+
+  # 速度指令 → 仿真器输入
+  - from: velocity_controller.velocity_cmd
+    to: sim_input.velocity_cmd

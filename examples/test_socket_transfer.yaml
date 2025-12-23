@@ -1,0 +1,25 @@
+# Socket传输诊断配置
+# 专门用于诊断OutputPort到InputPort的数据传输问题
+
+graph_id: test_socket_transfer
+graph_version: 1.0
+node_hub_path: ./node-hub
+
+nodes:
+  - id: sender
+    package: test_sender
+    description: "发送端 - 每秒发送5条测试消息"
+    params:
+      send_frequency: 5
+      message_content: "Hello from sender"
+
+  - id: receiver
+    package: test_receiver
+    description: "接收端 - 每秒检查10次接收"
+    params:
+      receive_frequency: 10
+
+edges:
+  - from: sender.test_message
+    to: receiver.test_message
+    description: "测试消息传输"

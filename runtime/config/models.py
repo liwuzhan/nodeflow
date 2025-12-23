@@ -24,6 +24,8 @@ class PortDef:
     name: str
     type: str = "any"  # 端口类型，用于连线校验
     description: str = ""
+    buffer_size: int = 1024 * 1024  # 缓冲区大小（字节），默认1MB
+    conflate: bool = True  # 是否覆盖旧数据（最新值语义），默认True
 
 
 @dataclass

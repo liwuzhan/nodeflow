@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="NodeFlow Web Editor API",
     description="Backend API for NodeFlow Web Blueprint Editor",
-    version="1.0.0"
+    version="1.0.0",
 )
 
 # CORS配置（开发环境）
@@ -48,8 +48,8 @@ async def root():
         "version": "1.0.0",
         "endpoints": {
             "nodes": "/api/nodes",
-            "node_manifest": "/api/nodes/{package_name}/manifest"
-        }
+            "node_manifest": "/api/nodes/{package_name}/manifest",
+        },
     }
 
 
@@ -68,24 +68,29 @@ async def list_nodes():
     """
     if not NODE_HUB_PATH.exists():
         raise HTTPException(
-            status_code=500,
-            detail=f"Node hub directory not found: {NODE_HUB_PATH}"
+            status_code=500, detail=f"Node hub directory not found: {NODE_HUB_PATH}"
         )
 
     packages = []
 
     try:
-        # 扫描node-hub目录
-        for item in NODE_HUB_PATH.iterdir():
-            if item.is_dir():
-                # 检查是否包含node.yaml
-                manifest_path = item / "node.yaml"
-                if manifest_path.exists():
-                    packages.append({
-                        "name": item.name,
-                        "path": f"node-hub/{item.name}"
-                    })
-                    logger.info(f"Found node package: {item.name}")
+        # 递归扫描node-hub目录（支持嵌套节点包）
+        import os
+
+        for root, dirs, files in os.walk(NODE_HUB_PATH):
+            if "node.yaml" in files:
+                # 找到node.yaml，计算相对路径作为package_name
+                package_path = Path(root)
+                relative_path = package_path.relative_to(NODE_HUB_PATH)
+                package_name = str(relative_path)
+
+                packages.append(
+                    {"name": package_name, "path": f"node-hub/{package_name}"}
+                )
+                logger.info(f"Found node package: {package_name}")
+
+                # 找到node.yaml后不再向下遍历该目录
+                dirs.clear()
 
         logger.info(f"Total packages found: {len(packages)}")
         return {"packages": packages}
@@ -93,12 +98,11 @@ async def list_nodes():
     except Exception as e:
         logger.error(f"Error scanning node hub: {e}")
         raise HTTPException(
-            status_code=500,
-            detail=f"Failed to scan node hub: {str(e)}"
+            status_code=500, detail=f"Failed to scan node hub: {str(e)}"
         )
 
 
-@app.get("/api/nodes/{package_name}/manifest")
+@app.get("/api/nodes/{package_name:path}/manifest")
 async def get_node_manifest(package_name: str):
     """
     获取指定节点包的manifest（node.yaml内容）
@@ -109,22 +113,32 @@ async def get_node_manifest(package_name: str):
     返回：node.yaml的完整内容（JSON格式）
     """
     # 验证package_name安全性（防止路径遍历攻击）
-    if ".." in package_name or "/" in package_name or "\\" in package_name:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid package name"
-        )
+    if "\\" in package_name or package_name.startswith("/"):
+        raise HTTPException(status_code=400, detail="Invalid package name")
 
-    manifest_path = NODE_HUB_PATH / package_name / "node.yaml"
+    package_parts = Path(package_name).parts
+    if any(part == ".." for part in package_parts):
+        raise HTTPException(status_code=400, detail="Invalid package name")
+
+    node_hub_resolved = NODE_HUB_PATH.resolve()
+    package_dir = (NODE_HUB_PATH / package_name).resolve()
+
+    if (
+        node_hub_resolved not in package_dir.parents
+        and package_dir != node_hub_resolved
+    ):
+        raise HTTPException(status_code=400, detail="Invalid package name")
+
+    manifest_path = package_dir / "node.yaml"
 
     if not manifest_path.exists():
         raise HTTPException(
             status_code=404,
-            detail=f"Package '{package_name}' not found or does not have node.yaml"
+            detail=f"Package '{package_name}' not found or does not have node.yaml",
         )
 
     try:
-        with open(manifest_path, 'r', encoding='utf-8') as f:
+        with open(manifest_path, "r", encoding="utf-8") as f:
             manifest_data = yaml.safe_load(f)
 
         logger.info(f"Loaded manifest for package: {package_name}")
@@ -133,14 +147,12 @@ async def get_node_manifest(package_name: str):
     except yaml.YAMLError as e:
         logger.error(f"YAML parse error for {package_name}: {e}")
         raise HTTPException(
-            status_code=500,
-            detail=f"Failed to parse node.yaml: {str(e)}"
+            status_code=500, detail=f"Failed to parse node.yaml: {str(e)}"
         )
     except Exception as e:
         logger.error(f"Error loading manifest for {package_name}: {e}")
         raise HTTPException(
-            status_code=500,
-            detail=f"Failed to load manifest: {str(e)}"
+            status_code=500, detail=f"Failed to load manifest: {str(e)}"
         )
 
 
@@ -150,7 +162,7 @@ async def health_check():
     return {
         "status": "healthy",
         "node_hub_exists": NODE_HUB_PATH.exists(),
-        "node_hub_path": str(NODE_HUB_PATH)
+        "node_hub_path": str(NODE_HUB_PATH),
     }
 
 
@@ -160,9 +172,4 @@ if __name__ == "__main__":
     logger.info("Starting NodeFlow Web Editor Backend...")
     logger.info(f"Node hub path: {NODE_HUB_PATH}")
 
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=8000,
-        log_level="info"
-    )
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")

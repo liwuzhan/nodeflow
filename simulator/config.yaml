@@ -1,0 +1,98 @@
+# 仿真器配置文件
+
+# 田地配置
+field:
+  # 田地类型: rectangular (矩形) 或 irregular (不规则)
+  type: rectangular
+
+  # 田地尺寸（米）
+  width: 100.0
+  length: 200.0
+
+  # 不规则田地的顶点数（仅对irregular类型有效）
+  num_points: 6
+
+  # 障碍物数量
+  num_obstacles: 0
+
+# 运动学引擎配置
+kinematics:
+  # 时间步长（秒）
+  dt: 0.01
+
+  # 最大速度（米/秒）
+  max_speed: 2.0
+
+  # 最大加速度（米/秒²）
+  max_accel: 1.0
+
+  # 最大角速度（弧度/秒）
+  max_angular_vel: 1.0
+
+  # 轮距（米）
+  wheelbase: 0.5
+
+  # 打滑配置
+  slip:
+    # 是否启用打滑模拟
+    enabled: true
+
+    # 打滑比例（0-1，表示最大速度时的打滑百分比）
+    # 5% 表示在最大速度时，线速度可能下降最多5%
+    ratio: 0.05
+
+  # 地面不平噪声配置
+  # 模拟地面不平导致的随机角速度偏移
+  # 特点：即使指令角速度为0，也会有偏移；长期平均为0，但瞬时值不为0
+  terrain:
+    # 是否启用地面不平噪声
+    enabled: true
+
+    # 角速度偏移幅度（rad/s）
+    # 0.02 rad/s ≈ 1.1 度/秒
+    # 这是瞬时偏移的典型幅度范围
+    roughness: 0.02
+
+# 物理模拟配置
+physics:
+  # 摩擦系数（用于速度衰减）
+  friction_coeff: 0.1
+
+  # 边界配置
+  bounds:
+    x: [-100.0, 100.0]
+    y: [-100.0, 100.0]
+
+# 传感器配置
+sensors:
+  # GPS噪声标准差（米）
+  gps_noise_std: 0.5
+
+  # IMU加速度噪声（m/s²）
+  imu_accel_noise: 0.1
+
+  # IMU陀螺仪噪声（rad/s）
+  imu_gyro_noise: 0.01
+
+  # RTK配置
+  rtk:
+    # RTK输出频率（Hz）
+    frequency: 20.0
+
+    # RTK各状态持续时间比例（应该加起来 = 100%）
+    fixed_ratio: 0.85      # FIXED固定解 - 85%
+    float_ratio: 0.10      # FLOAT浮点解 - 10%
+    single_ratio: 0.04     # SINGLE单点定位 - 4%
+    none_ratio: 0.01       # NONE无定位 - 1%
+
+# 服务器配置
+server:
+  # ZMQ端口
+  zmq_port: 5555
+
+  # 仿真模式
+  realtime: true
+
+# 日志配置
+logging:
+  level: INFO

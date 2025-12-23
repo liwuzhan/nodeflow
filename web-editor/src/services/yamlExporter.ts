@@ -17,10 +17,9 @@ export interface RuntimeYamlConfig {
     params: Record<string, any>
   }>
   edges: Array<{
-    from_node: string
-    from_port: string
-    to_node: string
-    to_port: string
+    from: string
+    to: string
+    type?: string
   }>
   restart_policy?: {
     max_retries: number
@@ -43,17 +42,13 @@ export function buildRuntimeConfig(
   const nodeArray = Array.from(nodes.values()).map(node => ({
     id: node.id,
     package: node.package,
-    ...(node.params && Object.keys(node.params).length > 0 && {
-      params: node.params,
-    }),
+    params: node.params ?? {},
   }))
 
-  // 构建边数组
+  // 构建边数组（使用runtime期望的格式：from/to为"node_id.port_name"）
   const edgeArray = Array.from(edges.values()).map(edge => ({
-    from_node: edge.from_node,
-    from_port: edge.from_port,
-    to_node: edge.to_node,
-    to_port: edge.to_port,
+    from: `${edge.from_node}.${edge.from_port}`,
+    to: `${edge.to_node}.${edge.to_port}`,
   }))
 
   return {

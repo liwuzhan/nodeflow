@@ -3,7 +3,9 @@
  * 负责对整个画布的图进行验证
  */
 
-import type { NodeInstanceUI, Edge, NodeManifest } from '@/models/RuntimeConfig'
+import type { NodeInstanceUI, Edge } from '@/models/RuntimeConfig'
+import type { NodeManifest } from '@/models'
+import { getInputPorts, getOutputPorts } from '@/models'
 import { areTypesCompatible } from './typeChecker'
 
 export interface ValidationError {
@@ -169,7 +171,7 @@ export function validateEdge(
     return errors
   }
 
-  const fromPort = fromManifest.outputs?.find(p => p.name === edge.from_port)
+  const fromPort = getOutputPorts(fromManifest).find(p => p.name === edge.from_port)
   if (!fromPort) {
     errors.push({
       level: 'error',
@@ -192,7 +194,7 @@ export function validateEdge(
     return errors
   }
 
-  const toPortDef = toManifest.inputs?.find(p => p.name === edge.to_port)
+  const toPortDef = getInputPorts(toManifest).find(p => p.name === edge.to_port)
   if (!toPortDef) {
     errors.push({
       level: 'error',

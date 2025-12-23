@@ -1,0 +1,58 @@
+version: "1.0"
+description: "带Logger的完整仿真工作流 - 用于验证数据流"
+
+nodes:
+  # 1. RTK GPS传感器
+  - name: rtk_sensor
+    node: sim_rtk
+    params:
+      simulator_host: localhost
+      simulator_port: 5555
+      frequency: 20
+
+  # 2. 纯追踪速度控制器
+  - name: controller
+    node: velocity_controller
+    params:
+      max_speed: 1.0
+      min_speed: 0.2
+      lookahead_distance: 2.0
+      heading_p_gain: 2.0
+      goal_tolerance: 0.3
+      control_frequency: 20
+    inputs:
+      rtk_fix: rtk_sensor.rtk_fix
+
+  # 3. 速度执行器
+  - name: actuator
+    node: sim_velocity
+    params:
+      simulator_host: localhost
+      simulator_port: 5555
+      control_frequency: 50
+      max_linear_velocity: 2.0
+      max_angular_velocity: 1.0
+    inputs:
+      velocity_cmd: controller.velocity_cmd
+
+  # 4. Logger节点 - 记录三个关键数据流
+  - name: data_logger
+    node: logger
+    params:
+      web_port: 8001
+      buffer_size: 1000
+      enable_file_log: true
+      log_file_path: "./logs/simulation.jsonl"
+    inputs:
+      input1: rtk_sensor.rtk_fix          # RTK GPS数据
+      input2: controller.velocity_cmd     # 控制器输出
+      # input3 留空，或者可以连接其他数据源
+
+# 数据流说明:
+# rtk_sensor (RTK GPS) → rtk_fix → controller (纯追踪)
+#                          ↓
+#                      data_logger.input1
+#
+# controller → velocity_cmd → actuator (速度控制)
+#                ↓
+#            data_logger.input2

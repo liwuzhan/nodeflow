@@ -1,0 +1,39 @@
+name: sim_rtk
+version: "1.0"
+description: "仿真 RTK GPS 节点 - 从仿真器读取厘米级RTK定位数据"
+
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+  windows:
+    kind: python
+    cmd: ["python", "run.py"]
+
+ports:
+  inputs: []
+  outputs:
+    - name: rtk_fix
+      type: json
+      description: "RTK GPS 位置数据 (cm级精度)"
+
+params:
+  simulator_host:
+    type: string
+    default: "localhost"
+    description: "仿真器服务器地址"
+
+  simulator_port:
+    type: integer
+    default: 5555
+    description: "仿真器服务器端口"
+
+  frequency:
+    type: integer
+    default: 20
+    description: "RTK数据发布频率 (Hz) - 注意仿真器默认20Hz限制"
+
+  timeout:
+    type: integer
+    default: 1000
+    description: "ZMQ 请求超时 (毫秒)"

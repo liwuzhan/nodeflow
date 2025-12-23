@@ -1,0 +1,65 @@
+name: velocity_controller
+version: "1.0"
+description: "速度控制器 - 纯追踪算法，输出线速度和角速度，用于农田作业"
+
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+  windows:
+    kind: python
+    cmd: ["python", "run.py"]
+
+ports:
+  inputs:
+    - name: rtk_fix
+      type: json
+      description: "RTK GPS定位数据"
+    - name: global_path
+      type: json
+      description: "全局路径（从规划器输出）"
+  outputs:
+    - name: velocity_cmd
+      type: json
+      description: "速度控制命令 (linear_velocity, angular_velocity)"
+
+params:
+  max_speed:
+    type: float
+    default: 1.0
+    description: "最大线速度 (m/s)"
+
+  min_speed:
+    type: float
+    default: 0.2
+    description: "最小线速度 (m/s)"
+
+  lookahead_distance:
+    type: float
+    default: 2.0
+    description: "纯追踪前瞻距离 (米)"
+
+  goal_tolerance:
+    type: float
+    default: 0.3
+    description: "目标点到达容差 (米)"
+
+  heading_p_gain:
+    type: float
+    default: 2.0
+    description: "航向控制P增益"
+
+  max_angular_velocity:
+    type: float
+    default: 1.0
+    description: "最大角速度 (rad/s)"
+
+  control_frequency:
+    type: integer
+    default: 20
+    description: "控制循环频率 (Hz)"
+
+  enable_control:
+    type: bool
+    default: true
+    description: "是否启用控制输出"

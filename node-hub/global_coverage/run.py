@@ -39,8 +39,20 @@ def main():
                 while True:
                     # 读取最新任务请求
                     task_data = input_port.recv_latest()
-                    
+
                     if task_data:
+                        # ===== 数据验证日志 =====
+                        sdk.logger.debug(f"[DATA_CHECK] Received task_data type: {type(task_data)}")
+                        sdk.logger.debug(f"[DATA_CHECK] task_data: {task_data}")
+
+                        # 验证数据结构
+                        if not isinstance(task_data, dict):
+                            sdk.logger.error(f"[DATA_ERROR] task_data should be dict but got: {type(task_data)}")
+                            sdk.logger.error(f"[DATA_ERROR] Content: {task_data}")
+                            time.sleep(0.1)
+                            continue
+                        # ===== 数据验证日志结束 =====
+
                         task_id = task_data.get('id')
                         
                         # 仅处理新任务
@@ -72,9 +84,31 @@ def main():
                                     'status': 'success' if path_points else 'failed',
                                     'message': 'Path found' if path_points else 'No path found'
                                 }
-                                output_port.send(result)
-                                
+
+                                # ===== 修复: 持续发送路径 (确保下游随时可接收) =====
+                                sdk.logger.info(f"开始持续发送路径 (task_id={task_id}, points={len(path_points)})")
                                 last_task_id = task_id
+                                send_count = 0
+
+                                while True:
+                                    # 持续发送当前路径
+                                    output_port.send(result)
+                                    send_count += 1
+
+                                    # 定期日志
+                                    if send_count % 10 == 0:
+                                        sdk.logger.debug(f"已发送路径 {send_count} 次 (task_id={task_id})")
+
+                                    # 检查是否有新任务
+                                    new_task = input_port.recv_latest()
+                                    if new_task and isinstance(new_task, dict):
+                                        new_task_id = new_task.get('id')
+                                        if new_task_id and new_task_id != last_task_id:
+                                            sdk.logger.info(f"收到新任务: {new_task_id}，停止发送旧路径")
+                                            break  # 退出循环，重新规划新任务
+
+                                    time.sleep(0.1)  # 10Hz发送频率，与RTK发送频率协调
+                                # ===== 修复结束 =====
                                 
                             except Exception as e:
                                 sdk.logger.error(f"Planning failed: {e}")

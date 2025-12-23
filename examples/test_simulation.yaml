@@ -1,0 +1,78 @@
+# NodeFlow 仿真测试场景
+# 完整的闭环仿真：传感器 → 融合 → 控制 → 执行器 → 仿真器
+#
+# 架构：
+#   Simulator (外部) ← sim_motor ← controller ← sensor_fusion ← sim_gps, sim_imu
+#
+# 数据流：
+#   1. sim_gps, sim_imu 从仿真器读取传感器数据
+#   2. sensor_fusion 融合 GPS 和 IMU 数据
+#   3. controller 根据融合数据生成控制指令
+#   4. sim_motor 将控制指令发送给仿真器
+#   5. 仿真器更新机器人状态（闭环）
+#
+# 启动前准备：
+#   1. 启动仿真器: python3 simulator/server.py --port 5555
+#   2. 运行场景: python3 -m runtime.main examples/test_simulation.yaml
+
+graph_id: test_simulation
+graph_version: 1
+node_hub_path: ./node-hub
+
+nodes:
+  # === 传感器节点 ===
+  - id: sim_gps
+    package: sim_gps
+    params:
+      simulator_host: localhost
+      simulator_port: 5555
+      frequency: 10          # 10Hz GPS
+
+  - id: sim_imu
+    package: sim_imu
+    params:
+      simulator_host: localhost
+      simulator_port: 5555
+      frequency: 100         # 100Hz IMU
+
+  # === 处理节点 ===
+  - id: sensor_fusion
+    package: mock_sensor_fusion
+    params:
+      fusion_rate: 50        # 50Hz 融合率
+      gps_weight: 0.7
+      imu_weight: 0.3
+
+  - id: controller
+    package: mock_controller_sim
+    params:
+      control_rate: 20       # 20Hz 控制频率
+      target_x: 10.0         # 目标位置
+      target_y: 10.0
+      lookahead_distance: 2.0
+
+  # === 执行器节点 ===
+  - id: sim_motor
+    package: sim_motor
+    params:
+      simulator_host: localhost
+      simulator_port: 5555
+      default_throttle: 0.0
+      default_steering: 0.0
+
+edges:
+  # GPS → sensor_fusion
+  - from: sim_gps.gps_fix
+    to: sensor_fusion.gps_fix
+
+  # IMU → sensor_fusion
+  - from: sim_imu.imu_data
+    to: sensor_fusion.imu_data
+
+  # sensor_fusion → controller
+  - from: sensor_fusion.fused_pose
+    to: controller.gps_fix
+
+  # controller → sim_motor
+  - from: controller.control_command
+    to: sim_motor.motor_cmd

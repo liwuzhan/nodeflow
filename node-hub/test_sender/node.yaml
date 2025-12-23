@@ -1,0 +1,28 @@
+name: test_sender
+version: "1.0"
+description: "Socket传输诊断 - 发送端"
+
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+  windows:
+    kind: python
+    cmd: ["python", "run.py"]
+
+ports:
+  outputs:
+    - name: test_message
+      type: json
+      description: "测试消息"
+
+params:
+  send_frequency:
+    type: float
+    default: 5.0
+    description: "每秒发送消息数"
+
+  message_content:
+    type: string
+    default: "Hello from sender"
+    description: "消息内容"

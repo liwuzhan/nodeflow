@@ -20,7 +20,6 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { getCompatibilityColor, areTypesCompatible } from '@/services/typeChecker'
 
 interface Props {
   nodeId: string

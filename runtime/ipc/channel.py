@@ -5,7 +5,7 @@
 
 import socket
 import os
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 from runtime.ipc.protocol import MessageProtocol
 from runtime.utils.errors import SocketError
@@ -59,6 +59,7 @@ class ServerChannel(Channel):
     """
     服务端通道（用于输出端口）
     创建Socket监听器，等待客户端连接
+    支持1-to-many连接（一个输出端口连接多个输入端口）
     """
 
     def __init__(self, socket_path: str):
@@ -70,16 +71,16 @@ class ServerChannel(Channel):
         """
         super().__init__(socket_path)
         self.server_sock: Optional[socket.socket] = None
-        self.client_sock: Optional[socket.socket] = None
+        self.client_socks: List[socket.socket] = []  # 支持多个客户端
 
-    def listen(self, backlog: int = 1):
+    def listen(self, backlog: int = 10):
         """
         开始监听
 
         创建Unix Domain Socket服务端，并监听连接
 
         参数：
-        - backlog: 监听队列长度
+        - backlog: 监听队列长度（默认10，支持多个客户端）
         """
         try:
             # 清理旧的Socket文件
@@ -95,11 +96,13 @@ class ServerChannel(Channel):
             logger.debug(f"Server channel listening on: {self.socket_path}")
 
         except Exception as e:
-            raise SocketError(f"Failed to create server socket at {self.socket_path}: {e}")
+            raise SocketError(
+                f"Failed to create server socket at {self.socket_path}: {e}"
+            )
 
     def accept(self) -> bool:
         """
-        尝试接受客户端连接（非阻塞）
+        尝试接受单个客户端连接（非阻塞）
 
         返回：
         - True表示接受了新连接，False表示无新连接
@@ -108,9 +111,12 @@ class ServerChannel(Channel):
             return False
 
         try:
-            self.client_sock, _ = self.server_sock.accept()
-            self.client_sock.setblocking(False)  # 非阻塞模式
-            logger.debug(f"Accepted client connection: {self.socket_path}")
+            client_sock, _ = self.server_sock.accept()
+            client_sock.setblocking(False)  # 非阻塞模式
+            self.client_socks.append(client_sock)
+            logger.debug(
+                f"Accepted client connection: {self.socket_path} (total: {len(self.client_socks)})"
+            )
             return True
         except BlockingIOError:
             # 无新连接
@@ -119,45 +125,90 @@ class ServerChannel(Channel):
             logger.warning(f"Error accepting connection on {self.socket_path}: {e}")
             return False
 
+    def _accept_new_clients(self):
+        """
+        持续接受所有待连接的客户端（非阻塞）
+
+        尽可能多地接受待连接的客户端，直到没有新连接为止
+        """
+        while self.accept():
+            pass  # accept()已经处理了添加客户端
+
     def send(self, data: Dict[str, Any]):
         """
-        发送数据
+        向所有已连接客户端发送数据
 
-        如果没有客户端连接，尝试接受连接
-        如果有客户端连接，编码并发送数据
+        策略：
+        - 首先尝试接受所有待连接的客户端（非阻塞）
+        - 向每个已连接的客户端发送数据
+        - BlockingIOError时丢弃消息但保留连接（最新值语义）
+        - 真正断开的客户端会被移除
 
         参数：
         - data: 要发送的数据字典
         """
         # 尝试接受新连接
-        if self.client_sock is None:
-            self.accept()
-            if self.client_sock is None:
-                # 仍然无客户端连接，忽略数据
-                return
+        self._accept_new_clients()
+
+        # 如果没有任何客户端连接，忽略数据
+        if not self.client_socks:
+            return
 
         # 编码消息
-        try:
-            message = MessageProtocol.encode(data)
-            self.client_sock.sendall(message)
-            logger.debug(f"Sent message on {self.socket_path}")
-        except (BrokenPipeError, ConnectionResetError):
-            # 客户端断开连接
-            logger.debug(f"Client disconnected: {self.socket_path}")
-            self.client_sock.close()
-            self.client_sock = None
-        except Exception as e:
-            logger.warning(f"Error sending data on {self.socket_path}: {e}")
-            if self.client_sock:
-                self.client_sock.close()
-                self.client_sock = None
+        message = MessageProtocol.encode(data)
+
+        # 记录发送失败的客户端索引
+        failed_indices = []
+
+        # 向所有客户端发送数据
+        for i, client_sock in enumerate(self.client_socks):
+            try:
+                client_sock.sendall(message)
+            except BlockingIOError:
+                # 缓冲区满 - 采用"尽力而为"策略
+                # 丢弃当前消息，但保留客户端连接（符合最新值语义）
+                logger.debug(
+                    f"ServerChannel client {i} send buffer full (socket: {self.socket_path}), dropping message"
+                )
+            except (BrokenPipeError, ConnectionResetError):
+                # 客户端真正断开连接 - 移除该客户端
+                logger.debug(f"Client {i} disconnected: {self.socket_path}")
+                failed_indices.append(i)
+                try:
+                    client_sock.close()
+                except:
+                    pass
+            except Exception as e:
+                # 其他异常 - 移除客户端
+                logger.warning(
+                    f"Error sending data to client {i} on {self.socket_path}: {e}"
+                )
+                failed_indices.append(i)
+                try:
+                    client_sock.close()
+                except:
+                    pass
+
+        # 移除真正断开的客户端（从后往前删除避免索引错乱）
+        for i in reversed(failed_indices):
+            self.client_socks.pop(i)
+
+        if failed_indices:
+            logger.debug(
+                f"Removed {len(failed_indices)} failed client(s) from {self.socket_path}, remaining: {len(self.client_socks)}"
+            )
 
     def close(self):
         """关闭服务端通道"""
-        if self.client_sock:
-            self.client_sock.close()
-            self.client_sock = None
+        # 关闭所有客户端连接
+        for client_sock in self.client_socks:
+            try:
+                client_sock.close()
+            except:
+                pass
+        self.client_socks.clear()
 
+        # 关闭服务端Socket
         if self.server_sock:
             self.server_sock.close()
             self.server_sock = None
@@ -216,7 +267,9 @@ class ClientChannel(Channel):
 
                 raise SocketError(f"Failed to connect to {self.socket_path}: {e}")
 
-        raise SocketError(f"Connection timeout: {self.socket_path} (tried for {timeout}s)")
+        raise SocketError(
+            f"Connection timeout: {self.socket_path} (tried for {timeout}s)"
+        )
 
     def recv(self) -> Optional[Dict[str, Any]]:
         """

@@ -1,0 +1,111 @@
+# Buffer配置示例 - node.yaml
+
+# 典型场景1：RTK/IMU数据（小数据量）
+# 使用默认1MB buffer（1024KB），覆盖模式
+rtk_node:
+  name: "RTK 接收器"
+  version: "1.0.0"
+  entrypoints:
+    linux: &ep_linux
+      kind: python
+      cmd: ["python3", "run.py"]
+  outputs:
+    - name: "rtk_fix"
+      type: "sensor.rtk"
+      description: "RTK定位数据"
+      # 使用默认配置：buffer_size=1MB, conflate=true
+      # （可省略这些字段）
+
+---
+
+# 典型场景2：轨迹规划（中等数据量，路径数据）
+# 使用默认1MB buffer，覆盖模式
+coverage_planner:
+  name: "覆盖路径规划器"
+  version: "1.0.0"
+  entrypoints:
+    linux: &ep_linux
+      kind: python
+      cmd: ["python3", "run.py"]
+  outputs:
+    - name: "global_path"
+      type: "planning.path"
+      description: "规划的全局路径"
+      # 使用默认配置：buffer_size=1MB, conflate=true
+      # 1MB足以存储几百个路径点
+
+---
+
+# 典型场景3：多线激光雷达（大数据量）
+# 需要5MB buffer以存储更多的点云数据
+lidar_node:
+  name: "多线激光雷达驱动"
+  version: "1.0.0"
+  entrypoints:
+    linux: &ep_linux
+      kind: python
+      cmd: ["python3", "run.py"]
+  outputs:
+    - name: "point_cloud"
+      type: "sensor.lidar"
+      description: "激光雷达点云"
+      buffer_size: 5242880  # 5MB (5 * 1024 * 1024)
+      conflate: true
+
+---
+
+# 典型场景4：4K摄像头（超大数据量）
+# 需要20MB buffer以存储4K图像数据（3840×2160×3 bytes）
+camera_node:
+  name: "4K摄像头驱动"
+  version: "1.0.0"
+  entrypoints:
+    linux: &ep_linux
+      kind: python
+      cmd: ["python3", "run.py"]
+  outputs:
+    - name: "image"
+      type: "sensor.camera"
+      description: "4K RGB图像"
+      buffer_size: 20971520  # 20MB (20 * 1024 * 1024)
+      conflate: true  # 只保留最新帧
+
+---
+
+# 典型场景5：高频数据，需要保留历史（队列模式）
+# 使用较小buffer但关闭conflate（将来可能支持队列模式）
+high_freq_sensor:
+  name: "高频传感器"
+  version: "1.0.0"
+  entrypoints:
+    linux: &ep_linux
+      kind: python
+      cmd: ["python3", "run.py"]
+  outputs:
+    - name: "raw_data"
+      type: "sensor.raw"
+      description: "原始高频数据"
+      buffer_size: 524288  # 512KB
+      conflate: false  # 注：当前暂不支持队列模式，仅为未来预留
+
+---
+
+# Buffer大小参考表
+
+# 数据类型                    典型大小     建议Buffer大小
+# ─────────────────────────────────────────────────────────
+# RTK 定位数据               ~100-200 B    默认 1MB
+# IMU 加速度/陀螺           ~50-100 B     默认 1MB
+# 轨迹路径点 (100个点)       ~3KB          默认 1MB
+# 轨迹路径点 (1000个点)      ~30KB         默认 1MB
+# 单线激光雷达 (20万点)      ~1.5MB        建议 2-3MB
+# 多线激光雷达 (100万点)     ~7.5MB        建议 10MB
+# 4K RGB 图像               ~24-30MB       建议 30-50MB
+# HD 图像 (1920×1080)       ~6MB           建议 8-10MB
+
+# 配置原则：
+# 1. 默认1MB足以满足大多数场景（轨迹、传感器数据）
+# 2. 多线激光雷达：5-10MB
+# 3. 摄像头/高分辨率图像：20-50MB
+# 4. 大型学习模型权重：可能需要100MB+
+# 5. 始终预留20-30%余量应对数据变化

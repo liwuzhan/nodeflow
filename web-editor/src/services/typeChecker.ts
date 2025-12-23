@@ -92,7 +92,7 @@ export function validateConnection(
 
   // 检查2: 类型兼容性
   if (!areTypesCompatible(fromPortType, toPortType)) {
-    errors.push(`类型不兼容: ${fromPortType} -> ${toPortType}`)
+    errors.push(`类型不兼容: ${fromPortName}(${fromPortType}) -> ${toPortName}(${toPortType})`)
   }
 
   return {

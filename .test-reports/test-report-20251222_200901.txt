@@ -1,0 +1,82 @@
+================================================
+NodeFlow 自动测试报告 - 2025-12-22 20:09:01
+================================================
+
+[1;33m[1/4] 检查代码规范...[0m
+
+[1;33m[2/4] 运行单元测试...[0m
+============================= test session starts ==============================
+platform darwin -- Python 3.12.0, pytest-9.0.2, pluggy-1.6.0 -- /usr/local/bin/python3
+cachedir: .pytest_cache
+rootdir: /Users/wuzhanli/Desktop/node
+plugins: anyio-4.12.0, cov-7.0.0
+collecting ... collected 4 items
+
+tests/unit/test_yaml_parser.py::TestYAMLParser::test_parse_runtime_config_success PASSED [ 25%]
+tests/unit/test_yaml_parser.py::TestYAMLParser::test_parse_runtime_config_file_not_found PASSED [ 50%]
+tests/unit/test_yaml_parser.py::TestYAMLParser::test_parse_node_manifest_success PASSED [ 75%]
+tests/unit/test_yaml_parser.py::TestYAMLParser::test_parse_node_manifest_file_not_found PASSED [100%]
+
+============================== 4 passed in 0.02s ===============================
+
+[1;33m[3/4] 验证 Mock 节点配置...[0m
+✓ mock_joystick 配置完整
+✓ mock_gps 配置完整
+✓ mock_imu 配置完整
+✓ mock_path_planner 配置完整
+✓ mock_controller_sim 配置完整
+✓ mock_motor_controller 配置完整
+✓ mock_sensor_fusion 配置完整
+✓ mock_data_generator 配置完整
+✓ mock_data_validator 配置完整
+✓ mock_throughput_monitor 配置完整
+
+[1;33m[4/4] 验证测试场景配置...[0m
+✓ test_mock_single.yaml 存在
+✓ test_mock_chain.yaml 存在
+✓ test_mock_multiport.yaml 存在
+✓ test_mock_processing.yaml 存在
+✓ test_mock_highfreq.yaml 存在
+✓ test_mock_errors.yaml 存在
+✓ test_mock_pipeline.yaml 存在
+
+[1;33m[统计信息][0m
+提交号: c94290d
+提交者: liwuzhan <liwuzhan@live.com>
+提交信息: feat: 测试重组、Python 3.12 迁移及 MCP 服务完成
+
+## 测试重组
+- 创建 tests/ 目录结构: mcp/, integration/, legacy/
+- 移动全部 13 个测试文件到对应目录
+- 更新 sys.path 配置支持从任何位置运行
+- 创建 tests/README.md 说明文档
+
+## Python 3.12 迁移
+- 升级 Python 3.9.6 → 3.12.0 (MCP SDK 需求)
+- 添加 .python-version 和 .python-config.json
+- 创建 setup_python_env.sh 和 check_env.sh 环境脚本
+- 更新所有文件的 shebang 到 python3.12
+- 修复 test_end_to_end.py NodeLauncher API 兼容性
+- 验证全部 22/22 测试通过
+
+## MCP 服务实现
+- 新增 mcp_server.py 实现 7 个核心工具
+- 新增 runtime_manager.py 处理运行时和 PID 管理
+- 修改 runtime/main.py 支持定时关机和 PID 文件
+- 更新 requirements.txt 添加 MCP SDK 依赖
+
+## 文档完善
+- 创建 MCP 服务完成报告和部署指南
+- 添加 Python 3.12 迁移文档
+- 整理测试组织说明文档
+- 归档历史文档到 docs/old/
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>
+修改文件数:       55
+代码行数:     5588 total
+
+================================================
+[0;32m✓ 测试完成，报告已保存到: /Users/wuzhanli/Desktop/node/.test-reports/test-report-20251222_200901.txt[0m
+================================================

@@ -81,7 +81,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref } from 'vue'
 import { useGraphStore } from '@/stores/graph'
 import { useNodeLibraryStore } from '@/stores/nodeLibrary'
 import CustomNode from './CustomNode.vue'

@@ -1,0 +1,225 @@
+# NodeFlow 规划闭环仿真场景
+#
+# 这个示例演示完整的农田覆盖规划和控制流程：
+#
+# 仿真器 (外部服务，localhost:5555)
+#   ↓ [地块 + 车辆信息]
+# [sim_output] ──→ [global_coverage] ──→ [规划路径]
+#   ↓ [RTK定位]           ↓
+#   └──────────────→ [velocity_controller] ──→ [速度指令]
+#                         ↓
+#                      [sim_input] ──→ 仿真器 ──→ 更新位置
+#                         ↑___________________|
+#
+# 启动前准备：
+#   1. 启动仿真器: python3 simulator/server.py
+#   2. 运行场景: python3 -m runtime.main examples/planning_simulation.yaml
+
+graph_id: planning_simulation
+graph_version: 1.0
+node_hub_path: ./node-hub
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 节点定义
+# ═══════════════════════════════════════════════════════════════════════════
+
+nodes:
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 仿真器输出 (传感器 + 地块)                                           │
+  # └─────────────────────────────────────────────────────────────────────┘
+  - id: sim_output
+    package: sim_output
+    description: "从仿真器读取传感器数据和地块信息"
+    params:
+      simulator_host: localhost
+      simulator_port: 5555
+      timeout: 2000
+
+      # 传感器开关
+      enable_gps: false          # 禁用普通GPS
+      enable_imu: false          # 禁用IMU（不需要）
+      enable_rtk: true           # 启用高精度RTK GPS ✅
+      enable_odometry: false     # 禁用里程计
+      enable_state: false        # 禁用状态调试
+
+      # 输出频率
+      output_frequency: 50.0     # 50Hz 输出频率
+
+      # 车辆配置（用于规划）
+      implement_width_m: 3.0     # 作业幅宽 3 米
+      overlap_ratio: 0.1         # 行间重叠 10%
+      path_inset_m: 1.0          # 内缩距离 1 米
+      pivot_turn: true           # 支持原地转向
+      yaw_rate_max_deg_s: 60.0   # 最大偏航率
+      min_turn_radius_m: 2.0     # 最小转弯半径
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 全局路径规划 (基于往复式扫描)                                         │
+  # └─────────────────────────────────────────────────────────────────────┘
+  - id: global_coverage
+    package: global_coverage
+    description: "根据地块和车辆配置生成全覆盖路径"
+    params: {}
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 纯追踪速度控制器                                                     │
+  # └─────────────────────────────────────────────────────────────────────┘
+  - id: velocity_controller
+    package: velocity_controller
+    description: "基于纯追踪算法的速度控制"
+    params:
+      max_speed: 1.0             # 最大线速度 1 m/s（农田作业速度）
+      min_speed: 0.2             # 最小线速度 0.2 m/s
+      lookahead_distance: 2.0    # 纯追踪前瞻距离 2 米
+      goal_tolerance: 0.3        # 目标点到达容差 0.3 米
+      heading_p_gain: 2.0        # 航向控制比例增益
+      max_angular_velocity: 1.0  # 最大角速度 1 rad/s
+      control_frequency: 20      # 控制频率 20 Hz
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 仿真器输入 (接收控制命令)                                            │
+  # └─────────────────────────────────────────────────────────────────────┘
+  - id: sim_input
+    package: sim_input
+    description: "将控制命令发送到仿真器"
+    params:
+      simulator_host: localhost
+      simulator_port: 5555
+      timeout: 2000
+
+      # 默认控制值（无输入时停止）
+      default_linear_velocity: 0.0
+      default_angular_velocity: 0.0
+
+      # 控制模式
+      control_mode: velocity     # 优先使用速度控制
+
+      # 输入频率
+      input_frequency: 50.0      # 50Hz 检查输入
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 日志记录 (用于实时监测和复盘)                                        │
+  # └─────────────────────────────────────────────────────────────────────┘
+  - id: logger
+    package: logger
+    description: "记录关键数据并提供Web实时展示"
+    params:
+      web_port: 8001          # Web界面端口
+      buffer_size: 1000       # 内存缓冲区大小
+      enable_file_log: true   # 启用文件日志
+      log_file_path: ./logs/planning_simulation.jsonl
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 数据连接 (边)
+# ═══════════════════════════════════════════════════════════════════════════
+
+edges:
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 规划流程
+  # └─────────────────────────────────────────────────────────────────────┘
+
+  # 地块 + 车辆配置 → 规划器
+  - from: sim_output.task_request
+    to: global_coverage.task_request
+    description: "地块和车辆配置"
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 控制流程
+  # └─────────────────────────────────────────────────────────────────────┘
+
+  # RTK定位 → 速度控制器
+  - from: sim_output.rtk_fix
+    to: velocity_controller.rtk_fix
+    description: "机器人当前位置（厘米级精度）+ 航向角"
+
+  # 规划路径 → 速度控制器
+  - from: global_coverage.global_path
+    to: velocity_controller.global_path
+    description: "规划生成的路径点序列"
+
+  # 速度指令 → 仿真器输入
+  # 这个边确保sim_input依赖velocity_controller，sim_input会在velocity_controller之后启动
+  - from: velocity_controller.velocity_cmd
+    to: sim_input.velocity_cmd
+    description: "线速度和角速度"
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 监测和日志 (关键数据流)
+  # └─────────────────────────────────────────────────────────────────────┘
+
+  # RTK定位数据 → logger (实时位置监测)
+  # 这个边也确保logger依赖sim_output，使logger在sim_output之后启动
+  - from: sim_output.rtk_fix
+    to: logger.input1
+    description: "RTK GPS定位数据（lat, lon, heading, rtk_status）"
+
+  # 规划路径 → logger (路径调试)
+  - from: global_coverage.global_path
+    to: logger.input2
+    description: "全局规划路径（路径点序列）"
+
+  # 速度指令 → logger (控制分析)
+  - from: velocity_controller.velocity_cmd
+    to: logger.input3
+    description: "速度控制指令（linear_velocity, angular_velocity）"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 配置说明
+# ═══════════════════════════════════════════════════════════════════════════
+
+# 仿真流程：
+#
+# 1. 初始化:
+#    - sim_output 连接到仿真器，读取地块（只读一次）
+#    - 组装 task_request（地块 + 车辆参数）
+#
+# 2. 规划:
+#    - global_coverage 接收 task_request
+#    - 执行往复式扫描算法，生成全覆盖路径
+#    - 输出 WGS84 格式的路径点 [(lon, lat), ...]
+#
+# 3. 控制循环:
+#    - sim_output 持续读取 RTK GPS 数据（50Hz）
+#    - velocity_controller 接收 RTK 定位 + 规划路径
+#    - 计算前瞻点，输出线速度 + 角速度
+#    - sim_input 将速度命令发送到仿真器（50Hz）
+#    - 仿真器更新机器人位置（100Hz 内部）
+#    - 闭环回到 sim_output 的 RTK 输出
+#
+# 4. 日志:
+#    - logger 节点接收 RTK、路径、控制数据
+#    - 用于实时监测或离线分析
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 性能指标
+# ═══════════════════════════════════════════════════════════════════════════
+
+# 通信频率:
+#   - RTK 输出: 50 Hz
+#   - 速度控制: 20 Hz
+#   - sim_input: 50 Hz
+#   - 仿真器内部: 100 Hz
+#   - 总体网络延迟: ~20ms 以下
+
+# 内存占用:
+#   - sim_output: 持有 field_data + task_request （<10MB）
+#   - global_coverage: 路径 ~100KB (1000点)
+#   - velocity_controller: 控制状态 (<1MB)
+#   - 总计: <20MB
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 调试模式
+# ═══════════════════════════════════════════════════════════════════════════
+
+# 如果想添加更多调试信息，可以：
+#
+# 1. 启用 sim_output 的状态输出:
+#    enable_state: true  → 可以看到仿真器内部状态
+#
+# 2. 启用更多传感器:
+#    enable_imu: true    → IMU 数据（调试使用）
+#    enable_odometry: true → 里程计数据
+#
+# 3. 增加日志端口:
+#    - 在 logger 中添加更多 input 端口
+#    - 连接其他节点的输出

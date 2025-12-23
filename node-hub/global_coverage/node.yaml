@@ -19,5 +19,7 @@ ports:
     - name: global_path
       type: planning.path
       description: 规划生成的WGS84经纬度路径点列表
+      buffer_size: 1048576  # 1MB - 足以存储典型路径（几百个路径点）
+      conflate: true  # 覆盖模式 - 只保留最新规划结果
 
-params: []
+params: {}

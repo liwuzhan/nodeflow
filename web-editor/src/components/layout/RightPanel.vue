@@ -67,8 +67,8 @@
               <ParamInput
                 :model-value="selectedNode?.params?.[key] ?? schema.default"
                 :param-type="schema.type"
-                :param-name="key"
-                @update:model-value="(value) => updateParam(key, value)"
+                :param-name="String(key)"
+                @update:model-value="(value) => updateParam(String(key), value)"
               />
             </div>
           </div>

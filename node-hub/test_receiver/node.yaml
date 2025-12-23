@@ -1,0 +1,23 @@
+name: test_receiver
+version: "1.0"
+description: "Socket传输诊断 - 接收端"
+
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+  windows:
+    kind: python
+    cmd: ["python", "run.py"]
+
+ports:
+  inputs:
+    - name: test_message
+      type: json
+      description: "测试消息"
+
+params:
+  receive_frequency:
+    type: float
+    default: 10.0
+    description: "每秒检查接收次数"

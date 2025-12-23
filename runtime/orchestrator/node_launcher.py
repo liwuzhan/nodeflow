@@ -7,7 +7,7 @@ import subprocess
 import json
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional, TextIO, Tuple
 
 from runtime.config.models import NodeInstance, NodeManifest, EntryPoint
 from runtime.ipc.socket_manager import SocketManager
@@ -35,11 +35,13 @@ class NodeLauncher:
         self.edges = edges
         self.env_builder = EnvBuilder()
 
+        # 节点日志文件管理
+        self.log_dir = Path("/tmp/nodeflow_logs")
+        self.log_dir.mkdir(exist_ok=True, parents=True)
+        self.log_files: Dict[str, Tuple[TextIO, TextIO]] = {}
+
     def launch(
-        self,
-        node: NodeInstance,
-        manifest: NodeManifest,
-        platform: str = "linux"
+        self, node: NodeInstance, manifest: NodeManifest, platform: str = "linux"
     ) -> subprocess.Popen:
         """
         启动单个节点
@@ -68,13 +70,12 @@ class NodeLauncher:
         entrypoint = self._get_entrypoint(node, manifest, platform)
         if not entrypoint:
             raise NodeLaunchError(
-                node.id,
-                f"No entrypoint found for platform '{platform}'"
+                node.id, f"No entrypoint found for platform '{platform}'"
             )
 
-        # 2. 构建环境变量
+        # 2. 构建环境变量（Shared Buffer版本：不再需要socket_manager）
         env = self.env_builder.build_env(
-            node, manifest, self.socket_manager, self.node_hub_path, self.edges
+            node, manifest, self.node_hub_path, self.edges
         )
 
         # 3. 构建命令
@@ -84,46 +85,39 @@ class NodeLauncher:
         # 4. 设置工作目录（节点包目录）
         cwd = os.path.join(self.node_hub_path, node.package)
         if not os.path.isdir(cwd):
-            raise NodeLaunchError(
-                node.id,
-                f"Node package directory not found: {cwd}"
-            )
+            raise NodeLaunchError(node.id, f"Node package directory not found: {cwd}")
 
-        # 5. 启动进程
+        # 5-6. 创建日志文件并启动进程（重定向到文件避免管道阻塞）
         try:
+            stdout_file = open(self.log_dir / f"{node.id}.stdout.log", "w", buffering=1)
+            stderr_file = open(self.log_dir / f"{node.id}.stderr.log", "w", buffering=1)
+            self.log_files[node.id] = (stdout_file, stderr_file)
+
             process = subprocess.Popen(
-                cmd,
-                env=env,
-                cwd=cwd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
+                cmd, env=env, cwd=cwd, stdout=stdout_file, stderr=stderr_file, text=True
             )
 
             logger.info(f"Node '{node.id}' started with PID {process.pid}")
+            logger.debug(
+                f"Node '{node.id}' logs: {self.log_dir / node.id}.{{stdout,stderr}}.log"
+            )
             return process
 
-        except FileNotFoundError as e:
+        except FileNotFoundError:
+            self.close_node_logs(node.id)
             raise NodeLaunchError(
                 node.id,
-                f"Command not found: {cmd[0]}. Ensure the entrypoint is correct."
+                f"Command not found: {cmd[0]}. Ensure the entrypoint is correct.",
             )
-        except PermissionError as e:
-            raise NodeLaunchError(
-                node.id,
-                f"Permission denied executing: {cmd[0]}"
-            )
+        except PermissionError:
+            self.close_node_logs(node.id)
+            raise NodeLaunchError(node.id, f"Permission denied executing: {cmd[0]}")
         except Exception as e:
-            raise NodeLaunchError(
-                node.id,
-                f"Failed to start process: {e}"
-            )
+            self.close_node_logs(node.id)
+            raise NodeLaunchError(node.id, f"Failed to start process: {e}")
 
     def _get_entrypoint(
-        self,
-        node: NodeInstance,
-        manifest: NodeManifest,
-        platform: str
+        self, node: NodeInstance, manifest: NodeManifest, platform: str
     ) -> Optional[EntryPoint]:
         """
         获取节点的启动入口
@@ -193,23 +187,42 @@ class NodeLauncher:
 
         if ret_code is not None:
             # 进程已退出
-            logger.warning(f"Node '{node_id}' (PID {process.pid}) exited with code {ret_code}")
+            logger.warning(
+                f"Node '{node_id}' (PID {process.pid}) exited with code {ret_code}"
+            )
 
-            # 获取stdout和stderr
+            # 读取日志文件最后几行（如果存在）
             try:
-                stdout, stderr = process.communicate(timeout=0.1)
-                if stdout:
-                    logger.debug(f"Node '{node_id}' stdout: {stdout[:500]}")
-                if stderr:
-                    logger.error(f"Node '{node_id}' stderr: {stderr[:500]}")
-            except subprocess.TimeoutExpired:
-                pass
+                stdout_log = self.log_dir / f"{node_id}.stdout.log"
+                stderr_log = self.log_dir / f"{node_id}.stderr.log"
+
+                if stdout_log.exists():
+                    with open(stdout_log, "r") as f:
+                        lines = f.readlines()
+                        if lines:
+                            last_lines = "".join(lines[-5:])  # 最后5行
+                            logger.debug(
+                                f"Node '{node_id}' stdout (last 5 lines):\n{last_lines}"
+                            )
+
+                if stderr_log.exists():
+                    with open(stderr_log, "r") as f:
+                        lines = f.readlines()
+                        if lines:
+                            last_lines = "".join(lines[-5:])  # 最后5行
+                            logger.error(
+                                f"Node '{node_id}' stderr (last 5 lines):\n{last_lines}"
+                            )
+            except Exception as e:
+                logger.warning(f"Failed to read log files for node '{node_id}': {e}")
 
             return False
 
         return True
 
-    def terminate_process(self, process: subprocess.Popen, node_id: str, timeout: float = 5.0):
+    def terminate_process(
+        self, process: subprocess.Popen, node_id: str, timeout: float = 5.0
+    ):
         """
         优雅地终止进程
 
@@ -243,3 +256,33 @@ class NodeLauncher:
 
         except Exception as e:
             logger.error(f"Error terminating node '{node_id}': {e}")
+
+        # 关闭该节点的日志文件
+        self.close_node_logs(node_id)
+
+    def close_node_logs(self, node_id: str):
+        """
+        关闭特定节点的日志文件
+
+        参数：
+        - node_id: 节点ID
+        """
+        if node_id in self.log_files:
+            stdout_file, stderr_file = self.log_files[node_id]
+            try:
+                stdout_file.close()
+                stderr_file.close()
+            except Exception as e:
+                logger.warning(f"Error closing log files for node '{node_id}': {e}")
+            finally:
+                del self.log_files[node_id]
+
+    def cleanup(self):
+        """
+        清理所有资源
+
+        关闭所有打开的日志文件
+        """
+        logger.debug("Cleaning up NodeLauncher resources")
+        for node_id in list(self.log_files.keys()):
+            self.close_node_logs(node_id)

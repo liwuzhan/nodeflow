@@ -1,6 +1,6 @@
 """
 启动协调器模块
-按拓扑顺序协调节点启动
+按拓扑顺序协调节点启动（Shared Buffer版本）
 """
 
 import time
@@ -35,16 +35,21 @@ class StartupCoordinator:
         layers: List[List[str]],
         nodes: Dict[str, NodeInstance],
         startup_timeout: float = 30.0,
-        startup_delay: float = 1.0
+        startup_delay: float = 2.0
     ) -> Dict[str, subprocess.Popen]:
         """
-        按拓扑层次启动节点
+        按拓扑层次启动节点（ZeroMQ版本）
 
         启动策略：
         1. 按层次顺序处理
         2. 同一层内的节点并行启动
         3. 等待该层所有节点启动完成（超时检测）
         4. 再启动下一层
+
+        与Shared Buffer版本的区别：
+        - 无需预分配缓冲区，ZMQ自动管理
+        - PUB socket bind，SUB socket connect
+        - 分层启动确保PUB先于SUB启动
 
         参数：
         - layers: 拓扑排序的分层结果 [[layer0], [layer1], ...]
@@ -61,7 +66,9 @@ class StartupCoordinator:
         processes = {}
 
         logger.info(f"Starting {len(nodes)} nodes in {len(layers)} layers")
+        logger.info("Using ZeroMQ IPC for inter-node communication")
 
+        # ========== 按层启动节点 ==========
         for layer_idx, layer_nodes in enumerate(layers):
             logger.info(f"=== Starting Layer {layer_idx} ({len(layer_nodes)} nodes) ===")
             logger.info(f"Nodes: {layer_nodes}")
@@ -75,9 +82,9 @@ class StartupCoordinator:
             # 更新总进程字典
             processes.update(layer_processes)
 
-            # 层之间延迟（给节点时间完成初始化）
+            # 层之间延迟（给ZMQ SUB时间连接到PUB）
             if layer_idx < len(layers) - 1:
-                logger.debug(f"Waiting {startup_delay}s before starting next layer")
+                logger.debug(f"Waiting {startup_delay}s before starting next layer (ZMQ connection setup)")
                 time.sleep(startup_delay)
 
         logger.info(f"All {len(processes)} nodes started successfully")

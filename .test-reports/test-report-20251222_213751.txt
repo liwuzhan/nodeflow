@@ -1,0 +1,87 @@
+================================================
+NodeFlow 自动测试报告 - 2025-12-22 21:37:51
+================================================
+
+[1;33m[1/4] 检查代码规范...[0m
+
+[1;33m[2/4] 运行单元测试...[0m
+============================= test session starts ==============================
+platform darwin -- Python 3.12.0, pytest-9.0.2, pluggy-1.6.0 -- /usr/local/bin/python3
+cachedir: .pytest_cache
+rootdir: /Users/wuzhanli/Desktop/node
+plugins: anyio-4.12.0, cov-7.0.0
+collecting ... collected 4 items
+
+tests/unit/test_yaml_parser.py::TestYAMLParser::test_parse_runtime_config_success PASSED [ 25%]
+tests/unit/test_yaml_parser.py::TestYAMLParser::test_parse_runtime_config_file_not_found PASSED [ 50%]
+tests/unit/test_yaml_parser.py::TestYAMLParser::test_parse_node_manifest_success PASSED [ 75%]
+tests/unit/test_yaml_parser.py::TestYAMLParser::test_parse_node_manifest_file_not_found PASSED [100%]
+
+============================== 4 passed in 0.02s ===============================
+
+[1;33m[3/4] 验证 Mock 节点配置...[0m
+✓ mock_joystick 配置完整
+✓ mock_gps 配置完整
+✓ mock_imu 配置完整
+✓ mock_path_planner 配置完整
+✓ mock_controller_sim 配置完整
+✓ mock_motor_controller 配置完整
+✓ mock_sensor_fusion 配置完整
+✓ mock_data_generator 配置完整
+✓ mock_data_validator 配置完整
+✓ mock_throughput_monitor 配置完整
+
+[1;33m[4/4] 验证测试场景配置...[0m
+✓ test_mock_single.yaml 存在
+✓ test_mock_chain.yaml 存在
+✓ test_mock_multiport.yaml 存在
+✓ test_mock_processing.yaml 存在
+✓ test_mock_highfreq.yaml 存在
+✓ test_mock_errors.yaml 存在
+✓ test_mock_pipeline.yaml 存在
+
+[1;33m[统计信息][0m
+提交号: 8ce10db
+提交者: liwuzhan <liwuzhan@live.com>
+提交信息: docs: 添加 MCP 服务修复完整报告
+
+本报告记录了 2025-12-22 对 NodeFlow MCP 服务的全面修复工作：
+
+📋 报告内容:
+- 执行摘要: 3 个优先级缺陷修复概览
+- Phase 1 (P0): 路径安全边界修复详细实现
+- Phase 2 (P1): subprocess PIPE 阻塞解决方案
+- Phase 3 (P2): 工程化改进和类型安全修复
+- 测试结果汇总: 7/7 测试通过，mypy 零错误
+- 技术亮点: 安全设计模式、错误分类、类型安全最佳实践
+- 影响评估: 安全性、稳定性、代码质量提升统计
+- 后续建议: 遗留问题和优化方向
+
+📊 关键指标:
+- 安全漏洞修复: 4 个 P0 Critical 任意文件读写风险 → 0
+- 类型错误修复: 24 个 mypy 错误 → 0 (modified files)
+- 测试覆盖: 路径安全 7/7 通过
+- 代码质量: black 格式化 100% 合规
+
+📝 文档特点:
+- 详细的代码对比 (修复前/修复后)
+- 完整的测试输出示例
+- 清晰的技术决策说明
+- 可执行的验证命令
+
+🎯 目标读者:
+- 开发团队成员 (理解修复细节)
+- 安全审计人员 (验证漏洞修复)
+- 项目管理者 (评估修复进度)
+
+报告位置: docs/MCP_SERVICE_FIX_REPORT.md
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>
+修改文件数:        1
+代码行数:     5588 total
+
+================================================
+[0;32m✓ 测试完成，报告已保存到: /Users/wuzhanli/Desktop/node/.test-reports/test-report-20251222_213751.txt[0m
+================================================
