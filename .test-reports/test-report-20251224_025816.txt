@@ -1,0 +1,109 @@
+================================================
+NodeFlow 自动测试报告 - 2025-12-24 02:58:16
+================================================
+
+[1;33m[1/4] 检查代码规范...[0m
+
+[1;33m[2/4] 运行单元测试...[0m
+============================= test session starts ==============================
+platform darwin -- Python 3.12.0, pytest-9.0.2, pluggy-1.6.0 -- /Library/Frameworks/Python.framework/Versions/3.12/bin/python3
+cachedir: .pytest_cache
+rootdir: /Users/wuzhanli/Desktop/node
+plugins: anyio-4.12.0, cov-7.0.0
+collecting ... collected 4 items
+
+tests/unit/test_yaml_parser.py::TestYAMLParser::test_parse_runtime_config_success PASSED [ 25%]
+tests/unit/test_yaml_parser.py::TestYAMLParser::test_parse_runtime_config_file_not_found PASSED [ 50%]
+tests/unit/test_yaml_parser.py::TestYAMLParser::test_parse_node_manifest_success PASSED [ 75%]
+tests/unit/test_yaml_parser.py::TestYAMLParser::test_parse_node_manifest_file_not_found PASSED [100%]
+
+============================== 4 passed in 0.02s ===============================
+
+[1;33m[3/4] 验证 Mock 节点配置...[0m
+✓ mock_joystick 配置完整
+✓ mock_gps 配置完整
+✓ mock_imu 配置完整
+✓ mock_path_planner 配置完整
+✓ mock_controller_sim 配置完整
+✓ mock_motor_controller 配置完整
+✓ mock_sensor_fusion 配置完整
+✓ mock_data_generator 配置完整
+✓ mock_data_validator 配置完整
+✓ mock_throughput_monitor 配置完整
+
+[1;33m[4/4] 验证测试场景配置...[0m
+✓ test_mock_single.yaml 存在
+✓ test_mock_chain.yaml 存在
+✓ test_mock_multiport.yaml 存在
+✓ test_mock_processing.yaml 存在
+✓ test_mock_highfreq.yaml 存在
+✓ test_mock_errors.yaml 存在
+✓ test_mock_pipeline.yaml 存在
+
+[1;33m[统计信息][0m
+提交号: fa8af33
+提交者: liwuzhan <liwuzhan@live.com>
+提交信息: feat(ipc): Implement complete Late-Joiner semantics for Hybrid IPC
+
+## Summary
+
+Fix P1 issue from GPT review: Complete Late-Joiner implementation to ensure downstream nodes that start late can read upstream historical data.
+
+## Problem Fixed
+
+Previously, InputPort only synced sequence numbers on first connection but didn't return history data. This caused late-joining nodes to miss data that was already sent by upstream nodes before they connected.
+
+## Solution
+
+Implement three-part fix in sdk/port.py:
+
+1. **Cache historical data** (line 238-239)
+   - Add _cached_history field to store first connection data
+
+2. **Read and cache history on first connect** (line 292-311)
+   - In _connect(), explicitly read buffer data on first connection
+   - Cache historical data before socket connects
+
+3. **Return cached data first** (line 339-346)
+   - In recv_latest(), check for cached history first
+   - Return cached data before checking for new notifications
+
+## Test Coverage
+
+Create comprehensive test suite: tests/integration/test_late_joiner.py
+- ✅ test_late_joiner_basic: Basic late-joiner scenario
+- ✅ test_late_joiner_multiple_updates: Read latest after multiple updates
+- ✅ test_late_joiner_then_realtime: History + realtime data flow
+- ✅ test_no_history_available: No-history edge case
+- ✅ test_late_joiner_with_complex_data: Complex nested data structures
+
+## Results
+
+**All tests pass**: 12/12 ✅
+- 7/7 buffer config tests (backward compatibility verified)
+- 5/5 late-joiner tests (new functionality verified)
+
+## Documentation
+
+Update docs/REVIEW_FINDINGS_AND_FIX_PLAN.md
+- Document actual implementation vs proposed options
+- Record test results and acceptance criteria
+- Mark P1 as complete
+
+## Verification
+
+Late-Joiner guarantees verified:
+✅ Downstream can read upstream history data
+✅ Latest-Value semantics preserved
+✅ Works with complex nested data
+✅ Handles no-history edge cases
+✅ Transitions smoothly to realtime updates
+
+🤖 Generated with Claude Code
+Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>
+修改文件数:        4
+代码行数:     6168 total
+
+================================================
+[0;32m✓ 测试完成，报告已保存到: /Users/wuzhanli/Desktop/node/.test-reports/test-report-20251224_025816.txt[0m
+================================================

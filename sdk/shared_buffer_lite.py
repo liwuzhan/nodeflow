@@ -6,18 +6,26 @@
 - 只存储一个值（最新值）
 - 配合ZMQ使用，不单独作为IPC机制
 - 更简单的实现，无需复杂的同步
+
+序列化格式: MsgPack (支持 dict, list, bytes, numpy.ndarray)
 """
 
 import mmap
-import json
+import msgpack
 import struct
 from pathlib import Path
 from typing import Optional, Dict, Any
 
+try:
+    import numpy as np
+    HAS_NUMPY = True
+except ImportError:
+    HAS_NUMPY = False
+
 # 缓冲区布局:
 # [0-3]   序列号 (uint32)
 # [4-7]   数据长度 (uint32)
-# [8-N]   数据内容 (JSON)
+# [8-N]   数据内容 (MsgPack)
 
 class SharedBufferLite:
     """轻量级共享缓冲区"""
@@ -51,18 +59,49 @@ class SharedBufferLite:
         self.file = open(self.buffer_path, 'r+b')
         self.mmap = mmap.mmap(self.file.fileno(), size)
 
+    @staticmethod
+    def _encode_numpy(obj):
+        """MsgPack编码器：支持numpy数据类型"""
+        if HAS_NUMPY:
+            if isinstance(obj, np.ndarray):
+                return {
+                    '__ndarray__': True,
+                    'dtype': str(obj.dtype),
+                    'shape': tuple(obj.shape),
+                    'data': obj.tobytes()
+                }
+            elif isinstance(obj, (np.integer, np.floating)):
+                return obj.item()  # 转换为Python原生类型
+        raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+    @staticmethod
+    def _decode_numpy(obj):
+        """MsgPack解码器：还原numpy数据类型"""
+        if isinstance(obj, dict) and obj.get('__ndarray__'):
+            if not HAS_NUMPY:
+                raise ImportError("NumPy is required to decode numpy arrays")
+            dtype = np.dtype(obj['dtype'])
+            shape = obj['shape']
+            data = obj['data']
+            return np.frombuffer(data, dtype=dtype).reshape(shape)
+        return obj
+
     def write(self, data: Dict[str, Any]) -> int:
         """
         写入数据（覆盖式）
 
         Args:
-            data: 要写入的数据字典
+            data: 要写入的数据字典（支持dict, list, bytes, numpy.ndarray）
 
         Returns:
             新的序列号
         """
-        # 序列化数据
-        serialized = json.dumps(data).encode('utf-8')
+        # 序列化数据为MsgPack
+        try:
+            serialized = msgpack.packb(data, default=self._encode_numpy, use_bin_type=True)
+        except Exception as e:
+            raise ValueError(f"Failed to serialize data: {e}")
+
         data_length = len(serialized)
 
         if data_length > (self.size - self.HEADER_SIZE):
@@ -102,8 +141,8 @@ class SharedBufferLite:
         # 读取数据
         serialized = bytes(self.mmap[8:8+length])
         try:
-            return json.loads(serialized.decode('utf-8'))
-        except (json.JSONDecodeError, UnicodeDecodeError):
+            return msgpack.unpackb(serialized, object_hook=self._decode_numpy, raw=False)
+        except Exception:
             return None
 
     def get_sequence(self) -> int:
