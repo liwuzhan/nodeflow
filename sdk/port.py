@@ -235,6 +235,9 @@ class InputPort:
         # 序列号追踪（用于检测新数据）
         self.last_sequence = 0
 
+        # 缓存的历史数据（首次连接时读取）
+        self._cached_history: Optional[Dict[str, Any]] = None
+
         self._connect()
 
     def _connect(self):
@@ -286,10 +289,26 @@ class InputPort:
             # 给socket时间建立连接
             time.sleep(0.1)
 
-            # 首次连接：尝试从buffer读取历史数据
+            # 首次连接：从buffer读取历史数据（解决Late-Joiner问题）
             if self.buffer:
-                self.last_sequence = self.buffer.get_sequence()
-                logger.debug(f"InputPort '{self.name}' synced to sequence={self.last_sequence}")
+                current_seq = self.buffer.get_sequence()
+                if current_seq > 0:
+                    # 有历史数据，读取并缓存
+                    history_data = self.buffer.read()
+                    if history_data is not None:
+                        self._cached_history = history_data
+                        self.last_sequence = current_seq
+                        logger.info(
+                            f"InputPort '{self.name}' read history on first connection: "
+                            f"seq={current_seq} (Late-Joiner: data available)"
+                        )
+                    else:
+                        # Buffer中没有有效数据
+                        self.last_sequence = current_seq
+                        logger.debug(f"InputPort '{self.name}' synced to sequence={current_seq} (no data in buffer)")
+                else:
+                    # 还没有数据
+                    logger.debug(f"InputPort '{self.name}' waiting for first data (seq={current_seq})")
 
         except Exception as e:
             logger.error(f"InputPort '{self.name}' connection error: {e}")
@@ -300,9 +319,10 @@ class InputPort:
         接收最新数据（非阻塞）
 
         策略（混合方案）：
-        1. 检查ZMQ是否有新通知（非阻塞）
-        2. 如果有通知，从Shared Buffer读取最新数据
-        3. 如果无通知但buffer有新数据（序列号增加），也读取
+        1. 如果有缓存的历史数据，先返回（解决Late-Joiner）
+        2. 检查ZMQ是否有新通知（非阻塞）
+        3. 如果有通知，从Shared Buffer读取最新数据
+        4. 如果无通知但buffer有新数据（序列号增加），也读取
 
         返回：
         - 最新的数据字典，如果无新数据返回None
@@ -316,6 +336,15 @@ class InputPort:
             return None
 
         try:
+            # 0. 如果有缓存的历史数据，先返回（首次调用时）
+            if self._cached_history is not None:
+                cached_data = self._cached_history
+                self._cached_history = None  # 只返回一次
+                logger.debug(
+                    f"InputPort '{self.name}' returned cached history data (seq={self.last_sequence})"
+                )
+                return cached_data
+
             # 1. 检查ZMQ通知（非阻塞）
             has_notification = False
             try:
