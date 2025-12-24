@@ -1,0 +1,63 @@
+name: trajectory_viz
+version: "1.0"
+description: "轨迹对比可视化节点 - 对比规划轨迹和实际GPS轨迹"
+
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+  windows:
+    kind: python
+    cmd: ["python", "run.py"]
+
+ports:
+  inputs:
+    - name: task_request
+      type: json
+      description: "规划任务请求，包含地块边界信息"
+    - name: global_path
+      type: json
+      description: "规划器输出的全局路径"
+    - name: rtk_fix
+      type: json
+      description: "RTK GPS定位数据，用于记录实际轨迹"
+  outputs:
+    - name: trajectory_image
+      type: json
+      description: "生成的轨迹可视化图像路径和统计信息"
+
+params:
+  output_dir:
+    type: string
+    default: "./trajectory_viz"
+    description: "输出目录（相对于节点目录）"
+
+  image_format:
+    type: string
+    default: "jpg"
+    description: "输出图像格式 (jpg, png)"
+
+  timeout:
+    type: float
+    default: 300.0
+    description: "节点运行超时时间 (秒)"
+
+  update_interval:
+    type: float
+    default: 5.0
+    description: "轨迹更新间隔 (秒)"
+
+  dpi:
+    type: integer
+    default: 150
+    description: "输出图像DPI分辨率"
+
+  figsize_width:
+    type: float
+    default: 12.0
+    description: "图像宽度 (英寸)"
+
+  figsize_height:
+    type: float
+    default: 10.0
+    description: "图像高度 (英寸)"
