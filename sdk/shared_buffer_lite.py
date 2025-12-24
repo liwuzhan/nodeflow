@@ -43,7 +43,6 @@ class SharedBufferLite:
             create: 是否创建新缓冲区
         """
         self.buffer_name = buffer_name
-        self.size = size
 
         # 缓冲区文件路径
         buffer_dir = Path("/tmp/nodeflow/buffers")
@@ -54,10 +53,14 @@ class SharedBufferLite:
             # 创建新文件
             with open(self.buffer_path, 'wb') as f:
                 f.write(b'\x00' * size)
+            self.size = size
+        else:
+            # 打开现有文件，自动检测其实际大小
+            self.size = self.buffer_path.stat().st_size
 
         # 打开mmap
         self.file = open(self.buffer_path, 'r+b')
-        self.mmap = mmap.mmap(self.file.fileno(), size)
+        self.mmap = mmap.mmap(self.file.fileno(), self.size)
 
     @staticmethod
     def _encode_numpy(obj):
@@ -152,9 +155,15 @@ class SharedBufferLite:
     def close(self):
         """关闭缓冲区"""
         if self.mmap:
-            self.mmap.close()
+            try:
+                self.mmap.close()
+            except Exception:
+                pass  # Already closed
         if self.file:
-            self.file.close()
+            try:
+                self.file.close()
+            except Exception:
+                pass  # Already closed
 
     def __del__(self):
         """析构函数"""

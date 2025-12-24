@@ -80,12 +80,24 @@ class OutputPort:
         设置Buffer和ZMQ socket
         """
         try:
-            # 1. 创建Shared Buffer（使用配置的大小）
-            self.buffer = SharedBufferLite(self.buffer_name, size=self.buffer_size, create=True)
-            logger.debug(
-                f"OutputPort '{self.name}' created buffer: {self.buffer_name} "
-                f"(size={self.buffer_size//1024}KB, conflate={self.conflate})"
-            )
+            # 1. 创建Shared Buffer（如果已存在则重用，避免invalidate现有的mmap）
+            buffer_path = Path(f"/tmp/nodeflow/buffers/{self.buffer_name}.buf")
+            buffer_exists = buffer_path.exists()
+
+            if buffer_exists:
+                # 重用现有buffer（重启场景）
+                self.buffer = SharedBufferLite(self.buffer_name, size=self.buffer_size, create=False)
+                logger.debug(
+                    f"OutputPort '{self.name}' reusing existing buffer: {self.buffer_name} "
+                    f"(size={self.buffer.size//1024}KB)"
+                )
+            else:
+                # 创建新buffer
+                self.buffer = SharedBufferLite(self.buffer_name, size=self.buffer_size, create=True)
+                logger.debug(
+                    f"OutputPort '{self.name}' created buffer: {self.buffer_name} "
+                    f"(size={self.buffer_size//1024}KB, conflate={self.conflate})"
+                )
 
             # 2. 创建ZMQ PUB socket
             context = get_zmq_context()
