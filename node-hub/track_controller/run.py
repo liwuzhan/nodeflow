@@ -8,7 +8,6 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from sdk.nodeflow_sdk import NodeFlowSDK
-from sdk.shared_buffer_lite import SharedBufferLite
 
 
 def normalize(angle):
@@ -92,34 +91,28 @@ def main():
         kp = float(sdk.params.get("heading_p_gain", 2.5))
         max_w = float(sdk.params.get("max_angular_velocity", 1.0))
         pivot_th = float(sdk.params.get("pivot_threshold_deg", 15.0))
+
+        # 使用 SDK 端口（不硬编码上游 buffer 名称，保持架构灵活性）
         in_rtk = sdk.create_input_port("filtered_rtk")
         in_np = sdk.create_input_port("next_point")
         out = sdk.create_output_port("velocity_cmd")
-        buf_rtk = SharedBufferLite("rtk_filter.filtered_rtk", create=False)
-        buf_np = SharedBufferLite("waypoint_selector.next_point", create=False)
+
+        # 本地缓存：保持最后的有效值用于持续控制
         last_rtk = None
         last_np = None
+
         while True:
+            # 尝试读取新数据
             rtk = in_rtk.recv_latest()
             npkt = in_np.recv_latest()
+
+            # 更新本地缓存（只在收到新数据时更新）
             if rtk:
                 last_rtk = rtk
-            else:
-                try:
-                    rtk = buf_rtk.read()
-                    if rtk:
-                        last_rtk = rtk
-                except Exception:
-                    pass
             if npkt:
                 last_np = npkt
-            else:
-                try:
-                    npkt = buf_np.read()
-                    if npkt:
-                        last_np = npkt
-                except Exception:
-                    pass
+
+            # 使用缓存的最新值计算控制命令
             cmd = compute_cmd(last_rtk, last_np, max_speed, min_speed, kp, max_w, pivot_th)
             out.send(cmd)
             time.sleep(0.02)

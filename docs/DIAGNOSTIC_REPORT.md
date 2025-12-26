@@ -1,216 +1,64 @@
-# NodeFlow Runtime Diagnostic Report
+# 规划仿真闭环流程诊断报告
 
-**Date**: 2025-12-20
-**Status**: ✅ Root Cause Identified
+**诊断对象**: NodeFlow 规划仿真工作流 (`examples/planning_simulation.yaml`)
+**涉及模块**: `node-hub`, `simulator`, `runtime`
+**诊断日期**: 2025-12-26
 
----
+## 1. 严重性问题 (Critical)
 
-## Executive Summary
+### 1.1 运动控制卡顿风险 (Stuttering Motion)
 
-All 8 diagnostic steps of the runtime framework passed successfully. The issue is **NOT** in the framework components themselves, but in the **socket path assignment logic** in `EnvBuilder`.
+*   **问题描述**: 机器人运动可能出现频繁的“急停-起步”现象，导致运动不流畅。
+*   **位置**: [sim_input/run.py](file:///Users/wuzhanli/Desktop/node/node-hub/sim_input/run.py)
+*   **根本原因**:
+    *   `sim_input` 节点采用“无新数据即停止”的激进安全策略。
+    *   `recv_latest()` 仅在检测到序列号增加时返回数据，否则返回 `None`。
+    *   `track_controller` 和 `sim_input` 虽同频 (50Hz) 但相位不同步。当 `sim_input` 运行稍快连续读取两次时，第二次会因无新数据而触发 `_send_velocity_command(0, 0)`。
+*   **修复建议**: 引入指令超时机制（Watchdog）。仅当连续 `N` 帧（如 0.5秒）未收到新指令时才发送停机命令。
 
----
+## 2. 架构缺陷 (Major)
 
-## Diagnostic Results (8/8 Steps Passed)
+### 2.1 硬编码依赖破坏拓扑灵活性
 
-### ✅ Step 1: Load YAML Configuration
-- Config file: `examples/test_logger_simple.yaml`
-- Graph ID: `test_logger_simple`
-- Nodes: 3 (rtk_0, controller_0, logger_0)
-- Edges: 3
+*   **问题描述**: 控制器节点无法通过 YAML 配置文件重定向输入源，必须修改代码才能连接不同上游。
+*   **位置**: [track_controller/run.py](file:///Users/wuzhanli/Desktop/node/node-hub/track_controller/run.py)
+*   **代码证据**:
+    ```python
+    # 错误用法：直接硬编码上游 Buffer 名称
+    buf_rtk = SharedBufferLite("rtk_filter.filtered_rtk", create=False)
+    ```
+*   **影响**: 这违反了 NodeFlow 的“端口映射”设计原则。如果在 YAML 中将 `rtk_filter` 替换为其他滤波节点（如 `ekf_node`），`track_controller` 将因找不到 Buffer 而失效。
+*   **修复建议**: 移除 `SharedBufferLite` 的直接调用，完全使用 `sdk.create_input_port("filtered_rtk")`，让 Runtime 处理连接逻辑。
 
-### ✅ Step 2: Scan Node Hub
-- Found 5 packages: controller, global_coverage, logger, pwm_controller, rtk
-- Note: global_coverage manifest has parsing error (non-blocking)
+## 3. 潜在逻辑错误 (Minor)
 
-### ✅ Step 3: Register Nodes
-- Successfully loaded 4/5 packages
-- All 3 nodes from config found in registry
+### 3.1 坐标系与航向控制风险
 
-### ✅ Step 4: Validate Graph Structure
-- Graph validation passed
-- All edges valid
-- All port connections valid
+*   **问题描述**: 航向控制逻辑依赖于脆弱的符号取反操作，可能在坐标系定义微调后导致反向旋转。
+*   **位置**: [track_controller/run.py](file:///Users/wuzhanli/Desktop/node/node-hub/track_controller/run.py)
+*   **分析**:
+    *   控制器计算方位角误差 `err`（通常基于地理北极顺时针）。
+    *   仿真器接收角速度 `w`（通常基于数学极坐标逆时针）。
+    *   当前代码通过 `w = -kp * err` 简单取反来适配，缺乏明确的坐标系转换层。
 
-### ✅ Step 5: Analyze Topology (Startup Order)
-- No circular dependencies
-- 3 startup layers:
-  - Layer 0: [rtk_0] - starts first
-  - Layer 1: [controller_0] - starts after rtk_0
-  - Layer 2: [logger_0] - starts after controller_0
+### 3.2 启动竞态条件 (Race Condition)
 
-### ✅ Step 6: Initialize Socket Manager
-- Socket directory created: `/tmp/nodeflow_debug_sockets`
-- All socket paths registered correctly
+*   **问题描述**: 仿真器未就绪时，系统会基于错误的默认地块进行规划。
+*   **位置**: [sim_output/run.py](file:///Users/wuzhanli/Desktop/node/node-hub/sim_output/run.py)
+*   **流程**:
+    1. `sim_output` 初始化时连接失败 → 回退到默认 100x200 矩形地块。
+    2. `global_coverage` 接收默认地块 → 开始规划。
+    3. `sim_output` 后续连上仿真器 → 发送真实地块。
+    4. `global_coverage` 重新规划。
+*   **影响**: 浪费计算资源，且日志中会包含误导性的规划信息。
 
-### ✅ Step 7: Verify Node Scripts
-- All node directories exist
-- All `run.py` files exist
+## 4. 修复计划建议
 
-### ✅ Step 8: Health Check Configuration
-- Warning: `runtime.monitoring.health_checker` module not found (non-critical)
+建议按以下顺序实施修复：
 
----
-
-## Root Cause Analysis
-
-### The Problem
-
-When `controller_0` starts, it tries to connect its `gps_fix` input port to:
-```
-/tmp/nodeflow_sockets/nodeflow_controller_0.gps_fix.in
-```
-
-But this socket **does not exist** and **should not exist**.
-
-### Why This Happens
-
-In `/runtime/orchestrator/env_builder.py` lines 59-67:
-
-```python
-# 为每个输入端口添加环境变量
-for input_port in manifest.inputs:
-    port_name = input_port.name
-    socket_path = socket_manager.create_channel_path(
-        node.id, port_name, 'in'  # ❌ BUG: Using current node's ID!
-    )
-    env_var_name = f'NODE_IN_{port_name}'
-    env[env_var_name] = socket_path
-```
-
-This creates: `nodeflow_controller_0.gps_fix.in`
-
-### What Should Happen
-
-The InputPort should connect to the **OutputPort of the source node**, not create its own socket.
-
-Looking at the graph edge:
-```yaml
-edges:
-  - from: rtk_0.gps_fix      # Source node.port
-    to: controller_0.gps_fix  # Target node.port
-```
-
-The correct socket path for `controller_0`'s `gps_fix` input should be:
-```
-/tmp/nodeflow_sockets/nodeflow_rtk_0.gps_fix.out
-```
-
-### The Fix Required
-
-`EnvBuilder.build_env()` needs to:
-
-1. **For each input port**:
-   - Find the edge where `edge.to_node == node.id` and `edge.to_port == port_name`
-   - Extract `edge.from_node` and `edge.from_port`
-   - Set `NODE_IN_<port>` to the **source node's output socket path**:
-     ```python
-     socket_path = socket_manager.get_channel_path(
-         edge.from_node, edge.from_port, 'out'
-     )
-     ```
-
-2. **For output ports** (currently correct):
-   - Create socket path using current node's ID:
-     ```python
-     socket_path = socket_manager.create_channel_path(
-         node.id, port_name, 'out'
-     )
-     ```
+1.  **P0**: 修复 `sim_input` 的看门狗逻辑，防止机器人运动卡顿。
+2.  **P1**: 重构 `track_controller`，去除硬编码依赖，恢复架构灵活性。
+3.  **P2**: 优化 `sim_output` 的启动逻辑，增加对仿真器连接的等待机制。
 
 ---
-
-## Expected Behavior After Fix
-
-### Socket Creation Flow
-
-1. **rtk_0 starts** (Layer 0):
-   - Creates OutputPort → `/tmp/nodeflow_sockets/nodeflow_rtk_0.gps_fix.out`
-   - Socket server listening
-
-2. **controller_0 starts** (Layer 1):
-   - Creates InputPort pointing to → `/tmp/nodeflow_sockets/nodeflow_rtk_0.gps_fix.out`
-   - Connects to rtk_0's socket (retries up to 30 times if needed)
-   - Creates OutputPort → `/tmp/nodeflow_sockets/nodeflow_controller_0.control_cmd.out`
-
-3. **logger_0 starts** (Layer 2):
-   - Creates InputPort `input1` → `/tmp/nodeflow_sockets/nodeflow_rtk_0.gps_fix.out`
-   - Creates InputPort `input2` → `/tmp/nodeflow_sockets/nodeflow_controller_0.control_cmd.out`
-   - Connects to both upstream sockets
-
----
-
-## Impact Analysis
-
-### Files Affected
-
-- `/runtime/orchestrator/env_builder.py` - **MUST FIX**
-
-### Dependencies
-
-`EnvBuilder.build_env()` needs access to the graph edges to lookup connections. Current signature:
-```python
-def build_env(node, manifest, socket_manager, node_hub_path)
-```
-
-Should become:
-```python
-def build_env(node, manifest, socket_manager, node_hub_path, edges)
-```
-
-### Callers to Update
-
-- `/runtime/orchestrator/node_launcher.py` line 74-76:
-  ```python
-  env = self.env_builder.build_env(
-      node, manifest, self.socket_manager, self.node_hub_path
-  )
-  ```
-
-  Should pass edges:
-  ```python
-  env = self.env_builder.build_env(
-      node, manifest, self.socket_manager, self.node_hub_path, self.edges
-  )
-  ```
-
-`NodeLauncher` needs to store edges in `__init__`.
-
----
-
-## Test Plan After Fix
-
-1. Run diagnostic script again: `python3 tools/debug_runtime.py examples/test_logger_simple.yaml`
-   - All 8 steps should still pass
-
-2. Run actual runtime: `python3 runtime/main.py examples/test_logger_simple.yaml`
-   - rtk_0 should start successfully
-   - controller_0 should connect to rtk_0.gps_fix
-   - logger_0 should connect to both inputs
-   - All nodes should run without hanging
-
-3. Check logger web interface: `http://localhost:8001`
-   - Should show real-time logs from rtk_0 and controller_0
-
----
-
-## Next Steps
-
-1. ✅ **Diagnose** - COMPLETED (this report)
-2. ⏳ **Fix EnvBuilder** - Add edges parameter and lookup logic
-3. ⏳ **Update NodeLauncher** - Store and pass edges
-4. ⏳ **Test** - Run full runtime test
-5. ⏳ **Validate** - Check logger web interface works
-
----
-
-## Conclusion
-
-The runtime framework itself is **solid** - all components (config loading, node scanning, graph validation, topology analysis, socket manager) work correctly.
-
-The bug is a **logic error** in how socket paths are assigned to input ports. This is a **critical but simple fix** that requires:
-- Adding edge lookup in EnvBuilder
-- Passing edges from NodeLauncher to EnvBuilder
-- No changes to SDK, nodes, or other framework components
-
-Estimated fix time: **15-30 minutes**
+*报告生成工具: Gemini 2.0 Pro Analysis*

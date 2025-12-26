@@ -64,6 +64,13 @@ class SimInputNode:
         self.period = 1.0 / self.input_frequency
         logger.info(f"输入频率: {self.input_frequency} Hz (周期 {self.period*1000:.1f} ms)")
 
+        # 看门狗机制：防止因相位不同步导致的卡顿
+        # 只有连续 N 帧没有新命令时才发送零命令
+        self.watchdog_timeout_sec = self.params.get('watchdog_timeout_sec', 0.5)
+        self.watchdog_frames = int(self.watchdog_timeout_sec * self.input_frequency)
+        self.no_command_counter = 0
+        logger.info(f"看门狗超时: {self.watchdog_timeout_sec}s ({self.watchdog_frames} 帧)")
+
     def _send_velocity_command(self, linear_velocity: float, angular_velocity: float) -> bool:
         """发送速度控制命令到仿真器"""
         try:
@@ -162,6 +169,7 @@ class SimInputNode:
 
                     if self._send_velocity_command(linear_vel, angular_vel):
                         self.last_velocity_cmd = velocity_cmd
+                        self.no_command_counter = 0  # 重置看门狗计数器
                         if loop_count % 20 == 0:  # 每20次循环记录一次
                             logger.debug(f"发送速度命令: v={linear_vel:.2f} m/s, ω={angular_vel:.2f} rad/s")
 
@@ -177,20 +185,28 @@ class SimInputNode:
 
                         if self._send_motor_command(throttle, steering):
                             self.last_motor_cmd = motor_cmd
+                            self.no_command_counter = 0  # 重置看门狗计数器
                             if loop_count % 20 == 0:
                                 logger.debug(f"发送电机命令: throttle={throttle:.2f}, steering={steering:.2f}")
 
                     else:
-                        # 3. 两个命令都没有，发送零命令
+                        # 3. 两个命令都没有，使用看门狗机制
                         if self.last_velocity_cmd or self.last_motor_cmd:
-                            # 如果之前有命令，现在发送零命令（停止）
-                            self._send_velocity_command(
-                                self.default_linear_velocity,
-                                self.default_angular_velocity
-                            )
-                            self.last_velocity_cmd = None
-                            self.last_motor_cmd = None
-                            logger.info("无输入命令，发送零命令停止")
+                            # 有历史命令，增加计数器
+                            self.no_command_counter += 1
+
+                            # 只有连续多帧没有新命令时才发送零命令（防止卡顿）
+                            if self.no_command_counter >= self.watchdog_frames:
+                                self._send_velocity_command(
+                                    self.default_linear_velocity,
+                                    self.default_angular_velocity
+                                )
+                                self.last_velocity_cmd = None
+                                self.last_motor_cmd = None
+                                logger.info(f"看门狗超时 ({self.no_command_counter} 帧)，发送零命令停止")
+                                self.no_command_counter = 0
+                            elif self.no_command_counter % 10 == 0:
+                                logger.debug(f"等待新命令: {self.no_command_counter}/{self.watchdog_frames} 帧")
 
                 # 频率控制
                 loop_count += 1

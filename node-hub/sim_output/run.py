@@ -98,43 +98,78 @@ class SimOutputNode:
             self.ports['state'] = sdk.create_output_port('state_info')
             logger.info("状态信息 输出端口已创建")
 
-        # 任务请求端口（始终创建）
-        self.ports['task'] = sdk.create_output_port('task_request')
-        logger.info("任务请求 输出端口已创建")
+        # 地块和车辆配置端口（新版本）
+        self.ports['field'] = sdk.create_output_port('field_info')
+        self.ports['vehicle'] = sdk.create_output_port('vehicle_config')
+        logger.info("地块信息 输出端口已创建")
+        logger.info("车辆配置 输出端口已创建")
 
-        # 读取地块信息（只读一次）
-        self.field_data = self._get_field_once()
+        # 任务请求端口（兼容旧版本）
+        self.ports['task'] = sdk.create_output_port('task_request')
+        logger.info("任务请求 输出端口已创建（兼容旧版本）")
+
+        # 读取当前地块与版本（带重试机制，避免启动竞态）
+        self.field_data, self.field_version = self._get_field_with_retry(max_retries=5, retry_delay=0.5)
         logger.info(f"地块信息已读取: {self.field_data.get('type', 'unknown')} - "
                    f"{self.field_data.get('area', 0):.1f} m²")
 
-        # 组装任务请求（固定内容）
-        self.task_request = self._build_task_request()
-        logger.info(f"任务请求已构建: {len(self.task_request['parcel']['outer'])} 个边界点")
+        # 组装地块信息和车辆配置
+        self.field_info = self._build_field_info()
+        self.vehicle_config = self._build_vehicle_config()
+        logger.info(f"地块信息已构建: {len(self.field_info['parcel']['outer'])} 个边界点, "
+                   f"{len(self.field_info['parcel']['holes'])} 个孔洞")
+        logger.info(f"车辆配置已构建: 幅宽={self.vehicle_config['implement_width_m']}m")
+
+        # 组装任务请求（固定内容，兼容旧版本）
+        self.task_request = self._build_task_request_legacy()
+        logger.info(f"任务请求已构建（兼容旧版本）")
 
         # 频率控制
         output_frequency = self.params.get('output_frequency', 50.0)
         self.period = 1.0 / output_frequency
         logger.info(f"输出频率: {output_frequency} Hz (周期 {self.period*1000:.1f} ms)")
 
-    def _get_field_once(self) -> dict:
-        """从仿真器读取地块信息（只调用一次）"""
+    def _get_field_with_retry(self, max_retries: int = 5, retry_delay: float = 0.5) -> tuple[dict, int]:
+        """
+        带重试机制获取地块信息（解决启动竞态条件）
+
+        参数：
+        - max_retries: 最大重试次数
+        - retry_delay: 重试间隔（秒）
+
+        返回：
+        - (地块数据, 版本号) 元组
+        """
+        for attempt in range(max_retries):
+            field_data, version = self._get_field_current()
+
+            # 如果成功获取真实地块（版本号 > 0），直接返回
+            if version > 0:
+                return field_data, version
+
+            # 如果不是最后一次尝试，等待后重试
+            if attempt < max_retries - 1:
+                logger.warning(f"获取地块失败，重试 ({attempt + 1}/{max_retries})...")
+                time.sleep(retry_delay)
+
+        # 所有重试失败，返回默认地块
+        logger.warning(f"获取地块失败 {max_retries} 次，使用默认地块（将在主循环中继续尝试）")
+        return self._default_field(), 0
+
+    def _get_field_current(self) -> tuple[dict, int]:
+        """从仿真器读取当前地块信息与版本"""
         try:
             request = {"type": "get_field"}
             self.socket.send_json(request)
             response = self.socket.recv_json()
-
             if response.get("status") == "ok":
-                return response.get("field", {})
+                return response.get("field", {}), int(response.get("version", 1))
             else:
                 logger.error(f"获取地块失败: {response.get('message', 'unknown error')}")
-                return self._default_field()
-
-        except zmq.error.Again:
-            logger.error("获取地块超时，使用默认地块")
-            return self._default_field()
+                return self._default_field(), 0
         except Exception as e:
             logger.error(f"获取地块异常: {e}")
-            return self._default_field()
+            return self._default_field(), 0
 
     def _default_field(self) -> dict:
         """默认地块（100m x 200m 矩形）"""
@@ -149,41 +184,58 @@ class SimOutputNode:
             "entry_points": [(0.0, 0.0)]
         }
 
-    def _build_task_request(self) -> dict:
-        """组装规划任务请求"""
+    def _build_field_info(self) -> dict:
+        """构建地块信息（新版本）"""
         # 将地块边界从笛卡尔坐标转换为GPS坐标
         boundary_meter = self.field_data.get("boundary", [])
-
-        # 坐标转换：(x, y) 米 → (lon, lat) WGS84
         boundary_gps = [self.converter.meter_to_gps(x, y) for x, y in boundary_meter]
+
+        # 同样转换孔洞（如果存在）
+        holes_meter = self.field_data.get("holes", [])
+        holes_gps = []
+        if holes_meter:
+            holes_gps = [
+                [self.converter.meter_to_gps(x, y) for x, y in hole]
+                for hole in holes_meter
+            ]
+            logger.info(f"转换孔洞: {len(holes_gps)}个孔洞")
 
         # 同样转换出入口
         entry_points_meter = self.field_data.get("entry_points", [])
         entry_points_gps = [self.converter.meter_to_gps(x, y) for x, y in entry_points_meter]
-
-        # 将出入口转换为正确的格式：List[Dict] with 'point' and 'type' keys
         entries_formatted = [{'point': pt, 'type': 'entry'} for pt in entry_points_gps]
 
         logger.info(f"坐标转换: {len(boundary_meter)}个边界点 米→GPS")
-        logger.debug(f"  示例: {boundary_meter[0]} (米) → {boundary_gps[0]} (GPS)")
 
         return {
-            "id": f"task_{int(time.time())}",
+            "field_name": self.field_data.get("type", "field"),
             "parcel": {
                 "outer": boundary_gps,  # [(lon, lat), ...] WGS84格式
-                "holes": [],
+                "holes": holes_gps,     # [[(lon, lat), ...], ...] 多个孔洞
                 "points": [],
-                "entries": entries_formatted  # List[Dict] with 'point' and 'type' keys
-            },
-            "vehicle": {
-                "implement_width_m": self.params.get('implement_width_m', 3.0),
-                "overlap_ratio": self.params.get('overlap_ratio', 0.1),
-                "path_inset_m": self.params.get('path_inset_m', 1.0),
-                "pivot_turn": self.params.get('pivot_turn', True),
-                "yaw_rate_max_deg_s": self.params.get('yaw_rate_max_deg_s', 60.0),
-                "min_turn_radius_m": self.params.get('min_turn_radius_m', 2.0)
+                "entries": entries_formatted
             }
         }
+
+    def _build_vehicle_config(self) -> dict:
+        """构建车辆配置（新版本）"""
+        return {
+            "implement_width_m": self.params.get('implement_width_m', 3.0),
+            "overlap_ratio": self.params.get('overlap_ratio', 0.1),
+            "path_inset_m": self.params.get('path_inset_m', 1.0),
+            "pivot_turn": self.params.get('pivot_turn', True),
+            "yaw_rate_max_deg_s": self.params.get('yaw_rate_max_deg_s', 60.0),
+            "min_turn_radius_m": self.params.get('min_turn_radius_m', 2.0)
+        }
+
+    def _build_task_request_legacy(self) -> dict:
+        """构建任务请求（兼容旧版本）"""
+        return {
+            "id": f"task_{int(time.time())}",
+            "parcel": self.field_info["parcel"],
+            "vehicle": self.vehicle_config
+        }
+
 
     def _get_sensor(self, sensor_name: str) -> dict:
         """从仿真器获取传感器数据"""
@@ -227,11 +279,26 @@ class SimOutputNode:
 
         loop_count = 0
         last_log_time = time.time()
+        last_field_check = time.time()
 
         try:
             while True:
                 start_time = time.time()
 
+                # 检查地块版本刷新
+                if time.time() - last_field_check >= 1.0:
+                    try:
+                        fld, ver = self._get_field_current()
+                        if ver != self.field_version:
+                            logger.info(f"检测到地块版本变化: {self.field_version} -> {ver}")
+                            self.field_version = ver
+                            self.field_data = fld
+                            self.field_info = self._build_field_info()
+                            self.task_request = self._build_task_request_legacy()
+                    except Exception as e:
+                        logger.warning(f"地块刷新检查失败: {e}")
+                    finally:
+                        last_field_check = time.time()
                 # 1. 读取传感器数据
                 if self.enable_gps:
                     gps_data = self._get_sensor("gps")
@@ -258,15 +325,18 @@ class SimOutputNode:
                     if state_data:
                         self.ports['state'].send(state_data)
 
-                # 2. 持续发送任务请求（虽然内容固定）
-                #    这样下游节点随时可以获取最新的任务
+                # 2. 持续发送地块和车辆配置（新版本）
+                self.ports['field'].send(self.field_info)
+                self.ports['vehicle'].send(self.vehicle_config)
+
+                # 3. 持续发送任务请求（兼容旧版本）
                 if loop_count == 0:
                     # 第一帧时输出详细日志
-                    logger.debug(f"[SEND] task_request type: {type(self.task_request)}")
-                    logger.debug(f"[SEND] task_request: {json.dumps(self.task_request, indent=2, ensure_ascii=False)}")
+                    logger.debug(f"[SEND] field_info: {json.dumps(self.field_info, indent=2, ensure_ascii=False)}")
+                    logger.debug(f"[SEND] vehicle_config: {json.dumps(self.vehicle_config, indent=2)}")
                 self.ports['task'].send(self.task_request)
 
-                # 3. 频率控制
+                # 4. 频率控制
                 loop_count += 1
                 elapsed = time.time() - start_time
                 sleep_time = max(0, self.period - elapsed)
