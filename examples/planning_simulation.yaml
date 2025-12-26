@@ -64,17 +64,44 @@ nodes:
   # ┌─────────────────────────────────────────────────────────────────────┐
   # │ 纯追踪速度控制器                                                     │
   # └─────────────────────────────────────────────────────────────────────┘
-  - id: velocity_controller
-    package: velocity_controller
-    description: "基于纯追踪算法的速度控制"
+  - id: rtk_filter
+    package: rtk_filter
+    description: "RTK滤波/融合"
     params:
-      max_speed: 1.0             # 最大线速度 1 m/s（农田作业速度）
-      min_speed: 0.2             # 最小线速度 0.2 m/s
-      lookahead_distance: 2.0    # 纯追踪前瞻距离 2 米
-      goal_tolerance: 0.3        # 目标点到达容差 0.3 米
-      heading_p_gain: 2.0        # 航向控制比例增益
-      max_angular_velocity: 1.0  # 最大角速度 1 rad/s
-      control_frequency: 20      # 控制频率 20 Hz
+      alpha_pos: 0.2
+      alpha_heading: 0.3
+      use_imu_yaw_rate: false
+  - id: waypoint_selector
+    package: waypoint_selector
+    description: "选择前瞻点"
+    params:
+      lookahead_distance_m: 2.0
+      goal_tolerance_m: 0.3
+  - id: track_controller
+    package: track_controller
+    description: "履带控制，支持原地转向"
+    params:
+      max_speed: 1.0
+      min_speed: 0.0             # 允许速度降到0，以便精确停止
+      heading_p_gain: 2.0
+      max_angular_velocity: 1.0
+      pivot_threshold_deg: 20.0  # 增大原地转向阈值，避免频繁切换
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 静止判定触发停机                                                    │
+  # └─────────────────────────────────────────────────────────────────────┘
+  - id: idle_detector
+    package: idle_detector
+    description: "当RTK在60秒内移动小于1米时触发停机事件"
+    params:
+      window_secs: 60.0
+      idle_radius_m: 1.0
+      sample_rate_hz: 5.0
+      debounce_secs: 5.0
+  - id: shutdown_manager
+    package: shutdown_manager
+    description: "转发停机事件到控制缓冲，触发Runtime优雅关停"
+    params:
+      debounce_secs: 5.0
 
   # ┌─────────────────────────────────────────────────────────────────────┐
   # │ 仿真器输入 (接收控制命令)                                            │
@@ -98,16 +125,31 @@ nodes:
       input_frequency: 50.0      # 50Hz 检查输入
 
   # ┌─────────────────────────────────────────────────────────────────────┐
-  # │ 日志记录 (用于实时监测和复盘)                                        │
+  # │ 轨迹可视化 (对比规划路径和实际轨迹)                                  │
   # └─────────────────────────────────────────────────────────────────────┘
-  - id: logger
-    package: logger
-    description: "记录关键数据并提供Web实时展示"
+  - id: trajectory_viz
+    package: trajectory_viz
+    description: "生成轨迹对比可视化图像"
     params:
-      web_port: 8001          # Web界面端口
-      buffer_size: 1000       # 内存缓冲区大小
-      enable_file_log: true   # 启用文件日志
-      log_file_path: ./logs/planning_simulation.jsonl
+      output_dir: "/Users/wuzhanli/Desktop/node/logs/jpg"
+      image_format: "jpg"        # JPG 格式
+      timeout: 0.0               # 不自动退出
+      update_interval: 10.0      # 每10秒更新一次
+      dpi: 150                   # 图像质量
+      figsize_width: 14.0        # 图像宽度
+      figsize_height: 12.0       # 图像高度
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 日志记录 (用于实时监测和复盘) - 暂时禁用以测试核心流程               │
+  # └─────────────────────────────────────────────────────────────────────┘
+  # - id: logger
+  #   package: logger
+  #   description: "记录关键数据并提供Web实时展示"
+  #   params:
+  #     web_port: 8001          # Web界面端口
+  #     buffer_size: 1000       # 内存缓冲区大小
+  #     enable_file_log: true   # 启用文件日志
+  #     log_file_path: ./logs/planning_simulation.jsonl
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 数据连接 (边)
@@ -129,39 +171,74 @@ edges:
 
   # RTK定位 → 速度控制器
   - from: sim_output.rtk_fix
-    to: velocity_controller.rtk_fix
-    description: "机器人当前位置（厘米级精度）+ 航向角"
+    to: rtk_filter.rtk_fix
+    description: "原始RTK"
 
   # 规划路径 → 速度控制器
   - from: global_coverage.global_path
-    to: velocity_controller.global_path
+    to: waypoint_selector.global_path
     description: "规划生成的路径点序列"
+  - from: rtk_filter.filtered_rtk
+    to: waypoint_selector.filtered_rtk
+    description: "滤波后的RTK"
+  - from: waypoint_selector.next_point
+    to: track_controller.next_point
+    description: "前瞻点"
+  - from: rtk_filter.filtered_rtk
+    to: track_controller.filtered_rtk
+    description: "滤波后的RTK"
+  # 静止判定链路
+  - from: sim_output.rtk_fix
+    to: idle_detector.rtk_fix
+    description: "RTK定位供静止判定使用"
+  - from: idle_detector.idle_event
+    to: shutdown_manager.idle_event
+    description: "静止事件传递到停机管理"
 
   # 速度指令 → 仿真器输入
   # 这个边确保sim_input依赖velocity_controller，sim_input会在velocity_controller之后启动
-  - from: velocity_controller.velocity_cmd
+  - from: track_controller.velocity_cmd
     to: sim_input.velocity_cmd
     description: "线速度和角速度"
 
   # ┌─────────────────────────────────────────────────────────────────────┐
-  # │ 监测和日志 (关键数据流)
+  # │ 可视化数据流 (轨迹对比)
+  # └─────────────────────────────────────────────────────────────────────┘
+
+  # 地块信息 → 可视化
+  - from: sim_output.task_request
+    to: trajectory_viz.task_request
+    description: "地块边界信息"
+
+  # 规划路径 → 可视化
+  - from: global_coverage.global_path
+    to: trajectory_viz.global_path
+    description: "规划的全局路径"
+
+  # RTK定位 → 可视化
+  - from: sim_output.rtk_fix
+    to: trajectory_viz.rtk_fix
+    description: "实际轨迹（RTK GPS）"
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 监测和日志 (关键数据流) - 暂时禁用
   # └─────────────────────────────────────────────────────────────────────┘
 
   # RTK定位数据 → logger (实时位置监测)
   # 这个边也确保logger依赖sim_output，使logger在sim_output之后启动
-  - from: sim_output.rtk_fix
-    to: logger.input1
-    description: "RTK GPS定位数据（lat, lon, heading, rtk_status）"
+  # - from: sim_output.rtk_fix
+  #   to: logger.input1
+  #   description: "RTK GPS定位数据（lat, lon, heading, rtk_status）"
 
   # 规划路径 → logger (路径调试)
-  - from: global_coverage.global_path
-    to: logger.input2
-    description: "全局规划路径（路径点序列）"
+  # - from: global_coverage.global_path
+  #   to: logger.input2
+  #   description: "全局规划路径（路径点序列）"
 
   # 速度指令 → logger (控制分析)
-  - from: velocity_controller.velocity_cmd
-    to: logger.input3
-    description: "速度控制指令（linear_velocity, angular_velocity）"
+  # - from: velocity_controller.velocity_cmd
+  #   to: logger.input3
+  #   description: "速度控制指令（linear_velocity, angular_velocity）"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 配置说明

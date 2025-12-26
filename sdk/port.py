@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from sdk.shared_buffer_lite import SharedBufferLite
 from runtime.utils.logger import get_logger
+from runtime.utils.constants import BUFFERS_DIR, TMP_ROOT
 
 logger = get_logger(__name__)
 
@@ -63,7 +64,6 @@ class OutputPort:
         self.buffer: Optional[SharedBufferLite] = None
 
         # 从ZMQ地址提取buffer名称
-        # ipc:///tmp/nodeflow/sim_output.rtk_fix -> sim_output.rtk_fix
         self.buffer_name = zmq_address.split('/')[-1]
 
         # 从环境变量读取buffer配置
@@ -81,7 +81,7 @@ class OutputPort:
         """
         try:
             # 1. 创建Shared Buffer（如果已存在则重用，避免invalidate现有的mmap）
-            buffer_path = Path(f"/tmp/nodeflow/buffers/{self.buffer_name}.buf")
+            buffer_path = Path(f"{BUFFERS_DIR}/{self.buffer_name}.buf")
             buffer_exists = buffer_path.exists()
 
             if buffer_exists:
@@ -222,14 +222,14 @@ class InputPort:
         if source_port is not None:
             # 方式2：传入了source_node和source_port
             source_node = zmq_address_or_source
-            self.zmq_address = f"ipc:///tmp/nodeflow/{source_node}.{source_port}"
+            self.zmq_address = f"ipc:///{TMP_ROOT}/{source_node}.{source_port}"
             self.source_node = source_node
             self.source_port = source_port
         else:
             # 方式1：直接传入zmq_address
             self.zmq_address = zmq_address_or_source
             # 尝试从地址解析source_node和source_port
-            # 地址格式: ipc:///tmp/nodeflow/source_node.source_port
+            # 地址格式: ipc:///{TMP_ROOT}/source_node.source_port
             address_part = self.zmq_address.split('/')[-1]  # 得到 "source_node.source_port"
             parts = address_part.rsplit('.', 1)  # 按最后一个.分割
             if len(parts) == 2:
@@ -263,7 +263,7 @@ class InputPort:
         try:
             # 1. 等待并打开Shared Buffer
             for attempt in range(10):
-                buffer_path = Path(f"/tmp/nodeflow/buffers/{self.buffer_name}.buf")
+                buffer_path = Path(f"{BUFFERS_DIR}/{self.buffer_name}.buf")
                 if buffer_path.exists():
                     self.buffer = SharedBufferLite(self.buffer_name, create=False)
                     logger.debug(f"InputPort '{self.name}' opened buffer: {self.buffer_name}")
@@ -365,9 +365,10 @@ class InputPort:
             except zmq.Again:
                 pass
 
-            # 2. 检查buffer序列号是否增加
+            # 2. 检查buffer序列号是否增加 (使用模运算处理回绕)
             current_seq = self.buffer.get_sequence()
-            has_new_data = current_seq > self.last_sequence
+            diff = (current_seq - self.last_sequence) & 0xFFFFFFFF
+            has_new_data = 0 < diff < 0x80000000
 
             # 3. 如果有新数据，从buffer读取
             if has_notification or has_new_data:

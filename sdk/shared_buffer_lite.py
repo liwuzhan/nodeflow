@@ -45,7 +45,8 @@ class SharedBufferLite:
         self.buffer_name = buffer_name
 
         # 缓冲区文件路径
-        buffer_dir = Path("/tmp/nodeflow/buffers")
+        from runtime.utils.constants import BUFFERS_DIR
+        buffer_dir = Path(BUFFERS_DIR)
         buffer_dir.mkdir(parents=True, exist_ok=True)
         self.buffer_path = buffer_dir / f"{buffer_name}.buf"
 
@@ -114,39 +115,56 @@ class SharedBufferLite:
         current_seq = struct.unpack('<I', self.mmap[0:4])[0]
         new_seq = (current_seq + 1) & 0xFFFFFFFF
 
-        # 写入新数据
-        self.mmap[0:4] = struct.pack('<I', new_seq)
-        self.mmap[4:8] = struct.pack('<I', data_length)
-        self.mmap[8:8+data_length] = serialized
-
-        # 刷新到磁盘
-        self.mmap.flush()
+        # 写入新数据 (顺序很重要：先数据，后长度，最后序列号)
+        # 这样可以避免读取端读到不完整的数据
+        self.mmap[8:8+data_length] = serialized  # 1. 先写数据
+        self.mmap[4:8] = struct.pack('<I', data_length)  # 2. 再写长度
+        self.mmap.flush()  # 3. 确保数据和长度可见
+        self.mmap[0:4] = struct.pack('<I', new_seq)  # 4. 最后更新序列号
+        self.mmap.flush()  # 5. 确保序列号可见
 
         return new_seq
 
-    def read(self) -> Optional[Dict[str, Any]]:
+    def read(self, max_retries: int = 3) -> Optional[Dict[str, Any]]:
         """
-        读取最新数据
+        读取最新数据 (使用 Optimistic Read 模式确保数据一致性)
+
+        采用双重序列号验证：读取前后序列号一致才返回数据，
+        避免读取到写入过程中的不完整数据。
+
+        Args:
+            max_retries: 最大重试次数 (当检测到写入冲突时)
 
         Returns:
             数据字典，如果无数据返回None
         """
-        # 读取序列号
-        sequence = struct.unpack('<I', self.mmap[0:4])[0]
-        if sequence == 0:
-            return None  # 还没有写入过数据
+        for _ in range(max_retries):
+            # 1. 读取序列号 (读前)
+            seq_before = struct.unpack('<I', self.mmap[0:4])[0]
+            if seq_before == 0:
+                return None  # 还没有写入过数据
 
-        # 读取数据长度
-        length = struct.unpack('<I', self.mmap[4:8])[0]
-        if length == 0 or length > (self.size - self.HEADER_SIZE):
-            return None  # 数据无效
+            # 2. 读取数据长度
+            length = struct.unpack('<I', self.mmap[4:8])[0]
+            if length == 0 or length > (self.size - self.HEADER_SIZE):
+                return None  # 数据无效
 
-        # 读取数据
-        serialized = bytes(self.mmap[8:8+length])
-        try:
-            return msgpack.unpackb(serialized, object_hook=self._decode_numpy, raw=False)
-        except Exception:
-            return None
+            # 3. 读取数据
+            serialized = bytes(self.mmap[8:8+length])
+
+            # 4. 再次读取序列号 (读后)
+            seq_after = struct.unpack('<I', self.mmap[0:4])[0]
+
+            # 5. 验证：两次序列号一致才说明数据完整
+            if seq_before == seq_after:
+                try:
+                    return msgpack.unpackb(serialized, object_hook=self._decode_numpy, raw=False)
+                except Exception:
+                    return None
+            # 序列号不一致，说明读取期间有写入，重试
+
+        # 重试多次仍然失败，返回 None
+        return None
 
     def get_sequence(self) -> int:
         """获取当前序列号"""
@@ -175,7 +193,8 @@ class SharedBufferLite:
     @staticmethod
     def cleanup_all():
         """清理所有缓冲区文件"""
-        buffer_dir = Path("/tmp/nodeflow/buffers")
+        from runtime.utils.constants import BUFFERS_DIR
+        buffer_dir = Path(BUFFERS_DIR)
         if buffer_dir.exists():
             for buf_file in buffer_dir.glob("*.buf"):
                 try:

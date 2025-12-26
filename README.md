@@ -235,6 +235,17 @@ outputs:
 | 多线激光雷达 | 5-10MB |
 | 4K 摄像头 | 30-50MB |
 
+#### 路径与地址约定（2025-12 更新）
+- 统一临时目录根: `/tmp/nodeflow`，子目录：
+  - 缓冲区: `/tmp/nodeflow/buffers`
+  - 日志: `/tmp/nodeflow/logs`
+- ZeroMQ 地址规范: `ipc:///tmp/nodeflow/<node_id>.<port_name>`
+- 运行时与SDK通过常量管理上述路径，示例见 `runtime/utils/constants.py`
+
+#### 弃用说明
+- 旧版 Unix Socket/MsgPack 通道与相关工具（SocketManager、protocol/channel）已不在运行路径中使用
+- SDK 中 `latest_value_reader` 不再依赖旧协议，建议使用 `InputPort.recv_latest()` 的混合方案
+
 ---
 
 ## 🧠 MCP 服务（AI 辅助调试）
@@ -308,6 +319,30 @@ pytest --cov=runtime --cov=sdk --cov-report=html
 - ✅ IPC 通信 (Socket 创建, 消息序列化)
 - ✅ MCP 服务 (路径安全, 错误响应格式)
 - ✅ Mock 节点 (10 个测试节点, 7 种场景)
+
+### 为你的节点添加测试
+
+NodeFlow提供完整的节点测试框架，包括SDK测试工具库和模板：
+
+```bash
+# 快速开始：复制测试模板到你的节点
+cp -r .test_template node-hub/your_node/test
+
+# 修改模板中的TODO项并运行测试
+cd node-hub/your_node
+python -m pytest test/ -v
+```
+
+**测试框架特性**:
+- 🔧 **MockSDK工具**: 无需真实SDK的隔离测试环境
+- 📋 **pytest Fixtures**: 预配置的测试数据和临时目录管理
+- 📦 **测试模板**: 单元测试和集成测试的完整模板
+- 📚 **测试常量**: 常用地理坐标和数据结构示例
+
+**详细指南**:
+- 📖 [5分钟快速开始](docs/TESTING_QUICKSTART.md) - 快速为节点添加测试
+- 📖 [完整测试指南](docs/NODE_TESTING_GUIDE.md) - 测试范式和最佳实践
+- 💡 参考实现: `node-hub/trajectory_viz/test/` (34个测试)
 
 ---
 
@@ -462,6 +497,13 @@ nodes:
 ---
 
 ## 🔄 最近更新
+
+### 2025-12-26
+- 🔒 **IPC 关键修复**: 修复共享内存竞态条件（写入顺序、Optimistic Read 模式）
+- 🔢 **序列号回绕处理**: 正确处理 32 位计数器溢出（模运算）
+- 🧭 **坐标系对齐**: 修复控制器角速度符号反转问题（数学坐标系 ↔ 地理坐标系）
+- 📊 **轨迹统计优化**: 排除接近起点阶段，平均偏差从 2.31m 降至 0.03m（实际精度 3cm）
+- 🧹 **缓冲区自动清理**: 框架启动时自动清理旧缓冲数据，默认启用
 
 ### 2025-12-24
 - 📦 **缓冲区配置**: 实现灵活的输出端口缓冲区配置（1MB 默认、可配置 5-50MB+）

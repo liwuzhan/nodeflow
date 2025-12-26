@@ -16,12 +16,12 @@ from runtime.config.validator import ConfigValidator
 from runtime.node_hub.node_registry import NodeRegistry
 from runtime.graph.topology import TopologyAnalyzer
 from runtime.graph.validator import GraphValidator
-from runtime.ipc.socket_manager import SocketManager
 from runtime.orchestrator.node_launcher import NodeLauncher
 from runtime.orchestrator.startup_coordinator import StartupCoordinator
 from runtime.monitoring.node_monitor import NodeMonitor
 from runtime.utils.logger import setup_logger
 from runtime.utils.errors import *
+from runtime.utils.constants import BUFFERS_DIR
 
 logger = setup_logger("nodeflow")
 
@@ -29,7 +29,7 @@ logger = setup_logger("nodeflow")
 class NodeFlowRuntime:
     """NodeFlow运行时主类"""
 
-    def __init__(self, config_path: str, log_level: str = "INFO", duration: int = None):
+    def __init__(self, config_path: str, log_level: str = "INFO", duration: int = None, clean_buffers: bool = True):
         """
         初始化运行时
 
@@ -37,10 +37,12 @@ class NodeFlowRuntime:
         - config_path: 运行配置文件路径
         - log_level: 日志级别
         - duration: 可选，运行时长（秒），到期后自动关机
+        - clean_buffers: 是否清理旧缓冲区（默认True）
         """
         self.config_path = config_path
         self.log_level = log_level
         self.duration = duration
+        self.clean_buffers = clean_buffers
         self.start_time = None
 
         # 组件
@@ -66,6 +68,32 @@ class NodeFlowRuntime:
         logger.info(f"Received signal {signum}, shutting down...")
         self.running = False
 
+    def _clean_buffers(self):
+        """清理共享缓冲区（写满0以重置序列号和数据）"""
+        buf_dir = Path(BUFFERS_DIR)
+        if not buf_dir.exists():
+            logger.info("Buffer directory does not exist, skip cleaning")
+            return
+
+        buf_files = list(buf_dir.glob("*.buf"))
+        if not buf_files:
+            logger.info("No buffer files to clean")
+            return
+
+        cleaned_count = 0
+        for buf_file in buf_files:
+            try:
+                # 获取文件大小
+                file_size = buf_file.stat().st_size
+                # 写满0
+                with open(buf_file, 'wb') as f:
+                    f.write(b'\x00' * file_size)
+                cleaned_count += 1
+            except Exception as e:
+                logger.warning(f"Failed to clean buffer {buf_file.name}: {e}")
+
+        logger.info(f"Cleaned {cleaned_count} buffer files (reset to zeros)")
+
     def run(self):
         """运行框架"""
         try:
@@ -73,6 +101,9 @@ class NodeFlowRuntime:
             logger.info("=" * 60)
             logger.info("NodeFlow Runtime Starting")
             logger.info("=" * 60)
+
+            if self.clean_buffers:
+                self._clean_buffers()
 
             logger.info(f"Loading configuration from: {self.config_path}")
             parser = YAMLParser()
@@ -133,10 +164,7 @@ class NodeFlowRuntime:
             for i, layer in enumerate(layers):
                 logger.info(f"  Layer {i}: {layer}")
 
-            # 6. 初始化Socket管理器
-            logger.info("Initializing socket manager...")
-            self.socket_manager = SocketManager()
-            self.socket_manager.initialize()
+            # 6. 初始化通信环境（ZeroMQ/SharedBufferLite，无需SocketManager）
 
             # 7. 启动节点
             logger.info("=" * 60)
@@ -145,7 +173,6 @@ class NodeFlowRuntime:
 
             self.launcher = NodeLauncher(
                 self.config.node_hub_path,
-                self.socket_manager,
                 self.config.edges
             )
 
@@ -195,6 +222,13 @@ class NodeFlowRuntime:
             logger.info("=" * 60)
 
             self.running = True
+            shutdown_buf = None
+            try:
+                from sdk.shared_buffer_lite import SharedBufferLite
+                shutdown_buf = SharedBufferLite("control.shutdown_request", create=False)
+                logger.info("Runtime listening on control.shutdown_request buffer")
+            except Exception:
+                shutdown_buf = None
 
             try:
                 while self.running:
@@ -204,6 +238,26 @@ class NodeFlowRuntime:
                     if self.duration and (time.time() - self.start_time) >= self.duration:
                         logger.info(f"Duration {self.duration}s reached, shutting down...")
                         self.running = False
+                        break
+
+                    if shutdown_buf is not None:
+                        try:
+                            data = shutdown_buf.read()
+                            if data and data.get("shutdown"):
+                                logger.info("External shutdown request received, initiating graceful shutdown...")
+                                try:
+                                    from shutil import rmtree
+                                    from pathlib import Path
+                                    buf_dir = Path(BUFFERS_DIR)
+                                    if buf_dir.exists():
+                                        rmtree(buf_dir)
+                                        logger.info(f"Cleaned shared buffers at {buf_dir}")
+                                except Exception as e:
+                                    logger.warning(f"Failed to clean buffers: {e}")
+                                self.running = False
+                                break
+                        except Exception:
+                            pass
 
             except KeyboardInterrupt:
                 logger.info("Received keyboard interrupt")
@@ -231,10 +285,7 @@ class NodeFlowRuntime:
             logger.info("Shutting down nodes...")
             self.coordinator.shutdown_nodes(self.processes)
 
-        # 清理Socket
-        if self.socket_manager:
-            logger.info("Cleaning up sockets...")
-            self.socket_manager.cleanup()
+        # 通信栈不需要额外清理（ZeroMQ/SharedBufferLite）
 
         # 清理 PID 文件
         self._cleanup_pid_file()
@@ -286,11 +337,17 @@ def main():
         type=int,
         help='自动关机时间（秒），到期后自动关机'
     )
+    parser.add_argument(
+        '--no-clean-buffers',
+        action='store_true',
+        help='禁用启动前清理共享缓冲区（默认会清理）'
+    )
 
     args = parser.parse_args()
 
-    # 创建并运行
-    runtime = NodeFlowRuntime(args.config, args.log_level, args.duration)
+    # 创建并运行（默认清理缓冲区，除非指定 --no-clean-buffers）
+    clean_buffers = not args.no_clean_buffers
+    runtime = NodeFlowRuntime(args.config, args.log_level, args.duration, clean_buffers)
     return runtime.run()
 
 

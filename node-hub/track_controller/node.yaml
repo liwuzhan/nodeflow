@@ -1,0 +1,38 @@
+name: track_controller
+version: "1.0"
+description: "轨迹跟踪控制器，支持履带底盘原地转向"
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+  windows:
+    kind: python
+    cmd: ["python", "run.py"]
+ports:
+  inputs:
+    - name: filtered_rtk
+      type: json
+      description: "滤波后的RTK"
+    - name: next_point
+      type: json
+      description: "前瞻点"
+  outputs:
+    - name: velocity_cmd
+      type: json
+      description: "线速度与角速度"
+params:
+  max_speed:
+    type: float
+    default: 1.0
+  min_speed:
+    type: float
+    default: 0.0
+  heading_p_gain:
+    type: float
+    default: 2.5
+  max_angular_velocity:
+    type: float
+    default: 1.0
+  pivot_threshold_deg:
+    type: float
+    default: 15.0

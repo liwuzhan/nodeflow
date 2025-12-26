@@ -1,0 +1,36 @@
+name: idle_detector
+version: "1.0"
+description: "检测RTK在窗口内几乎不移动并触发停机事件"
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+  windows:
+    kind: python
+    cmd: ["python", "run.py"]
+ports:
+  inputs:
+    - name: rtk_fix
+      type: json
+      description: "RTK GPS定位数据"
+  outputs:
+    - name: idle_event
+      type: json
+      description: "静止事件（shutdown_request）"
+params:
+  window_secs:
+    type: float
+    default: 60.0
+    description: "滑动窗口秒数"
+  idle_radius_m:
+    type: float
+    default: 1.0
+    description: "窗口内最大位移阈值（米）"
+  sample_rate_hz:
+    type: float
+    default: 5.0
+    description: "采样频率（Hz）"
+  debounce_secs:
+    type: float
+    default: 5.0
+    description: "事件防抖时间（秒）"

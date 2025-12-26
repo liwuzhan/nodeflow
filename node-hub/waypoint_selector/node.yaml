@@ -1,0 +1,31 @@
+name: waypoint_selector
+version: "1.0"
+description: "根据路径与当前位置选择前瞻点"
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+  windows:
+    kind: python
+    cmd: ["python", "run.py"]
+ports:
+  inputs:
+    - name: global_path
+      type: planning.path
+      description: "全局路径"
+    - name: filtered_rtk
+      type: json
+      description: "滤波后的RTK"
+  outputs:
+    - name: next_point
+      type: json
+      description: "下一个前瞻点坐标"
+params:
+  lookahead_distance_m:
+    type: float
+    default: 2.0
+    description: "前瞻距离"
+  goal_tolerance_m:
+    type: float
+    default: 0.3
+    description: "终点容差"

@@ -1,0 +1,24 @@
+name: shutdown_manager
+version: "1.0"
+description: "转发静止事件到控制缓冲，触发Runtime优雅关停"
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+  windows:
+    kind: python
+    cmd: ["python", "run.py"]
+ports:
+  inputs:
+    - name: idle_event
+      type: json
+      description: "静止事件"
+  outputs:
+    - name: shutdown_status
+      type: json
+      description: "停机事件转发状态"
+params:
+  debounce_secs:
+    type: float
+    default: 5.0
+    description: "事件防抖时间（秒）"
