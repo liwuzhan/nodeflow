@@ -222,7 +222,7 @@ class InputPort:
         if source_port is not None:
             # 方式2：传入了source_node和source_port
             source_node = zmq_address_or_source
-            self.zmq_address = f"ipc:///{TMP_ROOT}/{source_node}.{source_port}"
+            self.zmq_address = f"ipc://{TMP_ROOT}/{source_node}.{source_port}"
             self.source_node = source_node
             self.source_port = source_port
         else:

@@ -15,6 +15,23 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from runtime.graph.topology import TopologyAnalyzer
+from runtime.config.models import NodeInstance, Edge
+from runtime.utils.errors import CyclicDependencyError
+
+
+def make_node(node_id: str) -> NodeInstance:
+    """创建测试用节点实例"""
+    return NodeInstance(id=node_id, package=f"pkg_{node_id}")
+
+
+def make_edge(from_node: str, to_node: str) -> Edge:
+    """创建测试用边（连接关系）"""
+    return Edge(
+        from_node=from_node,
+        from_port="output",
+        to_node=to_node,
+        to_port="input"
+    )
 
 
 class TestTopologySorting:
@@ -24,13 +41,12 @@ class TestTopologySorting:
         """A→B→C 线性图"""
         print("\n=== 测试简单链式依赖 ===")
 
-        analyzer = TopologyAnalyzer()
-
         # 构建图：A→B→C
-        nodes = ['A', 'B', 'C']
-        edges = [('A', 'B'), ('B', 'C')]
+        nodes = [make_node('A'), make_node('B'), make_node('C')]
+        edges = [make_edge('A', 'B'), make_edge('B', 'C')]
 
-        layers = analyzer.topological_sort(nodes, edges)
+        analyzer = TopologyAnalyzer(nodes, edges)
+        layers = analyzer.topological_sort()
 
         print(f"  拓扑层: {layers}")
 
@@ -46,12 +62,11 @@ class TestTopologySorting:
         """A→B, A→C 并行分支"""
         print("\n=== 测试并行分支 ===")
 
-        analyzer = TopologyAnalyzer()
+        nodes = [make_node('A'), make_node('B'), make_node('C')]
+        edges = [make_edge('A', 'B'), make_edge('A', 'C')]
 
-        nodes = ['A', 'B', 'C']
-        edges = [('A', 'B'), ('A', 'C')]
-
-        layers = analyzer.topological_sort(nodes, edges)
+        analyzer = TopologyAnalyzer(nodes, edges)
+        layers = analyzer.topological_sort()
 
         print(f"  拓扑层: {layers}")
 
@@ -66,12 +81,12 @@ class TestTopologySorting:
         """A→B→D, A→C→D 菱形依赖"""
         print("\n=== 测试菱形依赖 ===")
 
-        analyzer = TopologyAnalyzer()
+        nodes = [make_node('A'), make_node('B'), make_node('C'), make_node('D')]
+        edges = [make_edge('A', 'B'), make_edge('A', 'C'),
+                make_edge('B', 'D'), make_edge('C', 'D')]
 
-        nodes = ['A', 'B', 'C', 'D']
-        edges = [('A', 'B'), ('A', 'C'), ('B', 'D'), ('C', 'D')]
-
-        layers = analyzer.topological_sort(nodes, edges)
+        analyzer = TopologyAnalyzer(nodes, edges)
+        layers = analyzer.topological_sort()
 
         print(f"  拓扑层: {layers}")
 
@@ -87,20 +102,20 @@ class TestTopologySorting:
         """10节点复杂依赖"""
         print("\n=== 测试复杂依赖图 ===")
 
-        analyzer = TopologyAnalyzer()
-
         # 构建10节点的复杂图
-        nodes = ['N1', 'N2', 'N3', 'N4', 'N5', 'N6', 'N7', 'N8', 'N9', 'N10']
+        node_ids = ['N1', 'N2', 'N3', 'N4', 'N5', 'N6', 'N7', 'N8', 'N9', 'N10']
+        nodes = [make_node(nid) for nid in node_ids]
         edges = [
-            ('N1', 'N2'), ('N1', 'N3'),
-            ('N2', 'N4'), ('N3', 'N4'),
-            ('N4', 'N5'), ('N4', 'N6'),
-            ('N5', 'N7'), ('N6', 'N8'),
-            ('N7', 'N9'), ('N8', 'N9'),
-            ('N9', 'N10')
+            make_edge('N1', 'N2'), make_edge('N1', 'N3'),
+            make_edge('N2', 'N4'), make_edge('N3', 'N4'),
+            make_edge('N4', 'N5'), make_edge('N4', 'N6'),
+            make_edge('N5', 'N7'), make_edge('N6', 'N8'),
+            make_edge('N7', 'N9'), make_edge('N8', 'N9'),
+            make_edge('N9', 'N10')
         ]
 
-        layers = analyzer.topological_sort(nodes, edges)
+        analyzer = TopologyAnalyzer(nodes, edges)
+        layers = analyzer.topological_sort()
 
         print(f"  拓扑层数: {len(layers)}")
         for i, layer in enumerate(layers):
@@ -115,7 +130,7 @@ class TestTopologySorting:
         all_nodes = set()
         for layer in layers:
             all_nodes.update(layer)
-        assert all_nodes == set(nodes), f"应该包含所有节点"
+        assert all_nodes == set(node_ids), f"应该包含所有节点"
 
         print("✅ 复杂依赖图测试通过")
 
@@ -127,18 +142,20 @@ class TestLayerOrdering:
         """验证层级顺序正确"""
         print("\n=== 测试层级顺序 ===")
 
-        analyzer = TopologyAnalyzer()
+        nodes = [make_node('A'), make_node('B'), make_node('C'), make_node('D')]
+        edges = [make_edge('A', 'B'), make_edge('B', 'C'), make_edge('C', 'D')]
 
-        nodes = ['A', 'B', 'C', 'D']
-        edges = [('A', 'B'), ('B', 'C'), ('C', 'D')]
+        analyzer = TopologyAnalyzer(nodes, edges)
+        layers = analyzer.topological_sort()
 
-        layers = analyzer.topological_sort(nodes, edges)
+        # 构建边映射
+        edge_map = [(e.from_node, e.to_node) for e in edges]
 
         # 验证依赖都在更早的层
         for layer_idx, layer in enumerate(layers):
             for node in layer:
                 # 检查该节点的所有被依赖节点是否在更早的层
-                dependencies = [src for src, dst in edges if dst == node]
+                dependencies = [src for src, dst in edge_map if dst == node]
                 for dep in dependencies:
                     # 找到依赖所在的层
                     dep_layer = None
@@ -155,16 +172,20 @@ class TestLayerOrdering:
         """验证同层节点无依赖关系"""
         print("\n=== 测试同层无依赖 ===")
 
-        analyzer = TopologyAnalyzer()
+        nodes = [make_node('A'), make_node('B'), make_node('C'),
+                make_node('D'), make_node('E')]
+        edges = [make_edge('A', 'B'), make_edge('A', 'C'),
+                make_edge('A', 'D'), make_edge('A', 'E')]
 
-        nodes = ['A', 'B', 'C', 'D', 'E']
-        edges = [('A', 'B'), ('A', 'C'), ('A', 'D'), ('A', 'E')]
+        analyzer = TopologyAnalyzer(nodes, edges)
+        layers = analyzer.topological_sort()
 
-        layers = analyzer.topological_sort(nodes, edges)
+        # 构建边映射
+        edge_map = [(e.from_node, e.to_node) for e in edges]
 
         # 检查每一层内部是否有边
         for layer_idx, layer in enumerate(layers):
-            for src, dst in edges:
+            for src, dst in edge_map:
                 # 如果源和目标都在同一层，就有内部依赖
                 if src in layer and dst in layer:
                     # B,C,D,E 都依赖于 A，不应该在同一层
@@ -180,15 +201,15 @@ class TestCycleDetection:
         """A→B→A 循环"""
         print("\n=== 测试简单循环 ===")
 
-        analyzer = TopologyAnalyzer()
+        nodes = [make_node('A'), make_node('B')]
+        edges = [make_edge('A', 'B'), make_edge('B', 'A')]  # 循环
 
-        nodes = ['A', 'B']
-        edges = [('A', 'B'), ('B', 'A')]  # 循环
+        analyzer = TopologyAnalyzer(nodes, edges)
 
         try:
-            layers = analyzer.topological_sort(nodes, edges)
+            layers = analyzer.topological_sort()
             assert False, "应该检测到循环并抛出异常"
-        except ValueError as e:
+        except CyclicDependencyError as e:
             print(f"  ✓ 正确检测到循环: {e}")
 
         print("✅ 简单循环检测测试通过")
@@ -197,15 +218,15 @@ class TestCycleDetection:
         """A→A 自环"""
         print("\n=== 测试自环 ===")
 
-        analyzer = TopologyAnalyzer()
+        nodes = [make_node('A'), make_node('B')]
+        edges = [make_edge('A', 'A'), make_edge('A', 'B')]  # A 自环
 
-        nodes = ['A', 'B']
-        edges = [('A', 'A'), ('A', 'B')]  # A 自环
+        analyzer = TopologyAnalyzer(nodes, edges)
 
         try:
-            layers = analyzer.topological_sort(nodes, edges)
+            layers = analyzer.topological_sort()
             assert False, "应该检测到自环并抛出异常"
-        except ValueError as e:
+        except CyclicDependencyError as e:
             print(f"  ✓ 正确检测到自环: {e}")
 
         print("✅ 自环检测测试通过")
@@ -214,15 +235,16 @@ class TestCycleDetection:
         """A→B→C→D→B 深层循环"""
         print("\n=== 测试深层循环 ===")
 
-        analyzer = TopologyAnalyzer()
+        nodes = [make_node('A'), make_node('B'), make_node('C'), make_node('D')]
+        edges = [make_edge('A', 'B'), make_edge('B', 'C'),
+                make_edge('C', 'D'), make_edge('D', 'B')]  # B→C→D→B 循环
 
-        nodes = ['A', 'B', 'C', 'D']
-        edges = [('A', 'B'), ('B', 'C'), ('C', 'D'), ('D', 'B')]  # B→C→D→B 循环
+        analyzer = TopologyAnalyzer(nodes, edges)
 
         try:
-            layers = analyzer.topological_sort(nodes, edges)
+            layers = analyzer.topological_sort()
             assert False, "应该检测到深层循环并抛出异常"
-        except ValueError as e:
+        except CyclicDependencyError as e:
             print(f"  ✓ 正确检测到深层循环: {e}")
 
         print("✅ 深层循环检测测试通过")
@@ -231,15 +253,16 @@ class TestCycleDetection:
         """验证无环图不报错"""
         print("\n=== 测试无环验证 ===")
 
-        analyzer = TopologyAnalyzer()
+        nodes = [make_node('A'), make_node('B'), make_node('C'), make_node('D')]
+        edges = [make_edge('A', 'B'), make_edge('A', 'C'),
+                make_edge('B', 'D'), make_edge('C', 'D')]
 
-        nodes = ['A', 'B', 'C', 'D']
-        edges = [('A', 'B'), ('A', 'C'), ('B', 'D'), ('C', 'D')]
+        analyzer = TopologyAnalyzer(nodes, edges)
 
         try:
-            layers = analyzer.topological_sort(nodes, edges)
+            layers = analyzer.topological_sort()
             print(f"  ✓ 无环图正确排序: {layers}")
-        except ValueError as e:
+        except CyclicDependencyError as e:
             assert False, f"无环图不应该抛出异常: {e}"
 
         print("✅ 无环验证测试通过")
@@ -252,12 +275,11 @@ class TestEdgeCases:
         """单节点图"""
         print("\n=== 测试单节点 ===")
 
-        analyzer = TopologyAnalyzer()
-
-        nodes = ['A']
+        nodes = [make_node('A')]
         edges = []
 
-        layers = analyzer.topological_sort(nodes, edges)
+        analyzer = TopologyAnalyzer(nodes, edges)
+        layers = analyzer.topological_sort()
 
         assert len(layers) == 1, f"应该有1层"
         assert layers[0] == ['A'], f"层应该是 ['A']"
@@ -268,13 +290,12 @@ class TestEdgeCases:
         """两个独立子图"""
         print("\n=== 测试独立子图 ===")
 
-        analyzer = TopologyAnalyzer()
-
         # 两个独立的链：A→B 和 C→D
-        nodes = ['A', 'B', 'C', 'D']
-        edges = [('A', 'B'), ('C', 'D')]
+        nodes = [make_node('A'), make_node('B'), make_node('C'), make_node('D')]
+        edges = [make_edge('A', 'B'), make_edge('C', 'D')]
 
-        layers = analyzer.topological_sort(nodes, edges)
+        analyzer = TopologyAnalyzer(nodes, edges)
+        layers = analyzer.topological_sort()
 
         print(f"  拓扑层: {layers}")
 
@@ -289,12 +310,11 @@ class TestEdgeCases:
         """空图"""
         print("\n=== 测试空图 ===")
 
-        analyzer = TopologyAnalyzer()
-
         nodes = []
         edges = []
 
-        layers = analyzer.topological_sort(nodes, edges)
+        analyzer = TopologyAnalyzer(nodes, edges)
+        layers = analyzer.topological_sort()
 
         assert len(layers) == 0, f"空图应该返回空列表，得到 {layers}"
 
