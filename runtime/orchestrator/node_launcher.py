@@ -10,10 +10,10 @@ from pathlib import Path
 from typing import Dict, Optional, TextIO, Tuple
 
 from runtime.config.models import NodeInstance, NodeManifest, EntryPoint
-from runtime.ipc.socket_manager import SocketManager
 from runtime.orchestrator.env_builder import EnvBuilder
 from runtime.utils.errors import NodeLaunchError
 from runtime.utils.logger import get_logger
+from runtime.utils.constants import LOGS_DIR
 
 logger = get_logger(__name__)
 
@@ -21,7 +21,7 @@ logger = get_logger(__name__)
 class NodeLauncher:
     """节点启动管理器"""
 
-    def __init__(self, node_hub_path: str, socket_manager: SocketManager, edges: list):
+    def __init__(self, node_hub_path: str, edges: list):
         """
         初始化节点启动管理器
 
@@ -31,12 +31,11 @@ class NodeLauncher:
         - edges: 图的边列表
         """
         self.node_hub_path = node_hub_path
-        self.socket_manager = socket_manager
         self.edges = edges
         self.env_builder = EnvBuilder()
 
         # 节点日志文件管理
-        self.log_dir = Path("/tmp/nodeflow_logs")
+        self.log_dir = Path(LOGS_DIR)
         self.log_dir.mkdir(exist_ok=True, parents=True)
         self.log_files: Dict[str, Tuple[TextIO, TextIO]] = {}
 
@@ -226,39 +225,60 @@ class NodeLauncher:
         """
         优雅地终止进程
 
-        先尝试SIGTERM，如果超时则使用SIGKILL
+        策略: SIGTERM → wait(timeout) → SIGKILL if needed
 
         参数：
         - process: subprocess.Popen对象
         - node_id: 节点ID
-        - timeout: 等待超时（秒）
+        - timeout: SIGTERM 后等待的秒数，超时则 SIGKILL
         """
+        # 检查进程是否已退出
         if process.poll() is not None:
-            # 进程已退出
+            logger.debug(f"Node '{node_id}' already exited")
+            self.close_node_logs(node_id)
             return
 
         logger.info(f"Terminating node '{node_id}' (PID {process.pid})")
 
         try:
-            # 发送SIGTERM
-            process.terminate()
+            # 发送 SIGTERM 进行优雅关闭
+            try:
+                process.terminate()
+            except ProcessLookupError:
+                # 进程在 poll() 和 terminate() 之间退出
+                logger.debug(f"Node '{node_id}' exited before terminate signal")
+                self.close_node_logs(node_id)
+                return
 
-            # 等待进程退出
+            # 等待优雅退出
             try:
                 process.wait(timeout=timeout)
                 logger.info(f"Node '{node_id}' terminated gracefully")
             except subprocess.TimeoutExpired:
-                # 超时，强制kill
-                logger.warning(f"Node '{node_id}' did not terminate, killing")
-                process.kill()
-                process.wait(timeout=1.0)
-                logger.info(f"Node '{node_id}' killed")
+                # 优雅关闭超时，强制 kill
+                logger.warning(f"Node '{node_id}' did not terminate in {timeout}s, sending SIGKILL")
+                try:
+                    process.kill()
+                    process.wait(timeout=2.0)  # SIGKILL 后短暂等待
+                    logger.info(f"Node '{node_id}' killed")
+                except ProcessLookupError:
+                    # 进程在超时后但 kill 前退出
+                    logger.debug(f"Node '{node_id}' exited before kill signal")
+                except subprocess.TimeoutExpired:
+                    # 极端罕见: 进程无响应 SIGKILL (内核问题)
+                    logger.error(f"Node '{node_id}' did not respond to SIGKILL")
 
+        except ProcessLookupError:
+            # 进程在终止过程中退出
+            logger.debug(f"Node '{node_id}' exited during termination")
+        except OSError as e:
+            # 处理其他 OS 级别错误（权限等）
+            logger.error(f"OS error terminating node '{node_id}': {e}")
         except Exception as e:
-            logger.error(f"Error terminating node '{node_id}': {e}")
-
-        # 关闭该节点的日志文件
-        self.close_node_logs(node_id)
+            logger.error(f"Unexpected error terminating node '{node_id}': {e}")
+        finally:
+            # 总是关闭日志文件
+            self.close_node_logs(node_id)
 
     def close_node_logs(self, node_id: str):
         """

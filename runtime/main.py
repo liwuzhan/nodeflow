@@ -9,6 +9,8 @@ import argparse
 import signal
 import time
 import os
+import atexit
+import subprocess
 from pathlib import Path
 
 from runtime.config.yaml_parser import YAMLParser
@@ -59,14 +61,100 @@ class NodeFlowRuntime:
         # 运行标志
         self.running = False
 
+        # 防止双重清理
+        self.shutdown_complete = False
+
         # 设置信号处理
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
+        signal.signal(signal.SIGHUP, self._signal_handler)
+        signal.signal(signal.SIGQUIT, self._signal_handler)
+
+        # 注册紧急清理处理器
+        atexit.register(self._emergency_cleanup)
 
     def _signal_handler(self, signum, frame):
-        """信号处理函数"""
-        logger.info(f"Received signal {signum}, shutting down...")
+        """
+        信号处理器，支持优雅关闭
+
+        处理的信号: SIGINT (Ctrl+C), SIGTERM, SIGHUP, SIGQUIT
+        """
+        signal_names = {
+            signal.SIGINT: "SIGINT",
+            signal.SIGTERM: "SIGTERM",
+            signal.SIGHUP: "SIGHUP",
+            signal.SIGQUIT: "SIGQUIT",
+        }
+        signal_name = signal_names.get(signum, f"signal {signum}")
+
+        # 避免重复处理
+        if not self.running:
+            logger.debug(f"Received {signal_name} but already shutting down")
+            return
+
+        logger.info(f"Received {signal_name}, initiating graceful shutdown...")
         self.running = False
+
+    def _emergency_cleanup(self):
+        """
+        紧急清理处理器，用于异常退出场景
+
+        由 atexit 在 Python 退出时调用（包括未捕获异常）。
+        这是一个失败保护机制，确保即使正常关闭路径未执行，
+        子进程也能被终止。
+
+        注意: 此处理器应保持静默（不抛出异常）且快速。
+        """
+        # 如果已完成正常关闭，跳过
+        if self.shutdown_complete:
+            return
+
+        # 如果没有启动任何进程，跳过
+        if not self.processes:
+            return
+
+        try:
+            logger.warning("Emergency cleanup triggered - terminating child processes")
+
+            # 终止所有子进程
+            for node_id, process in list(self.processes.items()):
+                try:
+                    if process.poll() is None:  # 仍在运行
+                        logger.warning(f"Emergency terminating node '{node_id}' (PID {process.pid})")
+                        process.terminate()
+                        try:
+                            process.wait(timeout=2.0)  # 紧急情况下使用较短超时
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.wait(timeout=1.0)
+                except (ProcessLookupError, OSError):
+                    # 进程已退出，没问题
+                    pass
+                except Exception as e:
+                    # 记录日志但不抛出异常 - atexit 处理器必须静默
+                    logger.error(f"Error in emergency cleanup for '{node_id}': {e}")
+
+            # 清理 PID 文件
+            self._cleanup_pid_file()
+
+            # 清理共享缓冲区（尽力而为）
+            try:
+                from shutil import rmtree
+                buf_dir = Path(BUFFERS_DIR)
+                if buf_dir.exists():
+                    rmtree(buf_dir)
+                    logger.info(f"Emergency cleanup: removed buffer directory {buf_dir}")
+            except Exception as e:
+                logger.warning(f"Emergency cleanup: failed to remove buffers: {e}")
+
+            logger.info("Emergency cleanup completed")
+
+        except Exception as e:
+            # 在 atexit 处理器中永远不要抛出异常
+            try:
+                logger.error(f"Emergency cleanup failed: {e}")
+            except:
+                pass  # 此时甚至日志记录也可能失败
 
     def _clean_buffers(self):
         """清理共享缓冲区（写满0以重置序列号和数据）"""
@@ -293,6 +381,9 @@ class NodeFlowRuntime:
         logger.info("=" * 60)
         logger.info("NodeFlow Runtime Stopped")
         logger.info("=" * 60)
+
+        # 标记关闭完成，防止 atexit 双重清理
+        self.shutdown_complete = True
 
         return 0
 
