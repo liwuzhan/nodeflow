@@ -39,14 +39,6 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from sdk.nodeflow_sdk import NodeFlowSDK
-from sdk.utils.geo import wgs84_to_local
-
-
-def get_gps_ref() -> Tuple[float, float]:
-    """获取GPS参考点（从环境变量或默认值）"""
-    lon = float(os.getenv('GPS_REF_LON', '121.5'))
-    lat = float(os.getenv('GPS_REF_LAT', '31.2'))
-    return lon, lat
 
 
 class TrajectoryVisualizer:
@@ -56,8 +48,9 @@ class TrajectoryVisualizer:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        # GPS参考点（用于转换地块边界）
-        self.ref_lon, self.ref_lat = get_gps_ref()
+        # GPS参考点（从task_enu获取）
+        self.ref_lon = None
+        self.ref_lat = None
 
         # 数据缓存（全部使用ENU坐标）
         self.field_boundary = None  # [(x, y), ...] ENU
@@ -66,7 +59,7 @@ class TrajectoryVisualizer:
         self.actual_trajectory_with_heading = []  # [(x, y, theta), ...] ENU + 数学坐标系角度
 
     def add_field_data(self, task_data: Dict[str, Any]):
-        """从task_request提取地块边界并转换为ENU"""
+        """从task_enu提取地块边界（已是ENU坐标）"""
         if not task_data:
             return False
 
@@ -79,15 +72,16 @@ class TrajectoryVisualizer:
             if not isinstance(outer, list) or len(outer) < 3:
                 return False
 
-            # 将WGS84转换为ENU
-            enu_boundary = []
-            for point in outer:
-                lon, lat = point[0], point[1]
-                x, y = wgs84_to_local(lon, lat, self.ref_lon, self.ref_lat)
-                enu_boundary.append((x, y))
+            # 地块边界已经是ENU坐标，直接使用
+            self.field_boundary = outer
 
-            self.field_boundary = enu_boundary
-            print(f"✓ 地块边界已接收: {len(self.field_boundary)} 个点 (已转换为ENU)")
+            # 从task_enu获取GPS参考点（用于显示）
+            self.ref_lon = task_data.get('ref_lon')
+            self.ref_lat = task_data.get('ref_lat')
+
+            print(f"✓ 地块边界已接收: {len(self.field_boundary)} 个点 (ENU坐标)")
+            if self.ref_lon and self.ref_lat:
+                print(f"  GPS参考点: ({self.ref_lon:.6f}, {self.ref_lat:.6f})")
             return True
         except Exception as e:
             print(f"✗ 提取地块边界失败: {e}")
@@ -312,9 +306,9 @@ def main():
         dpi = sdk.params.get("dpi", 150)
 
         # 创建输入输出端口（ENU版本）
-        task_port = sdk.create_input_port("task_request")
+        task_port = sdk.create_input_port("task_enu")
         path_port = sdk.create_input_port("global_path")
-        pose_port = sdk.create_input_port("pose_enu")  # 改为接收ENU姿态
+        pose_port = sdk.create_input_port("pose_enu")  # 接收ENU姿态
         output_port = sdk.create_output_port("trajectory_image")
 
         print(f"输出目录: {output_dir}")
@@ -322,7 +316,7 @@ def main():
 
         # 创建可视化器
         visualizer = TrajectoryVisualizer(output_dir)
-        print(f"GPS参考点: ({visualizer.ref_lon:.6f}, {visualizer.ref_lat:.6f})")
+        print(f"等待task_enu来获取GPS参考点...")
 
         start_time = time.time()
         last_update_time = start_time

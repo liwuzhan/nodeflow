@@ -28,56 +28,6 @@ from runtime.utils.constants import BUFFERS_DIR
 logger = setup_logger("nodeflow")
 
 
-def fetch_gps_ref_from_simulator(host='localhost', port=5555, timeout_ms=2000):
-    """
-    从仿真器获取GPS参考点配置
-
-    Args:
-        host: 仿真器主机地址
-        port: 仿真器端口
-        timeout_ms: 超时时间（毫秒）
-
-    Returns:
-        (ref_lon, ref_lat): GPS参考点经纬度，失败时返回默认值(121.5, 31.2)
-    """
-    import zmq
-
-    default_lon, default_lat = 121.5, 31.2
-
-    try:
-        context = zmq.Context()
-        socket = context.socket(zmq.REQ)
-        socket.connect(f"tcp://{host}:{port}")
-        socket.setsockopt(zmq.RCVTIMEO, timeout_ms)
-        socket.setsockopt(zmq.SNDTIMEO, timeout_ms)
-
-        # 请求配置
-        socket.send_json({"type": "get_config"})
-        response = socket.recv_json()
-
-        if response.get("status") == "ok":
-            gps_ref = response.get("config", {}).get("gps_ref", {})
-            ref_lon = gps_ref.get("lon", default_lon)
-            ref_lat = gps_ref.get("lat", default_lat)
-            logger.info(f"✅ 从仿真器获取GPS参考点: ({ref_lon:.6f}, {ref_lat:.6f})")
-            return ref_lon, ref_lat
-        else:
-            logger.warning(f"仿真器返回错误状态: {response.get('status')}")
-    except zmq.error.Again:
-        logger.warning(f"连接仿真器超时 ({host}:{port})，使用默认GPS参考点")
-    except Exception as e:
-        logger.warning(f"获取仿真器GPS参考点失败: {e}，使用默认值")
-    finally:
-        try:
-            socket.close()
-            context.term()
-        except:
-            pass
-
-    logger.info(f"使用默认GPS参考点: ({default_lon}, {default_lat})")
-    return default_lon, default_lat
-
-
 class NodeFlowRuntime:
     """NodeFlow运行时主类"""
 
@@ -505,13 +455,6 @@ def main():
     )
 
     args = parser.parse_args()
-
-    # 从仿真器获取GPS参考点并设置环境变量（用于coord_transform等节点）
-    logger.info("正在获取GPS参考点...")
-    ref_lon, ref_lat = fetch_gps_ref_from_simulator()
-    os.environ['GPS_REF_LON'] = str(ref_lon)
-    os.environ['GPS_REF_LAT'] = str(ref_lat)
-    logger.info(f"已设置环境变量: GPS_REF_LON={ref_lon}, GPS_REF_LAT={ref_lat}")
 
     # 创建并运行（默认清理缓冲区，除非指定 --no-clean-buffers）
     clean_buffers = not args.no_clean_buffers

@@ -176,13 +176,18 @@ nodes:
 
 edges:
   # ┌─────────────────────────────────────────────────────────────────────┐
-  # │ 规划流程
+  # │ 规划流程（ENU去耦合架构）
   # └─────────────────────────────────────────────────────────────────────┘
 
-  # 地块 + 车辆配置 → 规划器
-  - from: sim_output.task_request
-    to: global_coverage.task_request
-    description: "地块和车辆配置"
+  # 任务ENU → 坐标转换网关（设置参考点）
+  - from: sim_output.task_enu
+    to: coord_transform.task_enu
+    description: "任务ENU（包含参考点）→ 网关节点"
+
+  # 坐标转换网关 → 规划器
+  - from: coord_transform.task_enu
+    to: global_coverage.task_enu
+    description: "地块和车辆配置（ENU坐标）"
 
   # ┌─────────────────────────────────────────────────────────────────────┐
   # │ 控制流程
@@ -235,10 +240,10 @@ edges:
   # │ 可视化数据流 (全部使用ENU坐标)
   # └─────────────────────────────────────────────────────────────────────┘
 
-  # 地块信息 → 可视化 (会自动转换为ENU显示)
-  - from: sim_output.task_request
-    to: trajectory_viz.task_request
-    description: "地块边界信息 (WGS84，内部转换为ENU)"
+  # 地块信息 → 可视化 (ENU坐标)
+  - from: coord_transform.task_enu
+    to: trajectory_viz.task_enu
+    description: "地块边界信息 (ENU坐标)"
 
   # 规划路径 (ENU) → 可视化
   - from: global_coverage.global_path

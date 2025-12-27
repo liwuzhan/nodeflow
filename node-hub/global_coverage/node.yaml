@@ -3,8 +3,8 @@ version: 0.1.0
 description: 全局全覆盖路径规划节点 - 基于往复式扫描算法
 
 metadata:
-  coordinate_system: WGS84        # GPS 坐标系: WGS84
-  heading_convention: geographic  # 航向角约定: 北=0°, CW正, [0,360)
+  coordinate_system: ENU          # 坐标系: ENU局部笛卡尔坐标
+  heading_convention: mathematical # 航向角约定: 东=0, CCW正, 弧度
 
 entrypoints:
   linux:
@@ -16,19 +16,20 @@ entrypoints:
 
 ports:
   inputs:
-    - name: task_request
-      type: planning.task
+    - name: task_enu
+      type: planning.task_enu
       description: |
-        规划任务请求
-        - parcel.outer: 地块外边界，WGS84 经纬度 [(lon,lat),...]
+        规划任务请求（ENU坐标）
+        - parcel.outer: 地块外边界，ENU坐标 [(x,y),...] (米)
         - parcel.holes: 孔洞列表（可选）
         - vehicle: 车辆配置（幅宽、重叠率等）
+        - ref_lon/ref_lat: GPS参考点（元数据）
   outputs:
     - name: global_path
       type: planning.path
       description: |
-        规划生成的全局路径
-        - path: WGS84 经纬度路径点列表 [(lon,lat),...]
+        规划生成的全局路径（ENU坐标）
+        - path: ENU路径点列表 [(x,y),...] (米)
         - task_id: 任务ID
       buffer_size: 3097152  # 3MB - 足以存储典型路径（几百个路径点）
       conflate: true  # 覆盖模式 - 只保留最新规划结果

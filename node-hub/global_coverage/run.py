@@ -5,7 +5,6 @@
 """
 
 import sys
-import os
 import time
 import json
 import traceback
@@ -19,47 +18,18 @@ from utils.planner import GlobalCoveragePlanner
 from utils.models import VehicleConfig, ParcelData
 
 
-def get_gps_ref(sdk) -> tuple:
-    """
-    获取GPS参考点（优先级: 参数 > 环境变量 > 默认值）
-    """
-    # 1. 从参数读取
-    ref_lon = sdk.params.get('ref_longitude')
-    ref_lat = sdk.params.get('ref_latitude')
-
-    if ref_lon is not None and ref_lat is not None:
-        sdk.logger.info(f"GPS参考点从参数读取: ({ref_lon}, {ref_lat})")
-        return float(ref_lon), float(ref_lat)
-
-    # 2. 从环境变量读取
-    env_lon = os.getenv('GPS_REF_LON')
-    env_lat = os.getenv('GPS_REF_LAT')
-
-    if env_lon and env_lat:
-        sdk.logger.info(f"GPS参考点从环境变量读取: ({env_lon}, {env_lat})")
-        return float(env_lon), float(env_lat)
-
-    # 3. 默认值
-    sdk.logger.warning("GPS参考点未配置，使用默认值 (121.5, 31.2)")
-    return 121.5, 31.2
-
-
 def main():
     """主函数"""
     try:
         # 初始化SDK
         with NodeFlowSDK(log_level="INFO") as sdk:
-            sdk.logger.info("Global Coverage Planner Node started (ENU output)")
-
-            # 获取GPS参考点
-            ref_lon, ref_lat = get_gps_ref(sdk)
-            sdk.logger.info(f"GPS参考点: ({ref_lon:.6f}, {ref_lat:.6f})")
+            sdk.logger.info("Global Coverage Planner Node started (ENU mode)")
 
             # 初始化规划器（输出ENU坐标）
-            planner = GlobalCoveragePlanner(ref_lon=ref_lon, ref_lat=ref_lat, output_enu=True)
-            
+            planner = GlobalCoveragePlanner(output_enu=True)
+
             # 创建端口
-            input_port = sdk.create_input_port('task_request')
+            input_port = sdk.create_input_port('task_enu')
             output_port = sdk.create_output_port('global_path')
             
             last_task_id = None
@@ -88,8 +58,14 @@ def main():
                         
                         # 仅处理新任务
                         if task_id and task_id != last_task_id:
-                            sdk.logger.info(f"Received new task: {task_id}")
-                            
+                            # 显示任务的参考点信息（从task_enu获取）
+                            ref_lon = task_data.get('ref_lon')
+                            ref_lat = task_data.get('ref_lat')
+                            if ref_lon and ref_lat:
+                                sdk.logger.info(f"Received new task: {task_id}, GPS ref: ({ref_lon:.6f}, {ref_lat:.6f})")
+                            else:
+                                sdk.logger.info(f"Received new task: {task_id}")
+
                             try:
                                 # 解析数据
                                 parcel_dict = task_data.get('parcel', {})

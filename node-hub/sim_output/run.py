@@ -11,8 +11,8 @@ import time
 import zmq
 import json
 import logging
-import math
 from pathlib import Path
+import math
 
 # 添加项目根路径
 project_root = Path(__file__).parent.parent.parent
@@ -27,21 +27,10 @@ logging.basicConfig(
 logger = logging.getLogger("sim_output")
 
 
-class CoordinateConverter:
-    """坐标系转换器（简化版）"""
-
-    def __init__(self, ref_lon: float = 121.5, ref_lat: float = 31.2):
-        self.ref_lon = ref_lon
-        self.ref_lat = ref_lat
-        self.meters_per_degree_lat = 111320.0
-        lat_rad = math.radians(ref_lat)
-        self.meters_per_degree_lon = 111320.0 * math.cos(lat_rad)
-
-    def meter_to_gps(self, x: float, y: float):
-        """笛卡尔坐标（米）→ GPS坐标（WGS84）"""
-        lat = self.ref_lat + (y / self.meters_per_degree_lat)
-        lon = self.ref_lon + (x / self.meters_per_degree_lon)
-        return (lon, lat)
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent / 'coord_transform'))
+from utils.geo import local_to_wgs84, wgs84_to_local
 
 
 class SimOutputNode:
@@ -56,12 +45,6 @@ class SimOutputNode:
         port = self.params.get('simulator_port', 5555)
         timeout = self.params.get('timeout', 1000)
 
-        # 坐标转换器参数
-        ref_lon = self.params.get('ref_longitude', 121.5)
-        ref_lat = self.params.get('ref_latitude', 31.2)
-        self.converter = CoordinateConverter(ref_lon=ref_lon, ref_lat=ref_lat)
-        logger.info(f"坐标转换器已初始化: 参考点 ({ref_lon}, {ref_lat})")
-
         # ZMQ 连接到仿真器
         logger.info(f"连接到仿真器: {host}:{port}")
         self.context = zmq.Context()
@@ -69,6 +52,10 @@ class SimOutputNode:
         self.socket.connect(f"tcp://{host}:{port}")
         self.socket.setsockopt(zmq.RCVTIMEO, timeout)
         self.socket.setsockopt(zmq.SNDTIMEO, timeout)
+
+        # GPS 参考点：优先从仿真器获取，失败则使用参数默认值
+        self.ref_lon, self.ref_lat = self._fetch_gps_ref()
+        logger.info(f"GPS 参考点: ({self.ref_lon}, {self.ref_lat})")
 
         # 创建输出端口（根据配置）
         self.ports = {}
@@ -108,6 +95,10 @@ class SimOutputNode:
         self.ports['task'] = sdk.create_output_port('task_request')
         logger.info("任务请求 输出端口已创建（兼容旧版本）")
 
+        # 任务ENU端口（新版本）
+        self.ports['task_enu'] = sdk.create_output_port('task_enu')
+        logger.info("任务ENU 输出端口已创建")
+
         # 读取当前地块与版本（带重试机制，避免启动竞态）
         self.field_data, self.field_version = self._get_field_with_retry(max_retries=5, retry_delay=0.5)
         logger.info(f"地块信息已读取: {self.field_data.get('type', 'unknown')} - "
@@ -120,6 +111,10 @@ class SimOutputNode:
                    f"{len(self.field_info['parcel']['holes'])} 个孔洞")
         logger.info(f"车辆配置已构建: 幅宽={self.vehicle_config['implement_width_m']}m")
 
+        # 组装任务ENU（新版本）
+        self.task_enu = self._build_task_enu()
+        logger.info(f"任务ENU已构建")
+
         # 组装任务请求（固定内容，兼容旧版本）
         self.task_request = self._build_task_request_legacy()
         logger.info(f"任务请求已构建（兼容旧版本）")
@@ -128,6 +123,31 @@ class SimOutputNode:
         output_frequency = self.params.get('output_frequency', 50.0)
         self.period = 1.0 / output_frequency
         logger.info(f"输出频率: {output_frequency} Hz (周期 {self.period*1000:.1f} ms)")
+
+    def _fetch_gps_ref(self) -> tuple[float, float]:
+        """
+        从仿真器获取 GPS 参考点，失败则使用默认值
+
+        Returns:
+            (ref_lon, ref_lat) 元组
+        """
+        try:
+            request = {"type": "get_config"}
+            self.socket.send_json(request)
+            response = self.socket.recv_json()
+            if response.get("status") == "ok":
+                config = response.get("config", {})
+                gps_ref = config.get("gps_ref", {})
+                lon = gps_ref.get("lon", 121.5)
+                lat = gps_ref.get("lat", 31.2)
+                logger.info(f"从仿真器获取 GPS 参考点: ({lon}, {lat})")
+                return lon, lat
+        except Exception as e:
+            logger.warning(f"从仿真器获取 GPS 参考点失败: {e}")
+
+        # 失败时使用默认值
+        logger.warning("使用默认 GPS 参考点: (121.5, 31.2)")
+        return 121.5, 31.2
 
     def _get_field_with_retry(self, max_retries: int = 5, retry_delay: float = 0.5) -> tuple[dict, int]:
         """
@@ -188,21 +208,18 @@ class SimOutputNode:
         """构建地块信息（新版本）"""
         # 将地块边界从笛卡尔坐标转换为GPS坐标
         boundary_meter = self.field_data.get("boundary", [])
-        boundary_gps = [self.converter.meter_to_gps(x, y) for x, y in boundary_meter]
+        boundary_gps = [local_to_wgs84(x, y, self.ref_lon, self.ref_lat) for x, y in boundary_meter]
 
         # 同样转换孔洞（如果存在）
         holes_meter = self.field_data.get("holes", [])
         holes_gps = []
         if holes_meter:
-            holes_gps = [
-                [self.converter.meter_to_gps(x, y) for x, y in hole]
-                for hole in holes_meter
-            ]
+            holes_gps = [[local_to_wgs84(x, y, self.ref_lon, self.ref_lat) for x, y in hole] for hole in holes_meter]
             logger.info(f"转换孔洞: {len(holes_gps)}个孔洞")
 
         # 同样转换出入口
         entry_points_meter = self.field_data.get("entry_points", [])
-        entry_points_gps = [self.converter.meter_to_gps(x, y) for x, y in entry_points_meter]
+        entry_points_gps = [local_to_wgs84(x, y, self.ref_lon, self.ref_lat) for x, y in entry_points_meter]
         entries_formatted = [{'point': pt, 'type': 'entry'} for pt in entry_points_gps]
 
         logger.info(f"坐标转换: {len(boundary_meter)}个边界点 米→GPS")
@@ -234,6 +251,51 @@ class SimOutputNode:
             "id": f"task_{int(time.time())}",
             "parcel": self.field_info["parcel"],
             "vehicle": self.vehicle_config
+        }
+
+    def _build_task_enu(self) -> dict:
+        """构建task_enu（使用地块第一个点作为参考点）"""
+        boundary_meter = self.field_data.get("boundary", [])
+        if not boundary_meter:
+            logger.warning("地块边界为空，无法构建task_enu")
+            return None
+
+        # 1. 确定参考点：地块第一个点
+        first_pt = boundary_meter[0]
+        ref_lon, ref_lat = local_to_wgs84(
+            first_pt[0], first_pt[1],
+            self.ref_lon, self.ref_lat
+        )
+
+        # 2. 转换边界为ENU
+        boundary_enu = []
+        for x, y in boundary_meter:
+            lon, lat = local_to_wgs84(x, y, self.ref_lon, self.ref_lat)
+            ex, ey = wgs84_to_local(lon, lat, ref_lon, ref_lat)
+            boundary_enu.append((ex, ey))
+
+        # 3. 转换孔洞
+        holes_enu = []
+        for hole in self.field_data.get("holes", []):
+            hole_enu = []
+            for x, y in hole:
+                lon, lat = local_to_wgs84(x, y, self.ref_lon, self.ref_lat)
+                ex, ey = wgs84_to_local(lon, lat, ref_lon, ref_lat)
+                hole_enu.append((ex, ey))
+            holes_enu.append(hole_enu)
+
+        logger.info(f"ENU转换: {len(boundary_enu)}个边界点, {len(holes_enu)}个孔洞, 参考点=({ref_lon:.6f}, {ref_lat:.6f})")
+
+        return {
+            'id': f"task_{int(time.time())}",
+            'parcel': {
+                'outer': boundary_enu,
+                'holes': holes_enu,
+            },
+            'vehicle': self.vehicle_config,
+            'ref_lon': ref_lon,
+            'ref_lat': ref_lat,
+            'timestamp': time.time()
         }
 
 
@@ -294,6 +356,7 @@ class SimOutputNode:
                             self.field_version = ver
                             self.field_data = fld
                             self.field_info = self._build_field_info()
+                            self.task_enu = self._build_task_enu()
                             self.task_request = self._build_task_request_legacy()
                     except Exception as e:
                         logger.warning(f"地块刷新检查失败: {e}")
@@ -329,7 +392,11 @@ class SimOutputNode:
                 self.ports['field'].send(self.field_info)
                 self.ports['vehicle'].send(self.vehicle_config)
 
-                # 3. 持续发送任务请求（兼容旧版本）
+                # 3. 持续发送任务ENU（新版本）
+                if self.task_enu:
+                    self.ports['task_enu'].send(self.task_enu)
+
+                # 4. 持续发送任务请求（兼容旧版本）
                 if loop_count == 0:
                     # 第一帧时输出详细日志
                     logger.debug(f"[SEND] field_info: {json.dumps(self.field_info, indent=2, ensure_ascii=False)}")

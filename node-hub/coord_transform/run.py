@@ -14,50 +14,56 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from sdk.nodeflow_sdk import NodeFlowSDK
-from sdk.utils.geo import wgs84_to_local, heading_geo_to_math
+from .utils.geo import wgs84_to_local, heading_geo_to_math
 
 
 class CoordTransformNode:
     def __init__(self, sdk: NodeFlowSDK):
         self.sdk = sdk
 
-        # 获取GPS参考点 (优先级: 参数 > 环境变量 > 默认值)
-        self.ref_lon = self._get_ref_coordinate('ref_longitude', 'GPS_REF_LON', 121.5)
-        self.ref_lat = self._get_ref_coordinate('ref_latitude', 'GPS_REF_LAT', 31.2)
-
-        sdk.logger.info(f"GPS参考点: ({self.ref_lon:.6f}, {self.ref_lat:.6f})")
+        # 网关模式: 等待task_enu来获取参考点
+        self.ref_lon = None
+        self.ref_lat = None
+        self.task_received = False
 
         # 创建端口
-        self.input_port = sdk.create_input_port('rtk_fix')
-        self.output_port = sdk.create_output_port('pose_enu')
+        self.input_task_enu = sdk.create_input_port('task_enu')
+        self.input_rtk = sdk.create_input_port('rtk_fix')
+
+        self.output_task_enu = sdk.create_output_port('task_enu')
+        self.output_pose_enu = sdk.create_output_port('pose_enu')
 
         # 统计
         self.transform_count = 0
 
-    def _get_ref_coordinate(self, param_name: str, env_name: str, default: float) -> float:
+        sdk.logger.info("坐标转换节点（网关模式）- 等待task_enu")
+
+    def wait_for_task(self) -> bool:
         """
-        获取GPS参考坐标
+        等待接收task_enu并提取GPS参考点
 
-        优先级:
-        1. 节点参数 (node.yaml 或 workflow配置)
-        2. 环境变量
-        3. 默认值
+        返回:
+            True 如果成功接收到有效的task_enu
+            False 否则
         """
-        # 1. 从参数读取
-        param_val = self.sdk.params.get(param_name)
-        if param_val is not None:
-            self.sdk.logger.info(f"{param_name} 从参数读取: {param_val}")
-            return float(param_val)
+        if self.task_received:
+            return True
 
-        # 2. 从环境变量读取
-        env_val = os.getenv(env_name)
-        if env_val:
-            self.sdk.logger.info(f"{param_name} 从环境变量{env_name}读取: {env_val}")
-            return float(env_val)
+        task_data = self.input_task_enu.recv_latest()
+        if task_data:
+            self.ref_lon = task_data.get('ref_lon')
+            self.ref_lat = task_data.get('ref_lat')
 
-        # 3. 使用默认值
-        self.sdk.logger.warning(f"{param_name}未配置,使用默认值: {default}")
-        return default
+            if self.ref_lon is not None and self.ref_lat is not None:
+                self.task_received = True
+                self.sdk.logger.info(
+                    f"✓ 接收task_enu，参考点: ({self.ref_lon:.6f}, {self.ref_lat:.6f})"
+                )
+                # 立即转发task_enu到下游
+                self.output_task_enu.send(task_data)
+                return True
+
+        return False
 
     def transform(self, rtk_data: dict) -> dict:
         """
@@ -105,15 +111,25 @@ class CoordTransformNode:
         return pose_enu
 
     def run(self):
-        self.sdk.logger.info("坐标转换节点启动")
+        self.sdk.logger.info("坐标转换节点启动（网关模式）")
 
         while True:
-            rtk_data = self.input_port.recv_latest()
+            # 1. 等待task_enu
+            if not self.wait_for_task():
+                time.sleep(0.1)
+                continue
 
+            # 2. 处理RTK数据（只有在task接收到之后）
+            rtk_data = self.input_rtk.recv_latest()
             if rtk_data:
                 pose_enu = self.transform(rtk_data)
                 if pose_enu:
-                    self.output_port.send(pose_enu)
+                    self.output_pose_enu.send(pose_enu)
+
+            # 3. 持续转发task_enu
+            task_data = self.input_task_enu.recv_latest()
+            if task_data:
+                self.output_task_enu.send(task_data)
 
             time.sleep(0.01)  # 100Hz
 

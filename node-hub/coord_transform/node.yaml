@@ -21,6 +21,10 @@ entrypoints:
 
 ports:
   inputs:
+    - name: task_enu
+      type: planning.task_enu
+      description: "规划任务请求（ENU坐标+参考点），用于网关模式设置参考点"
+
     - name: rtk_fix
       type: sensor.rtk
       description: |
@@ -29,6 +33,10 @@ ports:
         - heading: 度, 地理坐标系 (北=0, CW正)
 
   outputs:
+    - name: task_enu
+      type: planning.task_enu
+      description: "转发规划任务到下游节点"
+
     - name: pose_enu
       type: localization.pose_enu
       description: |
@@ -38,13 +46,4 @@ ports:
         - theta: 航向角 (弧度, 数学坐标系, 东=0, CCW正)
         - timestamp: 时间戳
 
-params:
-  ref_longitude:
-    type: float
-    default: null
-    description: "GPS参考点经度 (度), null表示从环境变量GPS_REF_LON读取"
-
-  ref_latitude:
-    type: float
-    default: null
-    description: "GPS参考点纬度 (度), null表示从环境变量GPS_REF_LAT读取"
+params: {}  # 网关模式：参考点从task_enu动态获取

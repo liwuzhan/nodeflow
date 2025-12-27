@@ -12,12 +12,12 @@ entrypoints:
 
 ports:
   inputs:
-    - name: task_request
-      type: planning.task
-      description: "规划任务请求，包含地块边界信息"
+    - name: task_enu
+      type: planning.task_enu
+      description: "规划任务请求（ENU坐标），包含地块边界和GPS参考点"
     - name: global_path
       type: planning.path
-      description: "规划器输出的全局路径"
+      description: "规划器输出的全局路径（ENU坐标）"
     - name: pose_enu
       type: localization.pose_enu
       description: "ENU坐标系姿态，用于记录实际轨迹 (x, y, theta)"
