@@ -29,7 +29,7 @@ logger = setup_logger("nodeflow")
 
 
 class NodeFlowRuntime:
-    """NodeFlow运行时主类"""
+    """NodeFlow运行时主类，支持多轮启动-停止循环"""
 
     def __init__(self, config_path: str, log_level: str = "INFO", duration: int = None, clean_buffers: bool = True):
         """
@@ -38,7 +38,7 @@ class NodeFlowRuntime:
         参数：
         - config_path: 运行配置文件路径
         - log_level: 日志级别
-        - duration: 可选，运行时长（秒），到期后自动关机
+        - duration: 可选，运行时长（秒），到期后自动关机（仅在run()模式下）
         - clean_buffers: 是否清理旧缓冲区（默认True）
         """
         self.config_path = config_path
@@ -47,9 +47,13 @@ class NodeFlowRuntime:
         self.clean_buffers = clean_buffers
         self.start_time = None
 
-        # 组件
+        # 框架组件（一次性初始化）
         self.config = None
         self.registry = None
+        self.topology_layers = None
+        self.nodes_dict = None
+
+        # 数据流组件（可重复初始化）
         self.socket_manager = None
         self.launcher = None
         self.coordinator = None
@@ -59,18 +63,22 @@ class NodeFlowRuntime:
         self.processes = {}
 
         # 运行标志
-        self.running = False
+        self.running = False  # 框架级别
+        self.dataflow_running = False  # 数据流级别
 
         # 防止双重清理
         self.shutdown_complete = False
 
-        # 设置信号处理
+        # 框架是否已初始化
+        self._framework_initialized = False
+
+        # 设置信号处理（只设置一次）
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
         signal.signal(signal.SIGHUP, self._signal_handler)
         signal.signal(signal.SIGQUIT, self._signal_handler)
 
-        # 注册紧急清理处理器
+        # 注册紧急清理处理器（只注册一次）
         atexit.register(self._emergency_cleanup)
 
     def _signal_handler(self, signum, frame):
@@ -78,6 +86,7 @@ class NodeFlowRuntime:
         信号处理器，支持优雅关闭
 
         处理的信号: SIGINT (Ctrl+C), SIGTERM, SIGHUP, SIGQUIT
+        支持两个级别：数据流级别（关闭数据流）和框架级别（关闭框架）
         """
         signal_names = {
             signal.SIGINT: "SIGINT",
@@ -87,13 +96,16 @@ class NodeFlowRuntime:
         }
         signal_name = signal_names.get(signum, f"signal {signum}")
 
-        # 避免重复处理
-        if not self.running:
-            logger.debug(f"Received {signal_name} but already shutting down")
-            return
-
-        logger.info(f"Received {signal_name}, initiating graceful shutdown...")
-        self.running = False
+        # 如果有正在运行的数据流，先停止它
+        if self.dataflow_running:
+            logger.info(f"Received {signal_name}, stopping dataflow...")
+            self.dataflow_running = False
+        # 如果框架正在运行，关闭框架
+        elif self.running:
+            logger.info(f"Received {signal_name}, shutting down framework...")
+            self.running = False
+        else:
+            logger.debug(f"Received {signal_name} but nothing is running")
 
     def _emergency_cleanup(self):
         """
@@ -202,17 +214,23 @@ class NodeFlowRuntime:
 
         logger.info(f"Cleaned {cleaned_count} buffer files (reset to zeros)")
 
-    def run(self):
-        """运行框架"""
+    def _initialize_framework(self):
+        """
+        初始化框架（一次性）
+
+        包括：配置加载、验证、节点库扫描、图验证、拓扑分析
+        返回：0成功，1失败
+        """
+        if self._framework_initialized:
+            logger.debug("Framework already initialized, skipping...")
+            return 0
+
         try:
+            logger.info("=" * 60)
+            logger.info("Initializing NodeFlow Framework")
+            logger.info("=" * 60)
+
             # 1. 解析配置
-            logger.info("=" * 60)
-            logger.info("NodeFlow Runtime Starting")
-            logger.info("=" * 60)
-
-            if self.clean_buffers:
-                self._clean_buffers()
-
             logger.info(f"Loading configuration from: {self.config_path}")
             parser = YAMLParser()
             self.config = parser.parse_runtime_config(self.config_path)
@@ -266,41 +284,64 @@ class NodeFlowRuntime:
             # 5. 拓扑排序
             logger.info("Analyzing topology...")
             topology = TopologyAnalyzer(self.config.nodes, self.config.edges)
-            layers = topology.topological_sort()
+            self.topology_layers = topology.topological_sort()
 
-            logger.info(f"Topology analysis complete: {len(layers)} layers")
-            for i, layer in enumerate(layers):
+            logger.info(f"Topology analysis complete: {len(self.topology_layers)} layers")
+            for i, layer in enumerate(self.topology_layers):
                 logger.info(f"  Layer {i}: {layer}")
 
-            # 6. 初始化通信环境（ZeroMQ/SharedBufferLite，无需SocketManager）
+            # 6. 构建节点字典（用于重启回调）
+            self.nodes_dict = {n.id: n for n in self.config.nodes}
 
-            # 7. 启动节点
+            logger.info("Framework initialization complete")
+            self._framework_initialized = True
+            return 0
+
+        except Exception as e:
+            logger.error(f"Framework initialization failed: {e}", exc_info=True)
+            return 1
+
+    def start_dataflow(self):
+        """
+        启动数据流周期
+
+        启动所有配置的节点，开始数据流交互
+        抛出：RuntimeError如果数据流已在运行或框架未初始化
+        """
+        if not self._framework_initialized:
+            raise RuntimeError("Framework not initialized. Call _initialize_framework() first.")
+
+        if self.dataflow_running:
+            raise RuntimeError("Dataflow already running. Call stop_dataflow() first.")
+
+        try:
             logger.info("=" * 60)
-            logger.info("Starting Nodes")
+            logger.info("Starting Dataflow")
             logger.info("=" * 60)
 
+            # 清理buffer（如果需要）
+            if self.clean_buffers:
+                self._clean_buffers()
+
+            # 初始化launcher和coordinator
             self.launcher = NodeLauncher(
                 self.config.node_hub_path,
                 self.config.edges
             )
-
             self.coordinator = StartupCoordinator(self.launcher, self.registry)
 
-            nodes_dict = {n.id: n for n in self.config.nodes}
-            self.processes = self.coordinator.startup_nodes(layers, nodes_dict)
+            # 启动所有节点
+            self.processes = self.coordinator.startup_nodes(self.topology_layers, self.nodes_dict)
 
-            logger.info("=" * 60)
             logger.info(f"All {len(self.processes)} nodes started successfully")
-            logger.info("=" * 60)
 
-            # 8. 启动监控
+            # 启动监控
             logger.info("Starting node monitor...")
 
-            # 定义重启回调
             def restart_node(node_id):
-                """重启单个节点"""
+                """重启单个节点的回调"""
                 try:
-                    node = nodes_dict[node_id]
+                    node = self.nodes_dict[node_id]
                     manifest = self.registry.get_manifest(node.package)
 
                     if not manifest:
@@ -317,11 +358,78 @@ class NodeFlowRuntime:
             self.monitor = NodeMonitor(self.config.restart_policy)
             self.monitor.start_monitoring(self.processes, restart_node)
 
-            # 写入 PID 文件
+            # 写入PID文件
             self.start_time = time.time()
             self._write_pid_file()
 
-            # 9. 主循环
+            self.dataflow_running = True
+            logger.info("Dataflow started successfully")
+            logger.info("=" * 60)
+
+        except Exception as e:
+            logger.error(f"Failed to start dataflow: {e}", exc_info=True)
+            # 清理部分启动的进程
+            if self.processes:
+                logger.info("Cleaning up partially started processes...")
+                self.coordinator.shutdown_nodes(self.processes)
+                self.processes = {}
+            raise
+
+    def stop_dataflow(self):
+        """
+        停止数据流周期
+
+        停止所有节点，清理资源
+        抛出：RuntimeError如果数据流未运行
+        """
+        if not self.dataflow_running:
+            raise RuntimeError("Dataflow not running. Nothing to stop.")
+
+        try:
+            logger.info("=" * 60)
+            logger.info("Stopping Dataflow")
+            logger.info("=" * 60)
+
+            # 停止监控
+            if self.monitor:
+                logger.info("Stopping node monitor...")
+                self.monitor.stop()
+                self.monitor = None
+
+            # 关闭所有节点
+            if self.coordinator and self.processes:
+                logger.info("Shutting down nodes...")
+                self.coordinator.shutdown_nodes(self.processes)
+                self.processes = {}
+
+            # 清理 PID 文件
+            self._cleanup_pid_file()
+
+            self.dataflow_running = False
+            logger.info("Dataflow stopped successfully")
+            logger.info("=" * 60)
+
+        except Exception as e:
+            logger.error(f"Error stopping dataflow: {e}", exc_info=True)
+            raise
+
+    def run(self):
+        """
+        运行框架（传统模式）
+
+        一次性启动框架、启动数据流、等待、关闭数据流、退出
+        保持向后兼容性
+        """
+        try:
+            # 初始化框架（一次性）
+            result = self._initialize_framework()
+            if result != 0:
+                return result
+
+            # 启动数据流
+            self.start_dataflow()
+
+            # 主循环
             logger.info("=" * 60)
             logger.info("Runtime is RUNNING")
             if self.duration:
@@ -339,7 +447,7 @@ class NodeFlowRuntime:
                 shutdown_buf = None
 
             try:
-                while self.running:
+                while self.running and self.dataflow_running:
                     time.sleep(1)
 
                     # 检查定时关机
@@ -370,42 +478,113 @@ class NodeFlowRuntime:
             except KeyboardInterrupt:
                 logger.info("Received keyboard interrupt")
 
-            # 10. 清理资源
-            return self._shutdown()
+            # 停止数据流
+            if self.dataflow_running:
+                self.stop_dataflow()
+
+            # 标记关闭完成
+            self.shutdown_complete = True
+            return 0
 
         except Exception as e:
             logger.error(f"Fatal error: {e}", exc_info=True)
             return 1
 
-    def _shutdown(self):
-        """清理资源"""
-        logger.info("=" * 60)
-        logger.info("Shutting Down")
-        logger.info("=" * 60)
+    def run_with_loop(self, num_loops: int = None, loop_interval: int = 5):
+        """
+        运行框架（多轮循环模式）
 
-        # 停止监控
-        if self.monitor:
-            logger.info("Stopping node monitor...")
-            self.monitor.stop()
+        支持多轮启动-停止循环，允许在框架持续运行的情况下多次启动和停止数据流
 
-        # 关闭所有节点
-        if self.coordinator and self.processes:
-            logger.info("Shutting down nodes...")
-            self.coordinator.shutdown_nodes(self.processes)
+        参数：
+        - num_loops: 循环次数，None表示无限循环（直到收到关闭信号）
+        - loop_interval: 两个循环之间的等待时间（秒）
 
-        # 通信栈不需要额外清理（ZeroMQ/SharedBufferLite）
+        示例：
+            runtime = NodeFlowRuntime('config.yaml')
+            runtime.run_with_loop(num_loops=3)  # 运行3轮
+        """
+        try:
+            # 初始化框架（一次性）
+            result = self._initialize_framework()
+            if result != 0:
+                return result
 
-        # 清理 PID 文件
-        self._cleanup_pid_file()
+            logger.info("=" * 60)
+            logger.info("Runtime is RUNNING (Multi-loop mode)")
+            logger.info(f"Number of loops: {num_loops if num_loops else 'unlimited'}")
+            logger.info("Press Ctrl+C to stop")
+            logger.info("=" * 60)
 
-        logger.info("=" * 60)
-        logger.info("NodeFlow Runtime Stopped")
-        logger.info("=" * 60)
+            self.running = True
+            loop_count = 0
 
-        # 标记关闭完成，防止 atexit 双重清理
-        self.shutdown_complete = True
+            try:
+                while self.running:
+                    loop_count += 1
+                    if num_loops and loop_count > num_loops:
+                        logger.info(f"Completed {num_loops} loops, shutting down...")
+                        break
 
-        return 0
+                    logger.info(f"\n{'='*60}")
+                    logger.info(f"Loop {loop_count}/{num_loops if num_loops else '∞'}")
+                    logger.info(f"{'='*60}")
+
+                    # 启动数据流
+                    try:
+                        self.start_dataflow()
+                    except Exception as e:
+                        logger.error(f"Failed to start dataflow in loop {loop_count}: {e}")
+                        if num_loops:
+                            continue  # 继续下一个循环
+                        else:
+                            break  # 无限循环模式下出错则退出
+
+                    # 监听控制信号（在数据流运行时）
+                    try:
+                        while self.running and self.dataflow_running:
+                            time.sleep(1)
+                            # 检查是否收到停止数据流的信号
+                            # 在这里可以添加额外的控制逻辑
+                    except KeyboardInterrupt:
+                        logger.info("Received interrupt signal")
+                        break
+
+                    # 停止数据流
+                    try:
+                        self.stop_dataflow()
+                    except Exception as e:
+                        logger.error(f"Error stopping dataflow in loop {loop_count}: {e}")
+
+                    # 等待下一个循环
+                    if self.running and (not num_loops or loop_count < num_loops):
+                        logger.info(f"Waiting {loop_interval}s before next loop...")
+                        for i in range(loop_interval):
+                            if not self.running:
+                                break
+                            time.sleep(1)
+
+            except KeyboardInterrupt:
+                logger.info("Received keyboard interrupt, shutting down...")
+
+            # 确保数据流已停止
+            if self.dataflow_running:
+                try:
+                    self.stop_dataflow()
+                except Exception:
+                    pass
+
+            logger.info("=" * 60)
+            logger.info(f"Completed {loop_count} loops")
+            logger.info("=" * 60)
+
+            # 标记关闭完成
+            self.shutdown_complete = True
+            return 0
+
+        except Exception as e:
+            logger.error(f"Fatal error in loop mode: {e}", exc_info=True)
+            return 1
 
     def _write_pid_file(self):
         """写入 PID 文件"""
@@ -431,7 +610,7 @@ class NodeFlowRuntime:
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(
-        description="NodeFlow Runtime - 机器人节点化框架"
+        description="NodeFlow Runtime - 机器人节点化框架，支持多轮启动-停止循环"
     )
     parser.add_argument(
         'config',
@@ -446,12 +625,24 @@ def main():
     parser.add_argument(
         '--duration',
         type=int,
-        help='自动关机时间（秒），到期后自动关机'
+        help='自动关机时间（秒），到期后自动关机（仅在单次运行模式下）'
     )
     parser.add_argument(
         '--no-clean-buffers',
         action='store_true',
         help='禁用启动前清理共享缓冲区（默认会清理）'
+    )
+    parser.add_argument(
+        '--loop',
+        type=int,
+        metavar='N',
+        help='多轮循环模式：运行N轮启动-停止循环（0表示无限循环）'
+    )
+    parser.add_argument(
+        '--loop-interval',
+        type=int,
+        default=5,
+        help='循环间隔时间（秒），默认5秒'
     )
 
     args = parser.parse_args()
@@ -459,7 +650,14 @@ def main():
     # 创建并运行（默认清理缓冲区，除非指定 --no-clean-buffers）
     clean_buffers = not args.no_clean_buffers
     runtime = NodeFlowRuntime(args.config, args.log_level, args.duration, clean_buffers)
-    return runtime.run()
+
+    # 如果指定了--loop参数，使用多轮循环模式
+    if args.loop is not None:
+        num_loops = None if args.loop == 0 else args.loop
+        return runtime.run_with_loop(num_loops=num_loops, loop_interval=args.loop_interval)
+    else:
+        # 传统单次运行模式
+        return runtime.run()
 
 
 if __name__ == '__main__':
