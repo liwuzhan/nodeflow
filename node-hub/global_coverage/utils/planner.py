@@ -20,12 +20,27 @@ from .scan_utils import (
 )
 
 class GlobalCoveragePlanner:
+    def __init__(self, ref_lon: float = None, ref_lat: float = None, output_enu: bool = True):
+        """
+        初始化全局路径规划器
+
+        Args:
+            ref_lon: GPS参考点经度（度），用于ENU坐标转换
+            ref_lat: GPS参考点纬度（度），用于ENU坐标转换
+            output_enu: 是否输出ENU坐标（默认True）。False时输出WGS84坐标
+        """
+        self.ref_lon = ref_lon
+        self.ref_lat = ref_lat
+        self.output_enu = output_enu
+
     def plan(self, parcel_data: ParcelData, vehicle_config: VehicleConfig) -> List[Tuple[float, float]]:
         """
         执行全覆盖路径规划
-        
+
         Returns:
-            WGS84 坐标列表 [(lon, lat), ...]
+            坐标列表:
+            - output_enu=True: ENU坐标 [(x, y), ...] (米)
+            - output_enu=False: WGS84坐标 [(lon, lat), ...] (度)
         """
         parcel_dict = parcel_data.to_dict()
         
@@ -128,11 +143,30 @@ class GlobalCoveragePlanner:
         if connected_local.is_empty:
             return []
 
-        # 9. 转换回 WGS84
-        t_wgs = local_to_wgs84_transformer(ref_lon, ref_lat)
-        wgs_coords = []
-        for x, y in connected_local.coords:
-            lon, lat = t_wgs.transform(x, y)
-            wgs_coords.append((lon, lat))
-            
-        return wgs_coords
+        # 9. 输出坐标（ENU或WGS84）
+        if self.output_enu:
+            # 输出ENU坐标（米），使用统一的GPS参考点
+            # 如果指定了ref_lon/ref_lat，需要转换到该参考系
+            if self.ref_lon is not None and self.ref_lat is not None:
+                # 从规划参考系转换到统一参考系
+                from sdk.utils.geo import wgs84_to_local
+                # 先转到WGS84，再转到统一参考系
+                t_wgs = local_to_wgs84_transformer(ref_lon, ref_lat)
+                enu_coords = []
+                for x, y in connected_local.coords:
+                    lon, lat = t_wgs.transform(x, y)
+                    # 转换到统一参考系的ENU坐标
+                    ex, ey = wgs84_to_local(lon, lat, self.ref_lon, self.ref_lat)
+                    enu_coords.append((ex, ey))
+                return enu_coords
+            else:
+                # 直接返回规划坐标系的ENU坐标
+                return list(connected_local.coords)
+        else:
+            # 输出WGS84坐标（向后兼容）
+            t_wgs = local_to_wgs84_transformer(ref_lon, ref_lat)
+            wgs_coords = []
+            for x, y in connected_local.coords:
+                lon, lat = t_wgs.transform(x, y)
+                wgs_coords.append((lon, lat))
+            return wgs_coords

@@ -13,14 +13,14 @@ entrypoints:
 ports:
   inputs:
     - name: task_request
-      type: json
+      type: planning.task
       description: "规划任务请求，包含地块边界信息"
     - name: global_path
-      type: json
+      type: planning.path
       description: "规划器输出的全局路径"
-    - name: rtk_fix
-      type: json
-      description: "RTK GPS定位数据，用于记录实际轨迹"
+    - name: pose_enu
+      type: localization.pose_enu
+      description: "ENU坐标系姿态，用于记录实际轨迹 (x, y, theta)"
   outputs:
     - name: trajectory_image
       type: json

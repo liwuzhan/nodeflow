@@ -1,15 +1,24 @@
-# NodeFlow 规划闭环仿真场景
+# NodeFlow 规划闭环仿真场景 (ENU坐标系版本)
 #
 # 这个示例演示完整的农田覆盖规划和控制流程：
 #
-# 仿真器 (外部服务，localhost:5555)
-#   ↓ [地块 + 车辆信息]
-# [sim_output] ──→ [global_coverage] ──→ [规划路径]
-#   ↓ [RTK定位]           ↓
-#   └──────────────→ [velocity_controller] ──→ [速度指令]
-#                         ↓
+# 架构说明：
+#   - 所有控制节点使用ENU局部坐标系 (X=东, Y=北, 单位:米)
+#   - GPS参考点从仿真器自动同步，所有节点统一
+#   - 航向角使用数学坐标系 (东=0, CCW正, 弧度)
+#
+# 数据流：
+#   仿真器 (localhost:5555)
+#     ↓ [地块 WGS84]
+#   [sim_output] ──→ [global_coverage] ──→ [规划路径 ENU]
+#     ↓ [RTK WGS84]          ↓
+#   [rtk_filter] ──→ [coord_transform] ──→ [pose_enu]
+#                           ↓                  ↓
+#                    [waypoint_selector] ←─────┘
+#                           ↓
+#                    [track_controller] ──→ [速度指令]
+#                           ↓
 #                      [sim_input] ──→ 仿真器 ──→ 更新位置
-#                         ↑___________________|
 #
 # 启动前准备：
 #   1. 启动仿真器: python3 simulator/server.py
@@ -71,6 +80,16 @@ nodes:
       alpha_pos: 0.2
       alpha_heading: 0.3
       use_imu_yaw_rate: false
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 坐标系转换 (WGS84 → ENU)                                            │
+  # └─────────────────────────────────────────────────────────────────────┘
+  - id: coord_transform
+    package: coord_transform
+    description: "将WGS84坐标转换为ENU局部坐标系"
+    params: {}
+    # GPS参考点从环境变量自动读取 (GPS_REF_LON, GPS_REF_LAT)
+
   - id: waypoint_selector
     package: waypoint_selector
     description: "选择前瞻点"
@@ -169,24 +188,35 @@ edges:
   # │ 控制流程
   # └─────────────────────────────────────────────────────────────────────┘
 
-  # RTK定位 → 速度控制器
+  # RTK定位 → RTK滤波
   - from: sim_output.rtk_fix
     to: rtk_filter.rtk_fix
     description: "原始RTK"
 
-  # 规划路径 → 速度控制器
+  # RTK滤波 → 坐标转换 (WGS84 → ENU)
+  - from: rtk_filter.filtered_rtk
+    to: coord_transform.rtk_fix
+    description: "滤波后的RTK → ENU坐标转换"
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 控制流程 (全部使用ENU坐标)
+  # └─────────────────────────────────────────────────────────────────────┘
+
+  # 规划路径 (ENU) → 前瞻点选择
   - from: global_coverage.global_path
     to: waypoint_selector.global_path
-    description: "规划生成的路径点序列"
-  - from: rtk_filter.filtered_rtk
-    to: waypoint_selector.filtered_rtk
-    description: "滤波后的RTK"
+    description: "规划路径 (ENU坐标)"
+  - from: coord_transform.pose_enu
+    to: waypoint_selector.pose_enu
+    description: "ENU姿态 → 前瞻点选择"
+
+  # 前瞻点 + ENU姿态 → 轨迹控制
   - from: waypoint_selector.next_point
     to: track_controller.next_point
-    description: "前瞻点"
-  - from: rtk_filter.filtered_rtk
-    to: track_controller.filtered_rtk
-    description: "滤波后的RTK"
+    description: "前瞻点 (ENU)"
+  - from: coord_transform.pose_enu
+    to: track_controller.pose_enu
+    description: "ENU姿态 → 轨迹控制"
   # 静止判定链路
   - from: sim_output.rtk_fix
     to: idle_detector.rtk_fix
@@ -202,23 +232,23 @@ edges:
     description: "线速度和角速度"
 
   # ┌─────────────────────────────────────────────────────────────────────┐
-  # │ 可视化数据流 (轨迹对比)
+  # │ 可视化数据流 (全部使用ENU坐标)
   # └─────────────────────────────────────────────────────────────────────┘
 
-  # 地块信息 → 可视化
+  # 地块信息 → 可视化 (会自动转换为ENU显示)
   - from: sim_output.task_request
     to: trajectory_viz.task_request
-    description: "地块边界信息"
+    description: "地块边界信息 (WGS84，内部转换为ENU)"
 
-  # 规划路径 → 可视化
+  # 规划路径 (ENU) → 可视化
   - from: global_coverage.global_path
     to: trajectory_viz.global_path
-    description: "规划的全局路径"
+    description: "规划的全局路径 (ENU坐标)"
 
-  # RTK定位 → 可视化
-  - from: sim_output.rtk_fix
-    to: trajectory_viz.rtk_fix
-    description: "实际轨迹（RTK GPS）"
+  # ENU姿态 → 可视化
+  - from: coord_transform.pose_enu
+    to: trajectory_viz.pose_enu
+    description: "实际轨迹 (ENU坐标)"
 
   # ┌─────────────────────────────────────────────────────────────────────┐
   # │ 监测和日志 (关键数据流) - 暂时禁用
@@ -248,22 +278,30 @@ edges:
 #
 # 1. 初始化:
 #    - sim_output 连接到仿真器，读取地块（只读一次）
-#    - 组装 task_request（地块 + 车辆参数）
+#    - runtime 从仿真器获取GPS参考点，设置环境变量 (GPS_REF_LON, GPS_REF_LAT)
+#    - 组装 task_request（地块WGS84 + 车辆参数）
 #
 # 2. 规划:
 #    - global_coverage 接收 task_request
 #    - 执行往复式扫描算法，生成全覆盖路径
-#    - 输出 WGS84 格式的路径点 [(lon, lat), ...]
+#    - 输出 ENU 格式的路径点 [(x, y), ...] (米)
 #
 # 3. 控制循环:
-#    - sim_output 持续读取 RTK GPS 数据（50Hz）
-#    - velocity_controller 接收 RTK 定位 + 规划路径
-#    - 计算前瞻点，输出线速度 + 角速度
+#    - sim_output 持续读取 RTK GPS 数据（WGS84, 50Hz）
+#    - rtk_filter 滤波 RTK 数据
+#    - coord_transform 将 WGS84 → ENU (x, y, theta)
+#    - waypoint_selector 使用 ENU 路径计算前瞻点 (欧几里得距离)
+#    - track_controller 使用 ENU 姿态计算速度 (atan2航向角)
 #    - sim_input 将速度命令发送到仿真器（50Hz）
 #    - 仿真器更新机器人位置（100Hz 内部）
 #    - 闭环回到 sim_output 的 RTK 输出
 #
-# 4. 日志:
+# 4. 可视化:
+#    - trajectory_viz 接收 ENU 路径和姿态
+#    - 绘制 X-Y 平面轨迹对比图（米）
+#    - 显示航向角箭头（数学坐标系）
+#
+# 5. 日志:
 #    - logger 节点接收 RTK、路径、控制数据
 #    - 用于实时监测或离线分析
 

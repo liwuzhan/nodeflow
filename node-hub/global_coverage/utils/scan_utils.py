@@ -12,6 +12,8 @@ from shapely.geometry import Polygon, LineString, MultiPolygon
 from shapely.ops import unary_union
 from shapely.affinity import rotate
 from shapely.geometry import Point
+import math
+import math
 
 
 def _is_vertical_corridor(rot_area: Union[Polygon, MultiPolygon], x: float, y0: float, y1: float) -> bool:
@@ -93,7 +95,7 @@ def generate_rays_first_contact(work_area: Union[Polygon, MultiPolygon], spacing
         if segs:
             def seg_min_x(s: LineString) -> float:
                 xs = [p[0] for p in s.coords]
-                return min(xs)
+                return min(xs) if xs else float('inf')
             segs.sort(key=seg_min_x)
             rays_rot.append(segs[0])
         y += spacing_m
@@ -135,10 +137,12 @@ def connect_rays_vertical(work_area: Union[Polygon, MultiPolygon], spacing_m: fl
             # 取"首段"（最小 x 起点）
             def seg_min_x(s: LineString) -> float:
                 xs = [p[0] for p in s.coords]
-                return min(xs)
+                return min(xs) if xs else float('inf')
             line_segs.sort(key=seg_min_x)
             s = line_segs[0]
             xs = [p[0] for p in s.coords]
+            if not xs:
+                continue
             xmin = min(xs)
             xmax = max(xs)
             segs.append((y, xmin, xmax))
@@ -264,7 +268,7 @@ def trim_rays_by_connectors(work_area: Union[Polygon, MultiPolygon], spacing_m: 
             # 取"首段"（最小 x 起点）
             def seg_min_x(s: LineString) -> float:
                 xs = [p[0] for p in s.coords]
-                return min(xs)
+                return min(xs) if xs else float('inf')
             line_segs.sort(key=seg_min_x)
             s = line_segs[0]
             rays_rot.append((y, s))
@@ -278,6 +282,8 @@ def trim_rays_by_connectors(work_area: Union[Polygon, MultiPolygon], spacing_m: 
     trimmed_rot: List[LineString] = []
     for (y0, s) in rays_rot:
         xs = [p[0] for p in s.coords]
+        if not xs:
+            continue
         xmin = min(xs)
         xmax = max(xs)
         # 收集与此 y0 相交的连线 x 位置
@@ -612,17 +618,16 @@ def select_even_row_spacing(poly: Polygon, angle_deg: float, min_spacing: float,
     height = maxy - miny
     if height < 1e-3:
         return None
-    
+
     # 尝试寻找最佳行距 s，使得 height ~= k * s，且 k 为偶数
     # k = height / s => s = height / k
     # min_spacing <= height / k <= max_spacing
     # height / max_spacing <= k <= height / min_spacing
     k_min = math.ceil(height / max_spacing)
     k_max = math.floor(height / min_spacing)
-    
+
     best_s = None
     # 优先找偶数 k
-    import math
     for k in range(k_min, k_max + 1):
         if k % 2 == 0 and k > 0:
             s = height / k
@@ -672,109 +677,219 @@ def choose_boundary_orientation_by_far_vertex(work_area: Union[Polygon, MultiPol
     return 'ccw'
 
 
+def _largest_polygon(area: Union[Polygon, MultiPolygon]) -> Polygon:
+    if isinstance(area, MultiPolygon):
+        polys = list(area.geoms)
+        if not polys:
+            from shapely.geometry import Polygon as _Polygon
+            return _Polygon()
+        polys.sort(key=lambda p: p.area, reverse=True)
+        return polys[0]
+    return area
+
+def _ring_orientation(coords: List[Tuple[float, float]]) -> float:
+    a = 0.0
+    n = len(coords)
+    for i in range(n - 1):
+        x1, y1 = coords[i]
+        x2, y2 = coords[i + 1]
+        a += (x1 * y2 - x2 * y1)
+    return a * 0.5
+
+def _ensure_ring_orientation(coords: List[Tuple[float, float]], cw: bool) -> List[Tuple[float, float]]:
+    if len(coords) >= 2 and coords[0] == coords[-1]:
+        coords = coords[:-1]
+    area_sign = _ring_orientation(coords + [coords[0]])
+    want_ccw = not cw
+    is_ccw = area_sign > 0
+    if want_ccw == is_ccw:
+        return coords
+    else:
+        return list(reversed(coords))
+
+def _slice_line_by_distance(line: LineString, d0: float, d1: float) -> LineString:
+    if d0 == d1:
+        pt = line.interpolate(d0)
+        return LineString([pt.coords[0], pt.coords[0]])
+    if d0 > d1:
+        d0, d1 = d1, d0
+    coords = list(line.coords)
+    segs: List[Tuple[Tuple[float, float], Tuple[float, float]]] = []
+    for i in range(len(coords) - 1):
+        segs.append((coords[i], coords[i + 1]))
+    res: List[Tuple[float, float]] = []
+    acc = 0.0
+    started = False
+    for (x0, y0), (x1, y1) in segs:
+        seg_len = math.hypot(x1 - x0, y1 - y0)
+        if seg_len <= 1e-12:
+            continue
+        seg_start = acc
+        seg_end = acc + seg_len
+        a = max(seg_start, d0)
+        b = min(seg_end, d1)
+        if a <= b + 1e-12:
+            ra = (a - seg_start) / seg_len
+            rb = (b - seg_start) / seg_len
+            px_a = x0 + (x1 - x0) * ra
+            py_a = y0 + (y1 - y0) * ra
+            px_b = x0 + (x1 - x0) * rb
+            py_b = y0 + (y1 - y0) * rb
+            if not started:
+                res.append((px_a, py_a))
+                started = True
+            else:
+                if abs(res[-1][0] - px_a) > 1e-9 or abs(res[-1][1] - py_a) > 1e-9:
+                    res.append((px_a, py_a))
+            res.append((px_b, py_b))
+        acc += seg_len
+    if len(res) < 2:
+        pt = line.interpolate(d0)
+        return LineString([pt.coords[0], pt.coords[0]])
+    return LineString(res)
+
 def connect_polylines_along_outer_boundary(work_area: Union[Polygon, MultiPolygon],
                                            path1: LineString,
                                            paths2: List[LineString],
-                                           orientation: str = 'ccw') -> LineString:
-    """
-    沿外环连接第一遍路径和第二遍路径集合。
-    简化实现：直接将所有线段端点按"最近邻"或"外环顺序"连接。
-    """
-    # 这是一个复杂的拓扑连接问题。
-    # 简化版：将 path1 和 paths2 视为一堆线段。
-    # path1 是主骨架。paths2 是补漏。
-    # 策略：path1 结束点 -> 沿外环 -> paths2 中最近的起点 -> paths2 终点 -> 沿外环 -> 下一个...
-    
-    # 构造外环 LinearRing
-    largest = work_area if isinstance(work_area, Polygon) else max(work_area.geoms, key=lambda p: p.area)
-    ring = largest.exterior
-    if orientation == 'cw' and ring.is_ccw:
-        ring = LineString(list(ring.coords)[::-1])
-    elif orientation == 'ccw' and not ring.is_ccw:
-        ring = LineString(list(ring.coords)[::-1])
-    
-    # 将 path1 放入结果
-    coords = list(path1.coords)
-    
-    # 贪心连接 paths2
-    remain = paths2[:]
-    while remain:
-        curr_end = coords[-1]
-        # 在剩余路径中找起点距离 curr_end 沿外环最近的
-        best_idx = -1
-        best_dist = float('inf')
-        best_entry_path = None # 连接路径
-        
-        curr_proj = ring.project(Point(curr_end))
-        
-        for i, p in enumerate(remain):
-            # 尝试 p 的正向和反向
-            p_start = p.coords[0]
-            p_end = p.coords[-1]
-            
-            # 沿环距离：从 curr_proj 到 p_start_proj
-            start_proj = ring.project(Point(p_start))
-            if start_proj >= curr_proj:
-                d = start_proj - curr_proj
+                                           orientation: str = 'cw') -> LineString:
+    if not path1 or path1.is_empty:
+        return LineString([])
+    largest = _largest_polygon(work_area)
+    ring_coords = list(largest.exterior.coords)
+    cw = True if orientation.lower() == 'cw' else False
+    oriented = _ensure_ring_orientation(ring_coords, cw)
+    ring_line = LineString(oriented + [oriented[0]])
+    L = ring_line.length
+    def anchor_dist(pt_xy: Tuple[float, float]) -> float:
+        return ring_line.project(Point(pt_xy))
+    p1 = list(path1.coords)[-1]
+    current_anchor = p1
+    current_path: List[Tuple[float, float]] = []
+    current_path.extend(list(path1.coords))
+    remaining = [ln for ln in paths2 if ln and not ln.is_empty]
+    while remaining:
+        ca_d = anchor_dist(current_anchor)
+        best = None
+        best_delta = None
+        best_start = None
+        best_end = None
+        for ln in remaining:
+            a = list(ln.coords)[0]
+            b = list(ln.coords)[-1]
+            da = anchor_dist(a)
+            db = anchor_dist(b)
+            def delta(d):
+                dd = d - ca_d
+                if dd < 0:
+                    dd += L
+                return dd
+            da_delta = delta(da)
+            db_delta = delta(db)
+            if da_delta <= db_delta:
+                start_pt, end_pt, dsel = a, b, da_delta
             else:
-                d = ring.length - (curr_proj - start_proj)
-            
-            if d < best_dist:
-                best_dist = d
-                best_idx = i
-                best_entry_path = _get_ring_segment(ring, curr_proj, start_proj)
-                
-        if best_idx != -1:
-            # 添加连接段
-            if best_entry_path:
-                coords.extend(list(best_entry_path.coords))
-            # 添加下一段路径
-            next_p = remain.pop(best_idx)
-            coords.extend(list(next_p.coords))
-        else:
-            break
-            
-    return LineString(coords)
-
-
-def _get_ring_segment(ring: LineString, d_start: float, d_end: float) -> LineString:
-    """获取环上从 d_start 到 d_end 的片段"""
-    coords = []
-    L = ring.length
-    if d_start <= d_end:
-        # 简单截取
-        pts = [ring.interpolate(d) for d in [d_start, d_end]] # 简化，实际应包含中间拐点
-        # 获取中间所有坐标点
-        # 这是一个简化实现，生产环境需要更严谨的几何截取
-        return LineString(pts)
-    else:
-        # 跨越终点
-        # start -> L
-        # 0 -> end
-        pts1 = [ring.interpolate(d_start), ring.interpolate(L)]
-        pts2 = [ring.interpolate(0), ring.interpolate(d_end)]
-        return LineString(pts1 + pts2)
+                start_pt, end_pt, dsel = b, a, db_delta
+            if best is None or dsel < best_delta:
+                best = ln
+                best_delta = dsel
+                best_start = start_pt
+                best_end = end_pt
+        d0 = ca_d
+        d1 = anchor_dist(best_start)
+        seg = _slice_line_by_distance(ring_line, d0, d1) if d0 <= d1 else LineString(list(_slice_line_by_distance(ring_line, d0, L).coords) + list(_slice_line_by_distance(ring_line, 0.0, d1).coords))
+        for xy in list(seg.coords):
+            if not current_path or abs(current_path[-1][0] - xy[0]) > 1e-9 or abs(current_path[-1][1] - xy[1]) > 1e-9:
+                current_path.append(xy)
+        coords_ln = list(best.coords)
+        if coords_ln[0] != best_start:
+            coords_ln = list(reversed(coords_ln))
+        for xy in coords_ln:
+            if not current_path or abs(current_path[-1][0] - xy[0]) > 1e-9 or abs(current_path[-1][1] - xy[1]) > 1e-9:
+                current_path.append(xy)
+        current_anchor = best_end
+        remaining.remove(best)
+    if len(current_path) < 2:
+        return LineString([])
+    return LineString(current_path)
 
 
 def connect_path_with_entry_exit_along_outer_boundary(work_area: Union[Polygon, MultiPolygon],
                                                       path: LineString,
-                                                      entry_local: Tuple[float, float],
-                                                      exit_local: Tuple[float, float],
+                                                      entry_local: Tuple[float, float] = None,
+                                                      exit_local: Tuple[float, float] = None,
                                                       orientation_entry: str = 'auto',
                                                       orientation_exit: str = 'auto') -> LineString:
-    """
-    将入口连接到路径起点，将路径终点连接到出口。
-    """
     if not path or path.is_empty:
-        return LineString([entry_local, exit_local])
-    
+        return LineString([])
+    largest = _largest_polygon(work_area)
+    ring_coords = list(largest.exterior.coords)
+    ring_line = LineString(ring_coords + [ring_coords[0]])
+    L = ring_line.length
+    def to_ring_point_and_dist(pt: Tuple[float, float]) -> Tuple[Tuple[float, float], float]:
+        d = ring_line.project(Point(pt))
+        p = ring_line.interpolate(d)
+        return p.coords[0], d
+    def slice_by_orientation(d0: float, d1: float, ori: str) -> LineString:
+        def forward(d0_: float, d1_: float) -> LineString:
+            if d0_ <= d1_:
+                return _slice_line_by_distance(ring_line, d0_, d1_)
+            else:
+                a = _slice_line_by_distance(ring_line, d0_, L)
+                b = _slice_line_by_distance(ring_line, 0.0, d1_)
+                return LineString(list(a.coords) + list(b.coords))
+        if ori.lower() in ('cw', 'clockwise'):
+            return forward(d0, d1)
+        if ori.lower() in ('ccw', 'counterclockwise'):
+            seg = forward(d1, d0)
+            return LineString(list(reversed(list(seg.coords))))
+        def arc_len(d0_: float, d1_: float) -> float:
+            return (d1_ - d0_) if (d1_ >= d0_) else (L - d0_ + d1_)
+        cw_len = arc_len(d0, d1)
+        ccw_len = L - cw_len
+        return forward(d0, d1) if cw_len <= ccw_len else LineString(list(reversed(list(forward(d1, d0).coords))))
     coords = list(path.coords)
-    
-    # 入口 -> 起点
-    # 简单直线连接（实际应沿外环）
-    coords.insert(0, entry_local)
-    
-    # 终点 -> 出口
-    coords.append(exit_local)
-    
+    if entry_local is not None and coords:
+        entry_xy, de = to_ring_point_and_dist(entry_local)
+        start_xy, ds = to_ring_point_and_dist(coords[0])
+        seg = slice_by_orientation(de, ds, orientation_entry)
+        pre: List[Tuple[float, float]] = []
+        for xy in list(seg.coords):
+            if not pre or abs(pre[-1][0] - xy[0]) > 1e-9 or abs(pre[-1][1] - xy[1]) > 1e-9:
+                pre.append(xy)
+        coords = pre + coords
+    if exit_local is not None and coords:
+        end_xy, dd = to_ring_point_and_dist(coords[-1])
+        exit_xy, dx = to_ring_point_and_dist(exit_local)
+        seg = slice_by_orientation(dd, dx, orientation_exit)
+        post: List[Tuple[float, float]] = []
+        for xy in list(seg.coords):
+            if abs(coords[-1][0] - xy[0]) > 1e-9 or abs(coords[-1][1] - xy[1]) > 1e-9:
+                post.append(xy)
+        coords = coords + post
+    if len(coords) < 2:
+        return LineString([])
     return LineString(coords)
+
+
+def choose_boundary_orientation_by_far_vertex(work_area: Union[Polygon, MultiPolygon], anchor_pt: Tuple[float, float]) -> str:
+    largest = _largest_polygon(work_area)
+    ring_coords = list(largest.exterior.coords)
+    oriented_cw = _ensure_ring_orientation(ring_coords, cw=True)
+    closed = oriented_cw + [oriented_cw[0]]
+    ring_line = LineString(closed)
+    L = ring_line.length
+    d = ring_line.project(Point(anchor_pt))
+    seg_starts: List[float] = [0.0]
+    for i in range(len(closed) - 1):
+        x0, y0 = closed[i]
+        x1, y1 = closed[i + 1]
+        seg_len = math.hypot(x1 - x0, y1 - y0)
+        seg_starts.append(seg_starts[-1] + seg_len)
+    k = 0
+    for i in range(len(seg_starts) - 1):
+        if seg_starts[i] <= d <= seg_starts[i + 1] + 1e-12:
+            k = i
+            break
+    cw_dist = seg_starts[k + 1] - d
+    ccw_dist = d - seg_starts[k]
+    return 'cw' if cw_dist >= ccw_dist else 'ccw'

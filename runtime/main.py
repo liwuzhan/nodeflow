@@ -28,6 +28,56 @@ from runtime.utils.constants import BUFFERS_DIR
 logger = setup_logger("nodeflow")
 
 
+def fetch_gps_ref_from_simulator(host='localhost', port=5555, timeout_ms=2000):
+    """
+    从仿真器获取GPS参考点配置
+
+    Args:
+        host: 仿真器主机地址
+        port: 仿真器端口
+        timeout_ms: 超时时间（毫秒）
+
+    Returns:
+        (ref_lon, ref_lat): GPS参考点经纬度，失败时返回默认值(121.5, 31.2)
+    """
+    import zmq
+
+    default_lon, default_lat = 121.5, 31.2
+
+    try:
+        context = zmq.Context()
+        socket = context.socket(zmq.REQ)
+        socket.connect(f"tcp://{host}:{port}")
+        socket.setsockopt(zmq.RCVTIMEO, timeout_ms)
+        socket.setsockopt(zmq.SNDTIMEO, timeout_ms)
+
+        # 请求配置
+        socket.send_json({"type": "get_config"})
+        response = socket.recv_json()
+
+        if response.get("status") == "ok":
+            gps_ref = response.get("config", {}).get("gps_ref", {})
+            ref_lon = gps_ref.get("lon", default_lon)
+            ref_lat = gps_ref.get("lat", default_lat)
+            logger.info(f"✅ 从仿真器获取GPS参考点: ({ref_lon:.6f}, {ref_lat:.6f})")
+            return ref_lon, ref_lat
+        else:
+            logger.warning(f"仿真器返回错误状态: {response.get('status')}")
+    except zmq.error.Again:
+        logger.warning(f"连接仿真器超时 ({host}:{port})，使用默认GPS参考点")
+    except Exception as e:
+        logger.warning(f"获取仿真器GPS参考点失败: {e}，使用默认值")
+    finally:
+        try:
+            socket.close()
+            context.term()
+        except:
+            pass
+
+    logger.info(f"使用默认GPS参考点: ({default_lon}, {default_lat})")
+    return default_lon, default_lat
+
+
 class NodeFlowRuntime:
     """NodeFlow运行时主类"""
 
@@ -116,23 +166,43 @@ class NodeFlowRuntime:
         try:
             logger.warning("Emergency cleanup triggered - terminating child processes")
 
-            # 终止所有子进程
+            # 终止所有子进程（包括其整个进程组/子进程树）
             for node_id, process in list(self.processes.items()):
                 try:
                     if process.poll() is None:  # 仍在运行
                         logger.warning(f"Emergency terminating node '{node_id}' (PID {process.pid})")
-                        process.terminate()
+
+                        # 先尝试杀死整个进程组（包含所有子进程）
                         try:
-                            process.wait(timeout=2.0)  # 紧急情况下使用较短超时
-                        except subprocess.TimeoutExpired:
-                            process.kill()
+                            if sys.platform != "win32":
+                                # Unix/macOS: 杀死整个进程组
+                                # 当使用 start_new_session=True 时，process.pid 就是进程组 ID
+                                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                            else:
+                                # Windows: 无法杀死进程组，只能杀死主进程
+                                process.kill()
+                        except (OSError, ProcessLookupError):
+                            # 如果进程组杀死失败，尝试杀死单个进程
+                            try:
+                                process.kill()
+                            except ProcessLookupError:
+                                pass  # 进程已退出
+
+                        # 短暂等待进程确实退出
+                        try:
                             process.wait(timeout=1.0)
+                        except subprocess.TimeoutExpired:
+                            logger.error(f"Node '{node_id}' did not respond to SIGKILL in emergency cleanup")
+
                 except (ProcessLookupError, OSError):
-                    # 进程已退出，没问题
+                    # 进程已退出或进程组已不存在，没问题
                     pass
                 except Exception as e:
                     # 记录日志但不抛出异常 - atexit 处理器必须静默
-                    logger.error(f"Error in emergency cleanup for '{node_id}': {e}")
+                    try:
+                        logger.error(f"Error in emergency cleanup for '{node_id}': {e}")
+                    except:
+                        pass  # 日志记录失败，忽略
 
             # 清理 PID 文件
             self._cleanup_pid_file()
@@ -435,6 +505,13 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # 从仿真器获取GPS参考点并设置环境变量（用于coord_transform等节点）
+    logger.info("正在获取GPS参考点...")
+    ref_lon, ref_lat = fetch_gps_ref_from_simulator()
+    os.environ['GPS_REF_LON'] = str(ref_lon)
+    os.environ['GPS_REF_LAT'] = str(ref_lat)
+    logger.info(f"已设置环境变量: GPS_REF_LON={ref_lon}, GPS_REF_LAT={ref_lat}")
 
     # 创建并运行（默认清理缓冲区，除非指定 --no-clean-buffers）
     clean_buffers = not args.no_clean_buffers

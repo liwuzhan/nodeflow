@@ -1,0 +1,50 @@
+name: coord_transform
+version: "1.0"
+description: "坐标系转换节点 - 将WGS84坐标转换为ENU局部笛卡尔坐标系"
+
+metadata:
+  input_coordinate_system: WGS84
+  output_coordinate_system: ENU
+  heading_convention_in: geographic   # 输入: 北=0, CW正, 度
+  heading_convention_out: mathematical # 输出: 东=0, CCW正, 弧度
+
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+  macos:
+    kind: python
+    cmd: ["python3", "run.py"]
+  windows:
+    kind: python
+    cmd: ["python", "run.py"]
+
+ports:
+  inputs:
+    - name: rtk_fix
+      type: sensor.rtk
+      description: |
+        RTK GPS数据 (WGS84)
+        - latitude/longitude: 度
+        - heading: 度, 地理坐标系 (北=0, CW正)
+
+  outputs:
+    - name: pose_enu
+      type: localization.pose_enu
+      description: |
+        ENU局部坐标系姿态
+        - x: 东向距离 (米)
+        - y: 北向距离 (米)
+        - theta: 航向角 (弧度, 数学坐标系, 东=0, CCW正)
+        - timestamp: 时间戳
+
+params:
+  ref_longitude:
+    type: float
+    default: null
+    description: "GPS参考点经度 (度), null表示从环境变量GPS_REF_LON读取"
+
+  ref_latitude:
+    type: float
+    default: null
+    description: "GPS参考点纬度 (度), null表示从环境变量GPS_REF_LAT读取"

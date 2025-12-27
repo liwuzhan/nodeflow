@@ -13,9 +13,9 @@ ports:
     - name: global_path
       type: planning.path
       description: "全局路径"
-    - name: filtered_rtk
-      type: json
-      description: "滤波后的RTK"
+    - name: pose_enu
+      type: localization.pose_enu
+      description: "ENU坐标姿态 (x, y, theta)"
   outputs:
     - name: next_point
       type: json
