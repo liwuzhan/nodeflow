@@ -94,6 +94,237 @@ def create_parser() -> argparse.ArgumentParser:
         help='节点库路径 (默认: ./node-hub)'
     )
 
+    # ========== buffer 命令组 ==========
+    buffer_parser = subparsers.add_parser(
+        'buffer',
+        help='共享缓冲区诊断命令',
+        description='检查 /tmp/nodeflow/buffers 下的共享缓冲区文件与内容'
+    )
+    buffer_subparsers = buffer_parser.add_subparsers(
+        dest='subcommand',
+        help='buffer 子命令',
+        metavar='SUBCOMMAND'
+    )
+    buffer_list_parser = buffer_subparsers.add_parser(
+        'list',
+        help='列出所有共享缓冲区文件',
+        description='显示缓冲区名称、大小、当前序列号、数据长度'
+    )
+    buffer_list_parser.add_argument(
+        '--dir',
+        default='/tmp/nodeflow/buffers',
+        help='缓冲区目录 (默认: /tmp/nodeflow/buffers)'
+    )
+    buffer_inspect_parser = buffer_subparsers.add_parser(
+        'inspect',
+        help='查看指定缓冲区的详细内容',
+        description='显示序列号、数据长度，并尝试反序列化展示摘要'
+    )
+    buffer_inspect_parser.add_argument(
+        'name',
+        help='缓冲区名称 (例如 sim_output.rtk_fix 或 文件名不含扩展名)'
+    )
+    buffer_inspect_parser.add_argument(
+        '--dir',
+        default='/tmp/nodeflow/buffers',
+        help='缓冲区目录 (默认: /tmp/nodeflow/buffers)'
+    )
+    buffer_inspect_parser.add_argument(
+        '--raw',
+        action='store_true',
+        help='以十六进制原始字节显示，不尝试解码'
+    )
+
+    # ========== health 命令组 ==========
+    health_parser = subparsers.add_parser(
+        'health',
+        help='工作流健康检查',
+        description='解析配置文件，检测预期缓冲区是否存在并在给定时间窗口内增长'
+    )
+    health_parser.add_argument(
+        '--config',
+        required=True,
+        help='运行场景配置文件路径 (如 examples/planning_simulation.yaml)'
+    )
+    health_parser.add_argument(
+        '--interval',
+        type=float,
+        default=1.0,
+        help='采样间隔秒数 (默认: 1.0)'
+    )
+    health_parser.add_argument(
+        '--dir',
+        default='/tmp/nodeflow/buffers',
+        help='缓冲区目录 (默认: /tmp/nodeflow/buffers)'
+    )
+    health_parser.add_argument(
+        '--json',
+        action='store_true',
+        help='以 JSON 格式输出'
+    )
+    sim_parser = subparsers.add_parser(
+        'simulator',
+        help='仿真器控制命令',
+        description='对外部仿真器发送控制与查询请求'
+    )
+    sim_subparsers = sim_parser.add_subparsers(
+        dest='subcommand',
+        help='simulator 子命令',
+        metavar='SUBCOMMAND'
+    )
+    sim_refresh_parser = sim_subparsers.add_parser(
+        'refresh',
+        help='刷新仿真器地块',
+        description='请求仿真器重新生成地块并重置初始位置'
+    )
+    sim_refresh_parser.add_argument(
+        '--host',
+        default='localhost',
+        help='仿真器主机（默认 localhost）'
+    )
+    sim_refresh_parser.add_argument(
+        '--port',
+        type=int,
+        default=5555,
+        help='仿真器端口（默认 5555）'
+    )
+    monitor_parser = subparsers.add_parser(
+        'monitor',
+        help='缓冲区实时监控',
+        description='以固定间隔监控缓冲区序列号增长和内容摘要'
+    )
+    monitor_parser.add_argument(
+        '--config',
+        required=True,
+        help='运行场景配置文件路径'
+    )
+    monitor_parser.add_argument(
+        '--names',
+        nargs='*',
+        help='要监控的缓冲区名称列表，如 sim_output.rtk_fix'
+    )
+    monitor_parser.add_argument(
+        '--interval',
+        type=float,
+        default=1.0,
+        help='采样间隔秒数'
+    )
+    monitor_parser.add_argument(
+        '--iterations',
+        type=int,
+        default=0,
+        help='迭代次数，0表示无限'
+    )
+    monitor_parser.add_argument(
+        '--json',
+        action='store_true',
+        help='以 JSON 事件输出'
+    )
+
+    # ========== runtime 命令组（新增）==========
+    runtime_parser = subparsers.add_parser(
+        'runtime',
+        help='运行时框架控制',
+        description='启动、停止、重启框架，以及控制数据流'
+    )
+    runtime_subparsers = runtime_parser.add_subparsers(
+        dest='subcommand',
+        help='runtime 子命令',
+        metavar='SUBCOMMAND'
+    )
+
+    # runtime start
+    runtime_start_parser = runtime_subparsers.add_parser(
+        'start',
+        help='启动运行时框架',
+        description='启动 NodeFlow 框架（可在后台运行）'
+    )
+    runtime_start_parser.add_argument(
+        'config',
+        help='运行配置文件路径'
+    )
+    runtime_start_parser.add_argument(
+        '--background', '-b',
+        action='store_true',
+        help='在后台运行'
+    )
+    runtime_start_parser.add_argument(
+        '--log-level',
+        default='INFO',
+        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
+        help='日志级别（默认：INFO）'
+    )
+    runtime_start_parser.add_argument(
+        '--no-clean-buffers',
+        action='store_true',
+        help='禁用启动前清理缓冲区'
+    )
+    runtime_start_parser.add_argument(
+        '--json',
+        action='store_true',
+        help='以 JSON 格式输出'
+    )
+
+    # runtime stop
+    runtime_stop_parser = runtime_subparsers.add_parser(
+        'stop',
+        help='停止运行时框架',
+        description='停止正在运行的 NodeFlow 框架'
+    )
+    runtime_stop_parser.add_argument(
+        '--json',
+        action='store_true',
+        help='以 JSON 格式输出'
+    )
+
+    # runtime status
+    runtime_status_parser = runtime_subparsers.add_parser(
+        'status',
+        help='检查运行时状态',
+        description='显示框架运行状态和资源使用情况'
+    )
+    runtime_status_parser.add_argument(
+        '--json',
+        action='store_true',
+        help='以 JSON 格式输出'
+    )
+
+    # runtime start-dataflow
+    runtime_start_df_parser = runtime_subparsers.add_parser(
+        'start-dataflow',
+        help='启动数据流',
+        description='启动数据流（框架必须已运行）'
+    )
+    runtime_start_df_parser.add_argument(
+        '--json',
+        action='store_true',
+        help='以 JSON 格式输出'
+    )
+
+    # runtime stop-dataflow
+    runtime_stop_df_parser = runtime_subparsers.add_parser(
+        'stop-dataflow',
+        help='停止数据流',
+        description='停止数据流但不关闭框架'
+    )
+    runtime_stop_df_parser.add_argument(
+        '--json',
+        action='store_true',
+        help='以 JSON 格式输出'
+    )
+
+    # runtime restart-dataflow
+    runtime_restart_df_parser = runtime_subparsers.add_parser(
+        'restart-dataflow',
+        help='重启数据流',
+        description='先停止再启动数据流'
+    )
+    runtime_restart_df_parser.add_argument(
+        '--json',
+        action='store_true',
+        help='以 JSON 格式输出'
+    )
+
     return parser
 
 
@@ -112,6 +343,26 @@ def main():
         if args.command == 'node':
             from tools.cli.commands.node_cmd import handle_node_command
             exit_code = handle_node_command(args)
+            sys.exit(exit_code)
+        elif args.command == 'buffer':
+            from tools.cli.commands.buffer_cmd import handle_buffer_command
+            exit_code = handle_buffer_command(args)
+            sys.exit(exit_code)
+        elif args.command == 'health':
+            from tools.cli.commands.health_cmd import handle_health_command
+            exit_code = handle_health_command(args)
+            sys.exit(exit_code)
+        elif args.command == 'simulator':
+            from tools.cli.commands.simulator_cmd import handle_simulator_command
+            exit_code = handle_simulator_command(args)
+            sys.exit(exit_code)
+        elif args.command == 'monitor':
+            from tools.cli.commands.monitor_cmd import handle_monitor_command
+            exit_code = handle_monitor_command(args)
+            sys.exit(exit_code)
+        elif args.command == 'runtime':
+            from tools.cli.commands.runtime_cmd import handle_runtime_command
+            exit_code = handle_runtime_command(args)
             sys.exit(exit_code)
         else:
             print(f"Error: Unknown command '{args.command}'", file=sys.stderr)

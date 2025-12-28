@@ -586,12 +586,127 @@ class NodeFlowRuntime:
             logger.error(f"Fatal error in loop mode: {e}", exc_info=True)
             return 1
 
+    def run_as_daemon(self):
+        """
+        运行框架（守护进程模式）
+
+        初始化框架，但不自动启动数据流。
+        监听控制缓冲区，等待来自 CLI 的命令。
+
+        支持的命令：
+        - start_dataflow: 启动数据流
+        - stop_dataflow: 停止数据流
+        - shutdown: 关闭框架
+        """
+        try:
+            # 初始化框架（一次性）
+            result = self._initialize_framework()
+            if result != 0:
+                return result
+
+            logger.info("=" * 60)
+            logger.info("Runtime is RUNNING (Daemon mode)")
+            logger.info("Waiting for control commands from CLI")
+            logger.info("=" * 60)
+
+            self.running = True
+            self.start_time = time.time()
+            self._write_pid_file()
+
+            # 创建或打开控制缓冲区
+            control_buf = None
+            try:
+                from sdk.shared_buffer_lite import SharedBufferLite
+                control_buf = SharedBufferLite("runtime.control", create=True, buffer_size=1024)
+                logger.info("Control buffer ready: runtime.control")
+            except Exception as e:
+                logger.error(f"Failed to create control buffer: {e}")
+                return 1
+
+            last_command_timestamp = 0
+
+            try:
+                while self.running:
+                    time.sleep(0.5)
+
+                    # 读取控制命令
+                    try:
+                        cmd_pkt = control_buf.read()
+                        if not cmd_pkt:
+                            continue
+
+                        # 检查是否是新命令（避免重复执行）
+                        timestamp = cmd_pkt.get("timestamp", 0)
+                        if timestamp <= last_command_timestamp:
+                            continue
+
+                        last_command_timestamp = timestamp
+                        command = cmd_pkt.get("command")
+
+                        logger.info(f"Received command: {command}")
+
+                        if command == "start_dataflow":
+                            if not self.dataflow_running:
+                                try:
+                                    self.start_dataflow()
+                                    logger.info("✓ Dataflow started by CLI command")
+                                except Exception as e:
+                                    logger.error(f"Failed to start dataflow: {e}")
+                            else:
+                                logger.warning("Dataflow already running, ignoring start command")
+
+                        elif command == "stop_dataflow":
+                            if self.dataflow_running:
+                                try:
+                                    self.stop_dataflow()
+                                    logger.info("✓ Dataflow stopped by CLI command")
+                                except Exception as e:
+                                    logger.error(f"Failed to stop dataflow: {e}")
+                            else:
+                                logger.warning("Dataflow not running, ignoring stop command")
+
+                        elif command == "shutdown":
+                            logger.info("Shutdown command received, exiting...")
+                            self.running = False
+                            break
+
+                        else:
+                            logger.warning(f"Unknown command: {command}")
+
+                    except Exception as e:
+                        logger.error(f"Error processing control command: {e}")
+
+            except KeyboardInterrupt:
+                logger.info("Received keyboard interrupt, shutting down...")
+
+            # 停止数据流（如果在运行）
+            if self.dataflow_running:
+                try:
+                    self.stop_dataflow()
+                except Exception:
+                    pass
+
+            # 清理 PID 文件
+            self._cleanup_pid_file()
+
+            logger.info("=" * 60)
+            logger.info("Daemon mode stopped")
+            logger.info("=" * 60)
+
+            # 标记关闭完成
+            self.shutdown_complete = True
+            return 0
+
+        except Exception as e:
+            logger.error(f"Fatal error in daemon mode: {e}", exc_info=True)
+            return 1
+
     def _write_pid_file(self):
         """写入 PID 文件"""
         try:
             pid_file = Path("/tmp/nodeflow_runtime.pid")
             with open(pid_file, 'w') as f:
-                f.write(f"{os.getpid()}\n{self.start_time}")
+                f.write(f"{os.getpid()}\n{self.start_time if self.start_time else time.time()}")
             logger.debug(f"PID file written: {os.getpid()}")
         except Exception as e:
             logger.error(f"Failed to write PID file: {e}")
@@ -644,6 +759,11 @@ def main():
         default=5,
         help='循环间隔时间（秒），默认5秒'
     )
+    parser.add_argument(
+        '--daemon',
+        action='store_true',
+        help='守护进程模式：启动框架但不启动数据流，通过 CLI 命令控制'
+    )
 
     args = parser.parse_args()
 
@@ -651,8 +771,11 @@ def main():
     clean_buffers = not args.no_clean_buffers
     runtime = NodeFlowRuntime(args.config, args.log_level, args.duration, clean_buffers)
 
+    # 守护进程模式
+    if args.daemon:
+        return runtime.run_as_daemon()
     # 如果指定了--loop参数，使用多轮循环模式
-    if args.loop is not None:
+    elif args.loop is not None:
         num_loops = None if args.loop == 0 else args.loop
         return runtime.run_with_loop(num_loops=num_loops, loop_interval=args.loop_interval)
     else:
