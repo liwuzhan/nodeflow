@@ -23,14 +23,48 @@ python3 -m runtime.main <config.yaml> [OPTIONS]
 
 # 多轮循环模式（新增）
 python3 -m runtime.main <config.yaml> --loop N [OPTIONS]
+
+# 守护进程模式（新增）
+python3 -m runtime.main <config.yaml> --daemon
 ```
 
 **关键参数**：
 - `--loop N`: 运行 N 轮启动-停止循环（0 表示无限循环）
 - `--loop-interval SEC`: 循环间隔时间，默认 5 秒
+- `--daemon`: 启用守护进程模式（框架持续运行，等待 CLI 命令控制）
 - `--log-level {DEBUG,INFO,WARNING,ERROR}`: 日志级别
 - `--duration SEC`: 自动关机时间（单次模式）
 - `--no-clean-buffers`: 禁用启动前清理缓冲区
+
+### 1.3 守护进程 CLI 控制（新增）
+
+当框架以 `--daemon` 模式运行时，可通过 CLI 命令动态控制数据流：
+
+```bash
+# 启动框架（后台）
+python3 tools/cli/core/cli.py runtime start <config.yaml> --background
+
+# 检查框架状态
+python3 tools/cli/core/cli.py runtime status
+
+# 启动数据流
+python3 tools/cli/core/cli.py runtime start-dataflow
+
+# 停止数据流
+python3 tools/cli/core/cli.py runtime stop-dataflow
+
+# 重启数据流
+python3 tools/cli/core/cli.py runtime restart-dataflow
+
+# 停止框架
+python3 tools/cli/core/cli.py runtime stop
+```
+
+**关键特性**：
+- 框架和数据流可独立控制
+- 支持多次启停而无需重启框架
+- 通过共享缓冲区 `runtime.control` 实现进程间通信
+- 后台日志输出到 `/tmp/nodeflow_runtime.log`
 
 ## 2. 核心能力与场景映射
 
@@ -40,6 +74,8 @@ python3 -m runtime.main <config.yaml> --loop N [OPTIONS]
 | **契约检查** | 这个节点的输入/输出格式是什么？ | `node info` | `<package_name>` |
 | **运行时启动** | 启动框架和数据流 | `runtime.main` | `<config.yaml>` |
 | **多轮测试** | 运行多个完整的启动-停止周期 | `runtime.main` | `--loop N` |
+| **守护进程启动** | 启动后台框架，用 CLI 控制启停 | `runtime start` | `--background` |
+| **动态控制数据流** | 在运行中启动/停止数据流（不关框架） | `runtime start-dataflow` | (无) |
 | **存活检查** | 节点是否正在运行并产生数据？ | `buffer list` | (无) |
 | **数据审计** | 节点输出的具体数据内容对不对？ | `buffer inspect` | `<buffer_name>` |
 | **系统体检** | 整个数据流是否通畅（无阻塞）？ | `health` | `--config <yaml>` |
@@ -98,6 +134,75 @@ python3 -m runtime.main examples/planning_simulation.yaml --log-level DEBUG
 # 自动关机（用于测试）
 python3 -m runtime.main examples/planning_simulation.yaml --duration 30
 ```
+
+### SOP-0.5: 守护进程模式（后台框架动态控制）
+
+当你需要启动框架后台服务，通过 CLI 命令灵活控制数据流启停时：
+
+#### 场景 A: 启动后台框架
+```bash
+# 1. 启动框架（后台运行）
+python3 tools/cli/core/cli.py runtime start examples/planning_simulation.yaml --background
+
+# 2. 检查框架运行状态
+python3 tools/cli/core/cli.py runtime status
+# ✓ Runtime is running
+#   PID: 12345
+#   Uptime: 0.1h
+#   Memory: 125.3 MB
+```
+
+#### 场景 B: 动态启停数据流
+```bash
+# 启动数据流
+python3 tools/cli/core/cli.py runtime start-dataflow
+# ✓ Start dataflow command sent
+
+# 运行数据流... （检查缓冲区状态）
+python3 tools/cli/core/cli.py buffer list
+
+# 停止数据流（框架继续运行）
+python3 tools/cli/core/cli.py runtime stop-dataflow
+# ✓ Stop dataflow command sent
+
+# 修改代码、配置等...
+
+# 重新启动数据流
+python3 tools/cli/core/cli.py runtime start-dataflow
+```
+
+#### 场景 C: 多次启停循环（开发调试）
+```bash
+# 启动框架
+python3 tools/cli/core/cli.py runtime start examples/planning_simulation.yaml -b
+
+# 第一轮测试
+python3 tools/cli/core/cli.py runtime start-dataflow
+sleep 30
+python3 tools/cli/core/cli.py buffer list > test1.txt
+python3 tools/cli/core/cli.py runtime stop-dataflow
+sleep 2
+
+# 第二轮测试（无需重启框架）
+python3 tools/cli/core/cli.py runtime start-dataflow
+sleep 30
+python3 tools/cli/core/cli.py buffer list > test2.txt
+python3 tools/cli/core/cli.py runtime stop-dataflow
+
+# 完成
+python3 tools/cli/core/cli.py runtime stop
+```
+
+**关键优势**：
+- ✓ 框架初始化一次（节省配置加载、节点扫描时间）
+- ✓ 数据流可独立控制（不影响框架）
+- ✓ 可快速迭代测试（无重启开销）
+- ✓ 适合开发调试、长期服务、压力测试
+
+**文件位置**：
+- 后台日志：`/tmp/nodeflow_runtime.log`
+- PID 文件：`/tmp/nodeflow_runtime.pid`
+- 控制缓冲区：`runtime.control`（自动创建）
 
 ### SOP-1: 节点能力调研 (Discovery)
 当你需要了解某个节点的功能或接口定义时：
@@ -291,6 +396,16 @@ tail -100 /tmp/nodeflow_runtime.log
 | 内存持续增长 | 前一轮资源未清理 | 确保每轮都有完整的 stop 流程，检查日志中的清理信息 |
 | 循环无法中止 | 使用了 `--loop 0`（无限循环） | 按 `Ctrl+C` 中断，或检查是否真的在运行中 |
 
+### 守护进程相关问题
+
+| 问题 | 可能原因 | 诊断方法 |
+|-----|--------|--------|
+| CLI 命令无响应 | 框架未以 `--daemon` 模式启动 | 执行 `runtime status` 检查框架是否运行；检查日志 `/tmp/nodeflow_runtime.log` |
+| 框架启动后立即退出 | 配置文件错误或节点库路径错误 | 查看 `/tmp/nodeflow_runtime.log` 中的错误信息；用前台模式测试配置 |
+| 数据流无法停止 | 节点进程未正确响应 SIGTERM | 执行 `ps aux \| grep node-hub` 检查进程；可能需要 `runtime stop` 强制停止框架 |
+| 重复启动数据流失败 | 前一次停止未完全生效 | 等待 1-2 秒后重试；或检查是否还有节点进程在运行 |
+| 控制缓冲区被锁定 | 框架进程已崩溃但 PID 文件未清理 | 删除 `/tmp/nodeflow_runtime.pid`；手动清理 `/tmp/nodeflow/buffers/runtime.control` |
+
 ### 调试技巧
 
 **启用详细日志追踪启动/停止流程**：
@@ -327,6 +442,18 @@ lsof /tmp/nodeflow/buffers/ | head -20
 | **自动关机** | 运行 N 秒后自动关机 | `python3 -m runtime.main config.yaml --duration 60` |
 | **保留缓冲区** | 跨轮保留数据 | `python3 -m runtime.main config.yaml --loop 3 --no-clean-buffers` |
 
+### 守护进程 CLI 命令速查表
+
+| 命令 | 用途 | 示例 |
+|------|------|------|
+| **启动守护进程** | 启动框架（后台），不启动数据流 | `python3 tools/cli/core/cli.py runtime start config.yaml --background` |
+| **检查状态** | 显示框架运行状态和资源占用 | `python3 tools/cli/core/cli.py runtime status` |
+| **启动数据流** | 通过控制缓冲区启动数据流 | `python3 tools/cli/core/cli.py runtime start-dataflow` |
+| **停止数据流** | 停止数据流但保持框架运行 | `python3 tools/cli/core/cli.py runtime stop-dataflow` |
+| **重启数据流** | 先停后启（用于快速重启） | `python3 tools/cli/core/cli.py runtime restart-dataflow` |
+| **停止框架** | 完全关闭框架和所有节点 | `python3 tools/cli/core/cli.py runtime stop` |
+| **JSON 输出** | 获取 JSON 格式的结果 | `python3 tools/cli/core/cli.py runtime status --json` |
+
 ### CLI 诊断命令速查表
 
 | 命令 | 用途 |
@@ -344,9 +471,13 @@ lsof /tmp/nodeflow/buffers/ | head -20
 |----------|------|
 | `runtime/main.py` | 运行时框架主文件 |
 | `tools/cli/core/cli.py` | CLI 工具入口 |
+| `tools/cli/commands/runtime_cmd.py` | 守护进程控制命令实现 |
 | `/tmp/nodeflow/buffers/` | 共享缓冲区存储位置 |
 | `/tmp/nodeflow_runtime.pid` | 运行时 PID 文件 |
+| `/tmp/nodeflow_runtime.log` | 后台日志文件（守护进程模式） |
+| `runtime.control` | 控制缓冲区（守护进程通信） |
 | `MULTI_LOOP_GUIDE.md` | 多轮循环功能完整文档 |
+| `DAEMON_MODE_GUIDE.md` | 守护进程模式完整文档 |
 | `test_multi_loop.py` | 多轮循环测试用例 |
 
 ### 故障排除速查
@@ -359,11 +490,9 @@ lsof /tmp/nodeflow/buffers/ | head -20
 | 僵尸进程？ | `ps aux \| grep -E "defunct\|Z "` |
 | 缓冲区被锁定？ | `lsof /tmp/nodeflow/buffers/` |
 
-## 8. 新增功能说明 (v1.1)
+## 8. 新增功能说明
 
-### 多轮启动-停止循环功能
-
-**版本**：NodeFlow Runtime v1.1+
+### v1.1: 多轮启动-停止循环功能
 
 **功能**：在同一框架实例中支持多次启动和停止数据流，而无需重新加载配置和扫描节点库。
 
@@ -388,6 +517,53 @@ lsof /tmp/nodeflow/buffers/ | head -20
 - 测试用例：`test_multi_loop.py`
 - 演示脚本：`demo_multi_loop.py`
 
+### v1.2: 守护进程模式（Daemon Mode）
+
+**版本**：NodeFlow Runtime v1.2+
+
+**功能**：框架作为后台服务运行，通过 CLI 命令动态控制数据流的启停。
+
+**架构特性**：
+- 框架持续运行，无需重启即可控制数据流
+- 通过共享缓冲区 `runtime.control` 进行进程间通信
+- 支持后台运行，日志输出到 `/tmp/nodeflow_runtime.log`
+- 通过 PID 文件管理框架生命周期
+
+**核心优势**：
+1. ✓ 框架与数据流分离（独立控制）
+2. ✓ CLI 命令灵活控制（无需编程接口）
+3. ✓ 后台运行（适合长期服务）
+4. ✓ 快速迭代测试（无框架重启开销）
+5. ✓ 支持远程控制（通过 CLI）
+
+**使用场景**：
+- 🔧 开发调试：频繁启停数据流测试代码修改
+- 🏭 生产环境：长期后台服务，按需启停数据流
+- 🎮 手动控制：人工干预数据流的启停时机
+- 🔄 动态调度：根据外部条件动态控制数据流
+
+**CLI 命令**：
+```bash
+# 框架管理
+runtime start <config> --background   # 启动守护进程
+runtime stop                         # 停止框架
+runtime status                       # 检查状态
+
+# 数据流管理
+runtime start-dataflow               # 启动数据流
+runtime stop-dataflow                # 停止数据流
+runtime restart-dataflow             # 重启数据流
+```
+
+**通信协议**：
+- 控制缓冲区：`runtime.control`
+- 命令格式：`{"command": "start_dataflow|stop_dataflow|shutdown", "timestamp": <unix_time>}`
+- 去重机制：基于时间戳避免重复执行
+
+**相关文档**：
+- 完整指南：`DAEMON_MODE_GUIDE.md`
+- 命令实现：`tools/cli/commands/runtime_cmd.py`
+
 ### 改进的信号处理
 
 新增两级信号处理：
@@ -398,7 +574,7 @@ lsof /tmp/nodeflow/buffers/ | head -20
 
 ### API 扩展
 
-**新增方法**：
+**v1.1 新增方法**：
 ```python
 runtime._initialize_framework()      # 初始化框架（一次性）
 runtime.start_dataflow()             # 启动数据流
@@ -406,7 +582,25 @@ runtime.stop_dataflow()              # 停止数据流
 runtime.run_with_loop(num_loops, loop_interval)  # 多轮循环运行
 ```
 
+**v1.2 新增方法**：
+```python
+runtime.run_as_daemon()              # 守护进程模式运行
+runtime._write_pid_file()            # 写入 PID 文件
+runtime._cleanup_pid_file()          # 清理 PID 文件
+```
+
 **兼容性**：
 - 现有的 `runtime.run()` 方法保持不变
 - 新增的方法作为可选扩展
 - 完全向后兼容，无破坏性改动
+
+### 运行模式对比
+
+| 特性 | 单次运行 | 多轮循环 | 守护进程 |
+|-----|---------|---------|---------|
+| 框架启动次数 | 1 | 1 | 1 |
+| 数据流启停 | 1 次 | N 次（自动） | 动态（CLI控制） |
+| 控制方式 | 参数 | 参数 | CLI 命令 |
+| 适用场景 | 测试、脚本 | 自动化测试 | 生产环境、长期服务 |
+| 灵活性 | 低 | 中 | 高 |
+| 人工干预 | 无 | 有限（Ctrl+C） | 完全（CLI） |
