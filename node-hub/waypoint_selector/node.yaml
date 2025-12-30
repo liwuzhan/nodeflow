@@ -1,31 +1,67 @@
 name: waypoint_selector
-version: "1.0"
-description: "根据路径与当前位置选择前瞻点"
+version: "2.0"
+description: "基于视野区域的前瞻点选择器 (视野算法 v2.0)"
+
 entrypoints:
   linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+  darwin:
     kind: python
     cmd: ["python3", "run.py"]
   windows:
     kind: python
     cmd: ["python", "run.py"]
+
 ports:
   inputs:
     - name: global_path
       type: planning.path
-      description: "全局路径"
+      description: "全局路径 (ENU 坐标)"
     - name: pose_enu
       type: localization.pose_enu
-      description: "ENU坐标姿态 (x, y, theta)"
+      description: "车辆姿态 (x, y, theta) - 必须包含航向"
   outputs:
     - name: next_point
       type: json
-      description: "下一个前瞻点坐标"
+      description: "前瞻点坐标及状态信息"
+
 params:
-  lookahead_distance_m:
-    type: float
+  # 视野区域参数
+  view_distance:
+    type: number
+    default: 3.0
+    description: "视野中心距车辆距离 (米)"
+
+  view_width:
+    type: number
+    default: 4.0
+    description: "视野矩形宽度 (米)"
+
+  view_depth:
+    type: number
+    default: 1.5
+    description: "视野矩形深度/厚度 (米)"
+
+  # 完成判定参数
+  goal_tolerance:
+    type: number
+    default: 1.5
+    description: "终点到达容差 (米)"
+
+  # 性能参数
+  max_search_points:
+    type: integer
+    default: 100
+    description: "每次最多检查的路径点数"
+
+  # 初始消费参数
+  initial_check_points:
+    type: integer
+    default: 10
+    description: "初始化时检查的前N个点"
+
+  initial_consume_distance:
+    type: number
     default: 2.0
-    description: "前瞻距离"
-  goal_tolerance_m:
-    type: float
-    default: 0.3
-    description: "终点容差"
+    description: "距离小于此值的点视为已消费 (米)"

@@ -9,33 +9,73 @@ import time
 import json
 import traceback
 from pathlib import Path
+from typing import List, Optional, Dict, Any, Tuple
 
-# 添加SDK路径
+# Pydantic 导入
+try:
+    from pydantic import BaseModel, Field
+except ImportError:
+    # 简单的兼容性处理
+    class BaseModel: pass
+    def Field(*args, **kwargs): return None
+
+# 4层架构实践：L4和L3分离
+# 添加项目根目录以访问SDK
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+# 添加当前节点目录（必须在sdk之前！）以优先加载本地utils
+sys.path.insert(0, str(Path(__file__).parent))
 
 from sdk.nodeflow_sdk import NodeFlowSDK
 from utils.planner import GlobalCoveragePlanner
 from utils.models import VehicleConfig, ParcelData
 
+# --- Schema Definitions ---
+
+class TaskENU(BaseModel):
+    id: str
+    parcel: Dict[str, Any]
+    vehicle: Dict[str, Any]
+    ref_lon: float
+    ref_lat: float
+    timestamp: float
+
+class GlobalPath(BaseModel):
+    task_id: str
+    timestamp: float
+    path: List[Tuple[float, float]]
+    status: str
+    message: str
+
+# --- End Schema Definitions ---
 
 def main():
     """主函数"""
     try:
         # 初始化SDK
-        with NodeFlowSDK(log_level="INFO") as sdk:
-            sdk.logger.info("Global Coverage Planner Node started (ENU mode)")
+        with NodeFlowSDK(log_level="DEBUG") as sdk:
+            sdk.logger.info("=" * 70)
+            sdk.logger.info("全球覆盖路径规划节点启动 (ENU模式)")
+            sdk.logger.info("模式: 接收ENU任务 -> 规划全覆盖路径 -> 输出ENU坐标")
+            sdk.logger.info("=" * 70)
 
-            # 初始化规划器（输出ENU坐标）
-            planner = GlobalCoveragePlanner(output_enu=True)
+            # 读取参数
+            path_point_spacing = float(sdk.params.get('path_point_spacing', 0.5))
+            sdk.logger.info(f"路径点间距: {path_point_spacing}m")
+
+            # 初始化规划器（输出ENU坐标），传递logger用于详细日志
+            planner = GlobalCoveragePlanner(output_enu=True, logger=sdk.logger)
 
             # 创建端口
             input_port = sdk.create_input_port('task_enu')
-            output_port = sdk.create_output_port('global_path')
-            
+            output_port = sdk.create_output_port('global_path', schema=GlobalPath)
+
             last_task_id = None
-            
-            sdk.logger.info("Waiting for tasks...")
-            
+            task_count = 0
+
+            sdk.logger.info("等待任务数据...")
+            sdk.logger.info("端口已创建: input=task_enu, output=global_path")
+
             try:
                 while True:
                     # 读取最新任务请求
@@ -43,45 +83,56 @@ def main():
 
                     if task_data:
                         # ===== 数据验证日志 =====
-                        sdk.logger.debug(f"[DATA_CHECK] Received task_data type: {type(task_data)}")
-                        sdk.logger.debug(f"[DATA_CHECK] task_data: {task_data}")
+                        sdk.logger.debug(f"[数据校验] 接收数据类型: {type(task_data)}")
 
                         # 验证数据结构
                         if not isinstance(task_data, dict):
-                            sdk.logger.error(f"[DATA_ERROR] task_data should be dict but got: {type(task_data)}")
-                            sdk.logger.error(f"[DATA_ERROR] Content: {task_data}")
+                            sdk.logger.error(f"[数据错误] 期望字典但得到: {type(task_data)}")
                             time.sleep(0.1)
                             continue
                         # ===== 数据验证日志结束 =====
 
                         task_id = task_data.get('id')
-                        
+
                         # 仅处理新任务
                         if task_id and task_id != last_task_id:
+                            task_count += 1
                             # 显示任务的参考点信息（从task_enu获取）
                             ref_lon = task_data.get('ref_lon')
                             ref_lat = task_data.get('ref_lat')
+
+                            sdk.logger.info("-" * 70)
+                            sdk.logger.info(f"[任务#{task_count}] 收到新任务: {task_id}")
                             if ref_lon and ref_lat:
-                                sdk.logger.info(f"Received new task: {task_id}, GPS ref: ({ref_lon:.6f}, {ref_lat:.6f})")
+                                sdk.logger.info(f"  GPS参考点: ({ref_lon:.6f}°, {ref_lat:.6f}°)")
                             else:
-                                sdk.logger.info(f"Received new task: {task_id}")
+                                sdk.logger.warning(f"  警告: GPS参考点缺失")
 
                             try:
                                 # 解析数据
                                 parcel_dict = task_data.get('parcel', {})
                                 vehicle_dict = task_data.get('vehicle', {})
-                                
+
+                                sdk.logger.debug(f"  解析地块数据...")
                                 parcel = ParcelData.from_dict(parcel_dict)
                                 vehicle = VehicleConfig.from_dict(vehicle_dict)
-                                
-                                sdk.logger.info(f"Planning path for parcel with {len(parcel.outer)} outer points...")
+
+                                # 数据验证
+                                if not parcel.outer or len(parcel.outer) < 3:
+                                    sdk.logger.error(f"  [数据错误] 地块边界点不足 (需要≥3个, 实际{len(parcel.outer)}个)")
+                                    continue
+
+                                sdk.logger.info(f"  地块数据: {len(parcel.outer)}个外边界点, {len(parcel.holes)}个孔洞, {len(parcel.points)}个点障碍")
+                                sdk.logger.info(f"  车辆配置: 幅宽={vehicle.implement_width_m}m, 重叠率={vehicle.overlap_ratio}, 内缩={vehicle.path_inset_m}m")
+                                sdk.logger.info(f"开始执行路径规划...")
+
                                 start_time = time.time()
-                                
-                                # 执行规划
-                                path_points = planner.plan(parcel, vehicle)
-                                
+
+                                # 执行规划（使用配置的点间距）
+                                path_points = planner.plan(parcel, vehicle, path_point_spacing)
+
                                 duration = time.time() - start_time
-                                sdk.logger.info(f"Planning completed in {duration:.3f}s. Path length: {len(path_points)}")
+                                sdk.logger.info(f"✓ 规划执行完成 - 耗时={duration*1000:.1f}ms, 生成{len(path_points)}个路径点")
                                 
                                 # 发送结果
                                 result = {
@@ -92,8 +143,8 @@ def main():
                                     'message': 'Path found' if path_points else 'No path found'
                                 }
 
-                                # ===== 修复: 持续发送路径 (确保下游随时可接收) =====
-                                sdk.logger.info(f"开始持续发送路径 (task_id={task_id}, points={len(path_points)})")
+                                # ===== 持续发送路径 (确保下游随时可接收) =====
+                                sdk.logger.info(f"开始持续发送规划结果: {len(path_points)}个路径点 @ 10Hz频率")
                                 last_task_id = task_id
                                 send_count = 0
 
@@ -104,22 +155,22 @@ def main():
 
                                     # 定期日志
                                     if send_count % 10 == 0:
-                                        sdk.logger.debug(f"已发送路径 {send_count} 次 (task_id={task_id})")
+                                        sdk.logger.debug(f"[发送计数] 已发送{send_count}次 (task={task_id})")
 
                                     # 检查是否有新任务
                                     new_task = input_port.recv_latest()
                                     if new_task and isinstance(new_task, dict):
                                         new_task_id = new_task.get('id')
                                         if new_task_id and new_task_id != last_task_id:
-                                            sdk.logger.info(f"收到新任务: {new_task_id}，停止发送旧路径")
+                                            sdk.logger.info(f"接收到新任务，停止发送当前路径: {new_task_id}")
                                             break  # 退出循环，重新规划新任务
 
                                     time.sleep(0.1)  # 10Hz发送频率，与RTK发送频率协调
-                                # ===== 修复结束 =====
-                                
+                                # ===== 持续发送结束 =====
+
                             except Exception as e:
-                                sdk.logger.error(f"Planning failed: {e}")
-                                traceback.print_exc()
+                                sdk.logger.error(f"✗ 规划失败: {e}")
+                                sdk.logger.debug(f"错误堆栈:\n{traceback.format_exc()}")
                                 # 发送错误状态
                                 error_result = {
                                     'task_id': task_id,

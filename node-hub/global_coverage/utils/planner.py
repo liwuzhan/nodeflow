@@ -1,13 +1,13 @@
 from typing import List, Tuple, Dict, Optional
+import logging
+import time
+import math
 from shapely.geometry import LineString, Polygon, MultiPolygon
-from shapely.ops import transform
 
 from .models import VehicleConfig, ParcelData
 from .safe_area import (
-    build_safe_area, 
-    compute_job_direction, 
-    local_to_wgs84_transformer,
-    to_local_coords
+    build_safe_area,
+    compute_job_direction
 )
 from .scan_utils import (
     build_open_polyline,
@@ -19,126 +19,254 @@ from .scan_utils import (
     connect_path_with_entry_exit_along_outer_boundary
 )
 
+
+def densify_path(coords: List[Tuple[float, float]], spacing: float) -> List[Tuple[float, float]]:
+    """
+    密化路径点，确保相邻点间距不超过指定值
+
+    Args:
+        coords: 原始路径点
+        spacing: 目标点间距 (米)
+
+    Returns:
+        密化后的路径点
+    """
+    if len(coords) < 2 or spacing <= 0:
+        return coords
+
+    result = []
+
+    for i in range(len(coords) - 1):
+        x0, y0 = coords[i]
+        x1, y1 = coords[i + 1]
+
+        # 添加起点
+        result.append((x0, y0))
+
+        # 计算段长度
+        dx = x1 - x0
+        dy = y1 - y0
+        seg_len = math.sqrt(dx * dx + dy * dy)
+
+        # 如果段长度 > spacing，则插入中间点
+        if seg_len > spacing:
+            # 计算需要插入的点数
+            num_points = int(math.ceil(seg_len / spacing)) - 1
+
+            for j in range(1, num_points + 1):
+                t = j / (num_points + 1)
+                x = x0 + t * dx
+                y = y0 + t * dy
+                result.append((x, y))
+
+    # 添加终点
+    result.append(coords[-1])
+
+    return result
+
 class GlobalCoveragePlanner:
-    def __init__(self, output_enu: bool = True):
+    def __init__(self, output_enu: bool = True, logger: Optional[logging.Logger] = None):
         """
         初始化全局路径规划器
 
         Args:
             output_enu: 是否输出ENU坐标（默认True）。输入parcel_data已是ENU坐标
+            logger: 日志记录器（可选）
         """
         self.output_enu = output_enu
+        self.logger = logger or logging.getLogger(__name__)
 
-    def plan(self, parcel_data: ParcelData, vehicle_config: VehicleConfig) -> List[Tuple[float, float]]:
+    def plan(
+        self,
+        parcel_data: ParcelData,
+        vehicle_config: VehicleConfig,
+        path_point_spacing: float = 0.5
+    ) -> List[Tuple[float, float]]:
         """
         执行全覆盖路径规划
+
+        Args:
+            parcel_data: 地块数据
+            vehicle_config: 车辆配置
+            path_point_spacing: 路径点间距 (米)，用于密化路径
 
         Returns:
             坐标列表:
             - output_enu=True: ENU坐标 [(x, y), ...] (米)
             - output_enu=False: WGS84坐标 [(lon, lat), ...] (度)
         """
+        plan_start = time.time()
         parcel_dict = parcel_data.to_dict()
-        
+
+        self.logger.info("=" * 60)
+        self.logger.info("开始全覆盖路径规划")
+        self.logger.info(f"地块信息: 边界点数={len(parcel_data.outer)}, 孔洞数={len(parcel_data.holes)}, 点障碍数={len(parcel_data.points)}")
+        self.logger.info(f"车辆参数: 幅宽={vehicle_config.implement_width_m}m, 重叠率={vehicle_config.overlap_ratio}, 内缩={vehicle_config.path_inset_m}m")
+
         # 1. 构建安全作业区域
+        step_start = time.time()
         work_area, (ref_lon, ref_lat) = build_safe_area(parcel_dict, vehicle_config)
+        step_duration = time.time() - step_start
+
         if work_area.is_empty:
-            print("Warning: Empty safe area.")
+            self.logger.warning("安全区域为空，无法规划路径")
             return []
 
+        area_sqm = work_area.area
+        self.logger.info(f"[步骤1/8] 安全区域构建完成 - 面积={area_sqm:.1f}m², 耗时={step_duration*1000:.1f}ms")
+
+        if isinstance(work_area, MultiPolygon):
+            self.logger.info(f"  多边形组件: {len(list(work_area.geoms))}个")
+
         # 2. 计算作业方向
+        step_start = time.time()
         angle0 = compute_job_direction(work_area)
         spacing0 = vehicle_config.effective_row_spacing
+        step_duration = time.time() - step_start
+
+        self.logger.info(f"[步骤2/8] 作业方向计算完成 - 角度={angle0:.1f}°, 行距={spacing0:.2f}m, 耗时={step_duration*1000:.1f}ms")
 
         # 3. 第一遍扫描（主路径）
+        step_start = time.time()
         primary_local = build_open_polyline(work_area, spacing0, angle0)
-        
+        step_duration = time.time() - step_start
+
+        primary_length = primary_local.length if not primary_local.is_empty else 0
+        primary_points = len(list(primary_local.coords)) if not primary_local.is_empty else 0
+        self.logger.info(f"[步骤3/8] 主路径扫描完成 - 路径长度={primary_length:.1f}m, 点数={primary_points}, 耗时={step_duration*1000:.1f}ms")
+
         # 4. 计算覆盖情况
+        step_start = time.time()
         covered1, uncovered1 = compute_coverage_areas_from_path(
-            work_area, 
-            primary_local, 
-            spacing0, 
-            angle0, 
-            vehicle_config.implement_width_m, 
+            work_area,
+            primary_local,
+            spacing0,
+            angle0,
+            vehicle_config.implement_width_m,
             horizontal_only=True
         )
+        step_duration = time.time() - step_start
+
+        covered_area = covered1.area if covered1 else 0
+        uncovered_area = uncovered1.area if uncovered1 else 0
+        coverage_rate = (covered_area / area_sqm * 100) if area_sqm > 0 else 0
+
+        self.logger.info(f"[步骤4/8] 覆盖分析完成 - 已覆盖={covered_area:.1f}m² ({coverage_rate:.1f}%), 未覆盖={uncovered_area:.1f}m², 耗时={step_duration*1000:.1f}ms")
 
         # 5. 过滤边缘细碎区域
+        step_start = time.time()
         if True: # apply_edge_filter
+            uncovered_before = uncovered1.area if uncovered1 else 0
             uncovered1 = filter_uncovered_by_edge_zone(
-                uncovered1, 
-                work_area, 
-                vehicle_config.implement_width_m, 
+                uncovered1,
+                work_area,
+                vehicle_config.implement_width_m,
                 threshold_ratio=0.6
             )
+            uncovered_after = uncovered1.area if uncovered1 else 0
+            filtered_area = uncovered_before - uncovered_after
+            step_duration = time.time() - step_start
+
+            self.logger.info(f"[步骤5/8] 边缘过滤完成 - 过滤掉={filtered_area:.1f}m², 剩余未覆盖={uncovered_after:.1f}m², 耗时={step_duration*1000:.1f}ms")
 
         # 6. 第二遍扫描（补漏，反向180度）
+        step_start = time.time()
         angle2 = angle0 + 180.0
         # 自适应行距因子
         second_local_list = build_open_polylines_for_components(
-            uncovered1, 
-            spacing0, 
-            angle2, 
-            factor_min=0.6, 
+            uncovered1,
+            spacing0,
+            angle2,
+            factor_min=0.6,
             factor_max=1.1
         )
+        step_duration = time.time() - step_start
+
+        second_total_length = sum(p.length for p in second_local_list)
+        self.logger.info(f"[步骤6/8] 二次扫描完成 - 补漏路径段数={len(second_local_list)}, 总长度={second_total_length:.1f}m, 耗时={step_duration*1000:.1f}ms")
 
         # 7. 连接两遍路径
+        step_start = time.time()
         # 自动选择绕行方向
         if not primary_local.is_empty:
             anchor = list(primary_local.coords)[-1]
             ori = choose_boundary_orientation_by_far_vertex(work_area, anchor)
         else:
             ori = 'ccw'
-            
+
+        self.logger.debug(f"  路径连接方向: {ori}")
+
         connected_local = connect_polylines_along_outer_boundary(
-            work_area, 
-            primary_local, 
-            second_local_list, 
+            work_area,
+            primary_local,
+            second_local_list,
             orientation=ori
         )
+        step_duration = time.time() - step_start
+
+        connected_length = connected_local.length if not connected_local.is_empty else 0
+        self.logger.info(f"[步骤7/8] 路径连接完成 - 连接后长度={connected_length:.1f}m, 耗时={step_duration*1000:.1f}ms")
 
         # 8. 连接出入口（如果有）
-        # 假设 parcel_data.entries 包含 [{'type': 'entry', 'point': [lon, lat]}, {'type': 'exit', ...}]
-        # 这里简化处理：如果有entries，取第一个作为入口，第二个作为出口
-        t_local = None # 延迟初始化
-        
+        step_start = time.time()
+        # 假设 parcel_data.entries 包含 [{'type': 'entry', 'point': [x, y]}, {'type': 'exit', ...}]
+        # ENU版本：point已经是ENU坐标，无需转换
         entry_pt = None
         exit_pt = None
-        
+
         if parcel_data.entries:
-            # 初始化转换器
-            from .safe_area import wgs84_to_local_transformer
-            t_local = wgs84_to_local_transformer(ref_lon, ref_lat)
-            
             for ent in parcel_data.entries:
-                pt = ent.get('point') # [lon, lat]
-                if not pt: continue
-                x, y = t_local.transform(pt[0], pt[1])
+                pt = ent.get('point')  # [x, y] in ENU
+                if not pt:
+                    continue
+                x, y = pt[0], pt[1]
                 if ent.get('type') == 'entry':
                     entry_pt = (x, y)
                 elif ent.get('type') == 'exit':
                     exit_pt = (x, y)
-        
+
         # 默认出入口逻辑：如果没有指定，使用路径本身的起终点（不额外连接）
         # 如果指定了，调用连接函数
         if entry_pt or exit_pt:
             # 如果只有一个，另一个用路径端点
             if not connected_local.is_empty:
                 coords = list(connected_local.coords)
-                if not entry_pt: entry_pt = coords[0]
-                if not exit_pt: exit_pt = coords[-1]
-                
+                if not entry_pt:
+                    entry_pt = coords[0]
+                if not exit_pt:
+                    exit_pt = coords[-1]
+
+                self.logger.debug(f"  连接出入口: entry={entry_pt}, exit={exit_pt}")
                 connected_local = connect_path_with_entry_exit_along_outer_boundary(
                     work_area,
                     connected_local,
                     entry_local=entry_pt,
                     exit_local=exit_pt
                 )
+                step_duration = time.time() - step_start
+                self.logger.info(f"[步骤8/8] 出入口连接完成 - 耗时={step_duration*1000:.1f}ms")
+        else:
+            self.logger.info(f"[步骤8/8] 跳过出入口连接（无指定出入口）")
 
         if connected_local.is_empty:
+            self.logger.warning("最终路径为空")
             return []
 
         # 9. 输出坐标（直接返回ENU坐标，输入已经是ENU）
         # 输入parcel_data来自task_enu，已经在ENU坐标系，直接返回规划结果
-        return list(connected_local.coords)
+        raw_coords = list(connected_local.coords)
+
+        # 10. 密化路径（插值补点，确保点间距不超过指定值）
+        if path_point_spacing > 0:
+            result = densify_path(raw_coords, path_point_spacing)
+            self.logger.info(f"[路径密化] 原始点数={len(raw_coords)}, 密化后={len(result)}, 目标点间距={path_point_spacing}m")
+        else:
+            result = raw_coords
+
+        plan_duration = time.time() - plan_start
+        self.logger.info("=" * 60)
+        self.logger.info(f"路径规划完成 - 总耗时={plan_duration*1000:.1f}ms, 输出点数={len(result)}")
+        self.logger.info(f"路径统计: 总长度={connected_length:.1f}m, 覆盖率={coverage_rate:.1f}%, 平均点间距={connected_length/(len(result)-1) if len(result)>1 else 0:.2f}m")
+        self.logger.info("=" * 60)
+
+        return result

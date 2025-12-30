@@ -68,7 +68,8 @@ nodes:
   - id: global_coverage
     package: global_coverage
     description: "根据地块和车辆配置生成全覆盖路径"
-    params: {}
+    params:
+      path_point_spacing: 0.5  # 路径点间距 (米)
 
   # ┌─────────────────────────────────────────────────────────────────────┐
   # │ 纯追踪速度控制器                                                     │
@@ -92,10 +93,17 @@ nodes:
 
   - id: waypoint_selector
     package: waypoint_selector
-    description: "选择前瞻点"
+    description: "基于视野区域的前瞻点选择器 (v2.0)"
     params:
-      lookahead_distance_m: 2.0
-      goal_tolerance_m: 0.3
+      # 视野区域参数（推荐低速覆盖场景）
+      view_distance: 3.0      # 视野中心距车辆 3m
+      view_width: 4.0         # 视野宽度 4m (覆盖作业宽度)
+      view_depth: 1.5         # 视野深度 1.5m
+      goal_tolerance: 1.5     # 终点容差 1.5m
+      max_search_points: 100  # 最大搜索点数
+      # 初始消费参数
+      initial_check_points: 50       # 初始化时检查的前N个点（足够覆盖路径）
+      initial_consume_distance: 2.0  # 距离小于此值的点视为已消费 (米)
   - id: track_controller
     package: track_controller
     description: "履带控制，支持原地转向"
@@ -105,22 +113,6 @@ nodes:
       heading_p_gain: 2.0
       max_angular_velocity: 1.0
       pivot_threshold_deg: 20.0  # 增大原地转向阈值，避免频繁切换
-  # ┌─────────────────────────────────────────────────────────────────────┐
-  # │ 静止判定触发停机                                                    │
-  # └─────────────────────────────────────────────────────────────────────┘
-  - id: idle_detector
-    package: idle_detector
-    description: "当RTK在60秒内移动小于1米时触发停机事件"
-    params:
-      window_secs: 60.0
-      idle_radius_m: 1.0
-      sample_rate_hz: 5.0
-      debounce_secs: 5.0
-  - id: shutdown_manager
-    package: shutdown_manager
-    description: "转发停机事件到控制缓冲，触发Runtime优雅关停"
-    params:
-      debounce_secs: 5.0
 
   # ┌─────────────────────────────────────────────────────────────────────┐
   # │ 仿真器输入 (接收控制命令)                                            │
@@ -222,13 +214,6 @@ edges:
   - from: coord_transform.pose_enu
     to: track_controller.pose_enu
     description: "ENU姿态 → 轨迹控制"
-  # 静止判定链路
-  - from: sim_output.rtk_fix
-    to: idle_detector.rtk_fix
-    description: "RTK定位供静止判定使用"
-  - from: idle_detector.idle_event
-    to: shutdown_manager.idle_event
-    description: "静止事件传递到停机管理"
 
   # 速度指令 → 仿真器输入
   # 这个边确保sim_input依赖velocity_controller，sim_input会在velocity_controller之后启动
