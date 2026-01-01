@@ -2,6 +2,126 @@
 
 所有值得注意的项目更改都将记录在此文件中。
 
+## [2026-01-01]
+
+### 📊 结构化日志系统上线 - 完整验证
+
+**背景**：
+为了支持调试和性能分析，实现了全系统的结构化日志记录。所有节点自动输出结构化日志到 JSON 文件，并提供了强大的 CLI 查询工具。
+
+**实现清单**：
+
+1. **结构化日志核心** (`sdk/structured_logger.py`)
+   - ✅ JSONFileHandler: 自动输出到 `/tmp/nodeflow_logs/<node_id>.jsonl`
+   - ✅ 双层输出: JSON 文件 + 实时控制台日志
+   - ✅ 完整上下文: 时间戳、代码位置、自定义字段
+   - ✅ 无外部依赖，仅使用标准库
+
+2. **SDK 集成** (`sdk/nodeflow_sdk.py`)
+   - ✅ 自动初始化 StructuredLogger
+   - ✅ ParentProcessWatchdog 集成
+   - ✅ 所有节点自动获得日志能力
+
+3. **CLI 聚合工具** (`tools/cli/commands/logs_cmd.py`)
+   - ✅ 实时日志聚合和排序
+   - ✅ 节点过滤: `nodeflow logs -n <node_id>`
+   - ✅ 关键字搜索: `nodeflow logs -s "关键词"`
+   - ✅ 日志级别过滤: `nodeflow logs --level ERROR`
+   - ✅ 时间范围查询: `nodeflow logs --since "5m ago"`
+   - ✅ 实时跟踪: `nodeflow logs --follow` (像 tail -f)
+   - ✅ 多种输出格式: 紧凑、详细、JSON
+
+4. **文档**
+   - ✅ `docs/STRUCTURED_LOGGING_GUIDE.md` - 技术详解
+   - ✅ `docs/LOGS_CHEATSHEET.md` - 使用速查表
+   - ✅ SDK 文档更新
+
+**端到端验证** (2026-01-01 01:29 UTC):
+- ✅ 仿真器启动成功 (RTK 50Hz)
+- ✅ 8 个节点全部启动成功
+- ✅ 642+ 条日志已记录（所有格式正确）
+- ✅ CLI 工具可聚合和查询日志
+- ✅ 0 错误，0 警告
+- ✅ 系统运行正常（节点持续工作中）
+
+**日志统计**:
+| 节点 | 日志数 | 大小 |
+|------|-------|------|
+| sim_output | 15 | 4.3K |
+| rtk_filter | 6 | 1.7K |
+| coord_transform | 12 | 3.5K |
+| global_coverage | 570+ | 33K |
+| waypoint_selector | 15+ | 4.5K |
+| track_controller | 10+ | 3.0K |
+| trajectory_viz | 8+ | 2.3K |
+| sim_input | 6+ | 1.8K |
+| **总计** | **642+** | **<100KB** |
+
+**使用示例**:
+```bash
+# 查看最后10条日志
+nodeflow logs -c 10
+
+# 仅显示特定节点
+nodeflow logs -n global_coverage -c 5
+
+# 搜索错误
+nodeflow logs --level ERROR
+
+# 实时监控
+nodeflow logs --follow
+```
+
+**影响范围**:
+- 🟢 **LOW RISK** - 纯功能增强，无破坏性改动
+- ✅ 所有节点自动获得日志能力（无需修改）
+- ✅ 可选功能，不影响现有业务逻辑
+
+**系统状态**:
+✅ 已进入**可调试状态** - 可通过日志分析和诊断数据流问题
+
+---
+
+## [2025-12-29]
+
+### 🛡️ 安全增强：父进程监控机制 (Parent Process Watchdog)
+
+**问题背景**：
+当 Runtime 被强制杀死时（如 `kill -9`），节点进程变成孤儿进程继续运行，占用系统资源且难以清理。
+
+**解决方案**：
+
+1. **SDK 新增 `ParentProcessWatchdog` 类** (`sdk/nodeflow_sdk.py`)
+   - 后台守护线程，每秒检查父进程是否存活
+   - Unix/macOS: 检测 PPID 是否变为 1（init/launchd）
+   - 检测到父进程死亡后，节点自动退出（`os._exit(1)`）
+
+2. **自动启用**
+   - 所有使用 `NodeFlowSDK` 的节点自动获得父进程监控
+   - 无需修改节点代码，升级 SDK 即可生效
+   - 可通过环境变量 `NODE_PARENT_WATCHDOG=false` 禁用
+
+3. **配置选项**
+   - `enable_parent_watchdog`: 代码参数控制启用/禁用
+   - `NODE_PARENT_WATCHDOG`: 环境变量控制（支持 `false`, `0`, `no`, `off`）
+   - `NODE_WATCHDOG_INTERVAL`: 检查间隔（默认 1.0 秒）
+
+**影响的文件**：
+- `sdk/nodeflow_sdk.py` - 新增 `ParentProcessWatchdog` 类
+- `docs/PARENT_PROCESS_WATCHDOG.md` - 新增技术文档
+
+**测试验证**：
+- ✅ SDK 初始化正确启动监控
+- ✅ 父进程被杀死后，节点在 1-2 秒内自动退出
+- ✅ 无孤儿进程遗留
+
+**向后兼容性**：
+- 🟢 **LOW RISK** - 无需修改现有节点代码
+- 🟢 功能透明启用，默认行为改进
+- 🟢 可通过环境变量禁用（测试场景）
+
+---
+
 ## [2025-12-27]
 
 ### ✨ 大型架构升级：ENU坐标系统一

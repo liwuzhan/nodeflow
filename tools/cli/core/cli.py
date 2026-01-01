@@ -139,25 +139,65 @@ def create_parser() -> argparse.ArgumentParser:
     health_parser = subparsers.add_parser(
         'health',
         help='工作流健康检查',
+        description='检查缓冲区活动和 Schema 合规性'
+    )
+    health_subparsers = health_parser.add_subparsers(
+        dest='subcommand',
+        help='health 子命令',
+        metavar='SUBCOMMAND'
+    )
+
+    # health check (新增)
+    health_check_parser = health_subparsers.add_parser(
+        'check',
+        help='检查节点 Schema 合规性',
+        description='连接节点 Metadata Buffer，校验输出数据是否符合 Schema'
+    )
+    health_check_parser.add_argument(
+        'node_id',
+        help='要检查的节点 ID'
+    )
+    health_check_parser.add_argument(
+        '--samples',
+        type=int,
+        default=10,
+        help='采样数量 (默认: 10)'
+    )
+    health_check_parser.add_argument(
+        '--interval',
+        type=float,
+        default=0.1,
+        help='采样间隔秒数 (默认: 0.1)'
+    )
+    health_check_parser.add_argument(
+        '--json',
+        action='store_true',
+        help='以 JSON 格式输出'
+    )
+
+    # health flow (原有的)
+    health_flow_parser = health_subparsers.add_parser(
+        'flow',
+        help='检查数据流活性',
         description='解析配置文件，检测预期缓冲区是否存在并在给定时间窗口内增长'
     )
-    health_parser.add_argument(
+    health_flow_parser.add_argument(
         '--config',
         required=True,
         help='运行场景配置文件路径 (如 examples/planning_simulation.yaml)'
     )
-    health_parser.add_argument(
+    health_flow_parser.add_argument(
         '--interval',
         type=float,
         default=1.0,
         help='采样间隔秒数 (默认: 1.0)'
     )
-    health_parser.add_argument(
+    health_flow_parser.add_argument(
         '--dir',
         default='/tmp/nodeflow/buffers',
         help='缓冲区目录 (默认: /tmp/nodeflow/buffers)'
     )
-    health_parser.add_argument(
+    health_flow_parser.add_argument(
         '--json',
         action='store_true',
         help='以 JSON 格式输出'
@@ -325,6 +365,61 @@ def create_parser() -> argparse.ArgumentParser:
         help='以 JSON 格式输出'
     )
 
+    # ========== logs 命令 ==========
+    logs_parser = subparsers.add_parser(
+        'logs',
+        help='查看日志',
+        description='聚合所有节点日志并提供实时跟踪、过滤等功能'
+    )
+    logs_parser.add_argument(
+        'config',
+        nargs='?',
+        help='NodeFlow 配置文件（可选）'
+    )
+    logs_parser.add_argument(
+        '--log-dir',
+        default='/tmp/nodeflow_logs',
+        help='日志目录（默认 /tmp/nodeflow_logs）'
+    )
+    logs_parser.add_argument(
+        '-n', '--node',
+        help='过滤特定节点 ID'
+    )
+    logs_parser.add_argument(
+        '-l', '--level',
+        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
+        help='最低日志级别'
+    )
+    logs_parser.add_argument(
+        '-s', '--search',
+        help='搜索文本（在消息和自定义字段中搜索）'
+    )
+    logs_parser.add_argument(
+        '--since',
+        help='显示此时间之后的日志（例如："5m ago", "1h ago"）'
+    )
+    logs_parser.add_argument(
+        '-f', '--follow',
+        action='store_true',
+        help='实时跟踪日志（像 tail -f）'
+    )
+    logs_parser.add_argument(
+        '--json',
+        action='store_true',
+        help='JSON 格式输出'
+    )
+    logs_parser.add_argument(
+        '--detailed',
+        action='store_true',
+        help='详细格式输出（包含自定义字段和异常）'
+    )
+    logs_parser.add_argument(
+        '-c', '--count',
+        type=int,
+        default=50,
+        help='显示最后 N 行日志（默认 50）'
+    )
+
     return parser
 
 
@@ -364,6 +459,9 @@ def main():
             from tools.cli.commands.runtime_cmd import handle_runtime_command
             exit_code = handle_runtime_command(args)
             sys.exit(exit_code)
+        elif args.command == 'logs':
+            from tools.cli.commands.logs_cmd import main as handle_logs_command
+            handle_logs_command()
         else:
             print(f"Error: Unknown command '{args.command}'", file=sys.stderr)
             sys.exit(1)

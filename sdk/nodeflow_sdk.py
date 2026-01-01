@@ -4,13 +4,119 @@ NodeFlow SDK主入口
 """
 
 import os
-from typing import Dict, Any, Optional
+import sys
+import time
+import threading
+from typing import Dict, Any, Optional, Type, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    try:
+        from pydantic import BaseModel
+    except ImportError:
+        pass
 
 from sdk.param_parser import ParamParser
 from sdk.port import InputPort, OutputPort
-from runtime.utils.logger import get_logger, setup_logger
+from sdk.shared_buffer_lite import SharedBufferLite
+from sdk.structured_logger import StructuredLogger
 
-logger = get_logger(__name__)
+logger = None  # 框架日志（进程级）
+
+
+class ParentProcessWatchdog:
+    """
+    父进程监控守护线程
+
+    用于检测父进程（运行时框架）是否存活。
+    当父进程被强制杀死时，节点进程会自动退出，避免孤儿进程。
+
+    工作原理：
+    - Unix/macOS: 当父进程死亡时，子进程的ppid变为1（init/launchd）
+    - 定期检查ppid，如果变为1，说明父进程已死亡
+    """
+
+    def __init__(self, node_id: str, logger_instance, check_interval: float = 1.0):
+        """
+        初始化父进程监控
+
+        参数：
+        - node_id: 节点ID（用于日志）
+        - logger_instance: 日志器实例
+        - check_interval: 检查间隔（秒），默认1秒
+        """
+        self.node_id = node_id
+        self.logger = logger_instance
+        self.check_interval = check_interval
+        self.running = False
+        self.thread: Optional[threading.Thread] = None
+
+        # 记录初始的父进程ID
+        self.initial_ppid = os.getppid()
+
+        self.logger.debug(
+            f"ParentProcessWatchdog initialized for '{node_id}'",
+            initial_ppid=self.initial_ppid,
+            check_interval=check_interval
+        )
+
+    def start(self):
+        """启动监控线程"""
+        if self.running:
+            self.logger.warning(f"ParentProcessWatchdog for '{self.node_id}' already running")
+            return
+
+        self.running = True
+        self.thread = threading.Thread(
+            target=self._monitor_loop,
+            name=f"ParentWatchdog-{self.node_id}",
+            daemon=True
+        )
+        self.thread.start()
+        self.logger.info(f"ParentProcessWatchdog started for '{self.node_id}'")
+
+    def stop(self):
+        """停止监控线程"""
+        self.running = False
+        if self.thread:
+            self.thread.join(timeout=2.0)
+        self.logger.debug(f"ParentProcessWatchdog stopped for '{self.node_id}'")
+
+    def _monitor_loop(self):
+        """监控循环（在守护线程中运行）"""
+        try:
+            while self.running:
+                time.sleep(self.check_interval)
+
+                if not self.running:
+                    break
+
+                current_ppid = os.getppid()
+
+                # 检查父进程是否死亡
+                # 在Unix/macOS上，当父进程死亡时，ppid变为1（init/launchd）
+                if current_ppid == 1:
+                    self.logger.warning(
+                        f"Node '{self.node_id}' detected parent process death",
+                        old_ppid=self.initial_ppid,
+                        new_ppid=current_ppid
+                    )
+
+                    # 父进程已死，节点应该退出
+                    # 使用os._exit()而不是sys.exit()，因为sys.exit()可能被try-except捕获
+                    # os._exit()会立即终止进程，不调用cleanup handlers
+                    os._exit(1)
+
+                # 如果ppid发生变化但不是1，记录警告
+                elif current_ppid != self.initial_ppid:
+                    self.logger.warning(
+                        f"Node '{self.node_id}' ppid changed",
+                        old_ppid=self.initial_ppid,
+                        new_ppid=current_ppid
+                    )
+                    self.initial_ppid = current_ppid
+
+        except Exception as e:
+            self.logger.error(f"ParentProcessWatchdog error for '{self.node_id}'", exc_info=True)
 
 
 class NodeFlowSDK:
@@ -23,7 +129,7 @@ class NodeFlowSDK:
     - 数据收发
     """
 
-    def __init__(self, log_level: str = "INFO"):
+    def __init__(self, log_level: str = "INFO", enable_parent_watchdog: bool = True):
         """
         初始化SDK
 
@@ -33,13 +139,14 @@ class NodeFlowSDK:
         - NODE_SOCKET_DIR: Socket临时目录
         - NODE_IN_<PORT>: 输入端口socket路径
         - NODE_OUT_<PORT>: 输出端口socket路径
+        - NODE_PARENT_WATCHDOG: 是否启用父进程监控（可选，默认true）
+        - NODE_WATCHDOG_INTERVAL: 监控检查间隔（可选，默认1.0秒）
+        - NODEFLOW_LOG_DIR: 日志目录（可选，默认 /tmp/nodeflow_logs）
 
         参数：
         - log_level: 日志级别
+        - enable_parent_watchdog: 是否启用父进程监控（默认True）
         """
-        # 设置日志
-        self.logger = setup_logger(f"nodeflow.node", log_level)
-
         # 从环境变量读取基本信息
         self.node_id = os.getenv('NODE_ID')
         self.node_hub_path = os.getenv('NODE_HUB_PATH')
@@ -48,15 +155,53 @@ class NodeFlowSDK:
         if not self.node_id:
             raise ValueError("NODE_ID environment variable not set")
 
-        self.logger.info(f"NodeFlow SDK initialized for node '{self.node_id}'")
+        # 设置结构化日志（包括JSON文件 + 控制台输出）
+        log_dir = os.getenv('NODEFLOW_LOG_DIR', '/tmp/nodeflow_logs')
+        self.logger = StructuredLogger(
+            node_id=self.node_id,
+            log_level=log_level,
+            log_dir=log_dir,
+            enable_json=True,
+            enable_console=True
+        )
+
+        self.logger.info(f"NodeFlow SDK initialized for node '{self.node_id}'", log_dir=log_dir)
 
         # 解析命令行参数
         self.params = ParamParser.parse()
-        self.logger.debug(f"Parsed parameters: {self.params}")
+        self.logger.debug(f"Parsed parameters: {len(self.params)} params")
 
         # 端口字典
         self.inputs: Dict[str, InputPort] = {}
         self.outputs: Dict[str, OutputPort] = {}
+
+        # 父进程监控（解决孤儿进程问题）
+        self._parent_watchdog: Optional[ParentProcessWatchdog] = None
+
+        # 从环境变量检查是否禁用父进程监控
+        env_watchdog = os.getenv('NODE_PARENT_WATCHDOG', 'true').lower()
+        watchdog_enabled = enable_parent_watchdog and env_watchdog not in ('false', '0', 'no', 'off')
+
+        if watchdog_enabled:
+            # 从环境变量读取检查间隔
+            interval_str = os.getenv('NODE_WATCHDOG_INTERVAL', '1.0')
+            try:
+                watchdog_interval = float(interval_str)
+            except ValueError:
+                watchdog_interval = 1.0
+
+            self._parent_watchdog = ParentProcessWatchdog(
+                self.node_id,
+                self.logger,
+                check_interval=watchdog_interval
+            )
+            self._parent_watchdog.start()
+            self.logger.info(
+                f"Parent process watchdog enabled",
+                interval=watchdog_interval
+            )
+        else:
+            self.logger.info("Parent process watchdog disabled")
 
     def get_param(self, key: str, default: Any = None) -> Any:
         """
@@ -117,18 +262,53 @@ class NodeFlowSDK:
         self.logger.info(f"Created input port: {port_name}")
         return port
 
-    def create_output_port(self, port_name: str) -> OutputPort:
+    def _publish_metadata(self):
+        """
+        发布节点元数据（包括Schema定义）到Shared Buffer
+        """
+        try:
+            metadata = {
+                "node_id": self.node_id,
+                "ports": {}
+            }
+
+            for name, port in self.outputs.items():
+                schema_json = port.get_schema_json()
+                port_meta = {
+                    "type": "output",
+                    "schema": schema_json
+                }
+                metadata["ports"][name] = port_meta
+
+            # 创建 metadata buffer
+            # 命名规则: {node_id}.metadata
+            buffer_name = f"{self.node_id}.metadata"
+            
+            # 使用较小的buffer size，元数据不会太大
+            meta_buffer = SharedBufferLite(buffer_name, size=64*1024, create=True)
+            meta_buffer.write(metadata)
+            
+            # 不需要保持buffer对象，写入后关闭即可（数据保留在共享内存文件）
+            meta_buffer.close()
+            
+            self.logger.info(f"Published node metadata to {buffer_name}")
+            
+        except Exception as e:
+            self.logger.warning(f"Failed to publish node metadata: {e}")
+
+    def create_output_port(self, port_name: str, schema: Optional[Type['BaseModel']] = None) -> OutputPort:
         """
         创建输出端口
-
-        参数：
-        - port_name: 端口名（必须与node.yaml中定义的一致）
-
-        返回：
-        - OutputPort对象
-
-        异常：
-        - ValueError: 端口未配置
+        
+        注意：创建完所有端口后，建议在用户代码中显式调用 publish_metadata()，
+        或者在 run() 方法开始时自动调用（如果框架支持生命周期钩子）。
+        目前我们在 create_output_port 后不自动更新 metadata，避免频繁 IO。
+        为了简化，我们假设用户在初始化所有端口后会进入 run 循环，
+        我们可以在第一次 send 或者提供一个显式的 start 方法。
+        
+        但为了保证 Metadata 尽早可用，我们采用简单的策略：
+        每次创建 OutputPort 后，如果提供了 Schema，更新一次 Metadata。
+        虽然有少许性能损耗（初始化阶段），但保证了正确性。
         """
         env_var_name = f'NODE_OUT_{port_name}'
         zmq_address = os.getenv(env_var_name)
@@ -140,10 +320,14 @@ class NodeFlowSDK:
             )
 
         # 创建OutputPort，传入zmq_address（ZeroMQ版本）
-        port = OutputPort(port_name, zmq_address)
+        port = OutputPort(port_name, zmq_address, schema=schema)
         self.outputs[port_name] = port
 
-        self.logger.info(f"Created output port: {port_name}")
+        self.logger.info(f"Created output port: {port_name} (schema={schema.__name__ if schema else 'None'})")
+        
+        # 更新元数据
+        self._publish_metadata()
+        
         return port
 
     def get_input_port(self, port_name: str) -> Optional[InputPort]:
@@ -207,9 +391,13 @@ class NodeFlowSDK:
         """
         清理资源
 
-        关闭所有端口
+        关闭所有端口和监控线程
         """
         self.logger.info("Shutting down NodeFlow SDK")
+
+        # 停止父进程监控
+        if self._parent_watchdog:
+            self._parent_watchdog.stop()
 
         for port in self.inputs.values():
             port.close()
