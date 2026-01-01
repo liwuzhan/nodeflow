@@ -25,6 +25,12 @@ class ViewConfig:
     # 初始消费参数
     initial_check_points: int = 10      # 初始化时检查的前N个点
     initial_consume_distance: float = 2.0  # 距离小于此值的点视为已消费 (米)
+    # 视野自动扩宽参数
+    min_view_points: int = 3           # 视野内最少点数，少于此值时扩宽视野
+    view_expand_factor: float = 2.0    # 视野扩宽倍数
+    max_view_width: float = 12.0       # 最大视野宽度 (米)
+    # 持续消费参数（防止跳过点）
+    continuous_consume_distance: float = 1.5  # 每帧检查，距离小于此值的点自动消费
 
 
 @dataclass
@@ -180,10 +186,13 @@ class WaypointSelector:
         if vx is None or vy is None:
             return None
 
-        # 1. 更新视野点集合
+        # 1. 持续消费：自动消费距离过近的点（防止跳过点导致回头）
+        self._continuous_consume(vx, vy)
+
+        # 2. 更新视野点集合
         new_in_view = self._compute_in_view_points(vx, vy, theta)
 
-        # 2. 处理退出视野的点 -> 标记为已消费
+        # 3. 处理退出视野的点 -> 标记为已消费
         old_in_view = set(self.state.in_view_indices)
         new_in_view_set = set(new_in_view)
 
@@ -198,7 +207,7 @@ class WaypointSelector:
         # 更新当前视野点
         self.state.in_view_indices = new_in_view
 
-        # 3. 根据规则选择前瞻点
+        # 4. 根据规则选择前瞻点
         return self._select_lookahead_point(vx, vy)
 
     def _initial_consume(self, vx: float, vy: float) -> int:
@@ -232,11 +241,55 @@ class WaypointSelector:
 
         return 0
 
-    def _compute_in_view_points(
-        self, vx: float, vy: float, theta: float
+    def _continuous_consume(self, vx: float, vy: float) -> None:
+        """
+        持续消费机制：每帧检查前N个未消费点，如果距离过近则自动消费
+
+        这个机制防止车辆跳过点（比如在U形弯快速转向时）导致的"回头"问题。
+        如果车辆已经经过了某个点（距离很近），即使该点从未进入视野，也应该消费它。
+
+        限制条件：
+        - 只检查前 max_continuous_check 个未消费点（默认10个）
+        - 不能跳过序列上过远的点（防止误消费）
+
+        参数:
+            vx, vy: 车辆当前位置
+        """
+        path = self.state.path
+        cfg = self.config
+
+        if not path or self.state.first_unconsumed_idx >= len(path):
+            return
+
+        # 限制：只检查前N个点，避免误消费序列上很远的点
+        max_check_count = 10  # 最多检查前10个未消费点
+        check_end = min(
+            self.state.first_unconsumed_idx + max_check_count,
+            len(path)
+        )
+
+        # 从第一个未消费点开始，连续消费距离过近的点
+        consumed_count = 0
+        for i in range(self.state.first_unconsumed_idx, check_end):
+            px, py = path[i]
+            dist = self.euclidean_distance(vx, vy, px, py)
+
+            # 如果这个点距离车辆很近，消费它
+            if dist < cfg.continuous_consume_distance:
+                consumed_count += 1
+            else:
+                # 遇到距离足够远的点，停止消费
+                break
+
+        # 更新第一个未消费点索引
+        if consumed_count > 0:
+            self.state.first_unconsumed_idx += consumed_count
+
+    def _compute_in_view_points_with_width(
+        self, vx: float, vy: float, theta: float, view_width: float
     ) -> List[int]:
         """
-        计算当前视野内的点索引
+        使用指定宽度计算视野内的点索引
 
         规则:
         - 从第一个未消费点开始检查
@@ -257,7 +310,7 @@ class WaypointSelector:
 
             if self.point_in_view_rectangle(
                 px, py, vx, vy, theta,
-                cfg.view_distance, cfg.view_width, cfg.view_depth
+                cfg.view_distance, view_width, cfg.view_depth
             ):
                 # 检查连续性: 必须是起始点，或前一个点在视野内
                 if i == start_idx or (in_view and in_view[-1] == i - 1):
@@ -273,6 +326,47 @@ class WaypointSelector:
                 # 否则继续找第一个进入视野的点
 
         return in_view
+
+    def _compute_in_view_points(
+        self, vx: float, vy: float, theta: float
+    ) -> List[int]:
+        """
+        计算当前视野内的点索引（带自动扩宽机制 + 回弹逻辑）
+
+        规则（优先级递减）:
+        1. 首先尝试原始视野宽度，如果足够返回
+        2. 原始宽度不足，才尝试扩宽视野
+        3. 如果扩宽也没有找到更多点，返回原始结果
+
+        这个顺序确保：
+        - 优先使用原始宽度（更紧跟规划路径）
+        - 只在必要时扩宽（避免在U形弯选择外侧点导致轨迹偏离）
+        - 自动"回弹"到原始宽度（当路径条件改善时）
+        """
+        cfg = self.config
+
+        # 步骤1: 总是先用原始宽度搜索
+        in_view_normal = self._compute_in_view_points_with_width(vx, vy, theta, cfg.view_width)
+
+        # 步骤2: 如果原始宽度足够，直接返回（优先选择原始宽度）
+        if len(in_view_normal) >= cfg.min_view_points:
+            return in_view_normal
+
+        # 步骤3: 原始宽度不足，才尝试扩宽
+        expanded_width = min(cfg.view_width * cfg.view_expand_factor, cfg.max_view_width)
+
+        # 只有当扩宽后宽度大于原宽度时才重试
+        if expanded_width > cfg.view_width:
+            expanded_in_view = self._compute_in_view_points_with_width(
+                vx, vy, theta, expanded_width
+            )
+
+            # 如果扩宽后找到更多点，使用扩宽结果；否则返回原始结果
+            if len(expanded_in_view) > len(in_view_normal):
+                return expanded_in_view
+
+        # 都不足，返回原始宽度的结果
+        return in_view_normal
 
     def _select_lookahead_point(
         self, vx: float, vy: float
