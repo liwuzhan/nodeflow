@@ -20,7 +20,7 @@ from runtime.node_hub.node_registry import NodeRegistry
 from runtime.node_hub.scanner import NodeHubScanner
 from runtime.graph.topology import TopologyAnalyzer
 from runtime.graph.validator import GraphValidator
-from runtime.ipc.socket_manager import SocketManager
+from runtime.orchestrator.env_builder import EnvBuilder
 from runtime.utils.logger import setup_logger
 from runtime.utils.errors import CyclicDependencyError
 
@@ -34,7 +34,7 @@ class RuntimeDiagnostics:
         self.config_path = config_path
         self.config = None
         self.registry = None
-        self.socket_manager = None
+        self.env_builder = EnvBuilder()
 
     def print_section(self, title: str):
         """打印章节标题"""
@@ -198,44 +198,32 @@ class RuntimeDiagnostics:
             traceback.print_exc()
             return False
 
-    def step_6_init_sockets(self) -> bool:
-        """第6步：Socket 初始化"""
-        self.print_step(6, "Initialize Socket Manager")
-
+    def step_6_show_zmq_addresses(self) -> bool:
+        """第6步：生成并展示 ZMQ 地址（ZeroMQ 版本）"""
+        self.print_step(6, "Generate ZMQ Addresses")
         try:
-            socket_dir = "/tmp/nodeflow_debug_sockets"
-            os.makedirs(socket_dir, exist_ok=True)
-
-            self.socket_manager = SocketManager(socket_dir)
-            self.print_result("OK", f"Socket directory: {socket_dir}")
-
-            # 为每个节点的端口创建 socket 路径
-            print(f"\n  Socket paths:")
+            print(f"\n  ZMQ addresses:")
             for node in self.config.nodes:
                 manifest = self.registry.get_manifest(node.package)
-                if manifest:
-                    inputs = manifest.inputs
-                    outputs = manifest.outputs
+                if not manifest:
+                    self.print_result("WARN", f"Manifest not found: {node.package}")
+                    continue
+                env = self.env_builder.build_env(node, manifest, self.config.node_hub_path, self.config.edges)
 
-                    if inputs:
-                        print(f"\n    {node.id} (inputs):")
-                        for port in inputs:
-                            socket_path = self.socket_manager.create_channel_path(
-                                node.id, port.name, "in"
-                            )
-                            print(f"      • {port.name:20s} → {socket_path}")
+                input_vars = [k for k in env.keys() if k.startswith("NODE_IN_")]
+                output_vars = [k for k in env.keys() if k.startswith("NODE_OUT_") and "_BUFFER_SIZE" not in k and "_CONFLATE" not in k]
 
-                    if outputs:
-                        print(f"\n    {node.id} (outputs):")
-                        for port in outputs:
-                            socket_path = self.socket_manager.create_channel_path(
-                                node.id, port.name, "out"
-                            )
-                            print(f"      • {port.name:20s} → {socket_path}")
-
+                if input_vars:
+                    print(f"\n    {node.id} (inputs):")
+                    for var in sorted(input_vars):
+                        print(f"      • {var:25s} → {env[var]}")
+                if output_vars:
+                    print(f"\n    {node.id} (outputs):")
+                    for var in sorted(output_vars):
+                        print(f"      • {var:25s} → {env[var]}")
             return True
         except Exception as e:
-            self.print_result("ERROR", f"Failed to init sockets: {e}")
+            self.print_result("ERROR", f"Failed to generate ZMQ addresses: {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -313,7 +301,7 @@ class RuntimeDiagnostics:
             self.step_3_register_nodes,
             self.step_4_validate_graph,
             self.step_5_analyze_topology,
-            self.step_6_init_sockets,
+            self.step_6_show_zmq_addresses,
             self.step_7_verify_node_scripts,
             self.step_8_check_health_check_timeout,
         ]

@@ -208,7 +208,7 @@ def start_dataflow():
         from sdk.shared_buffer_lite import SharedBufferLite
 
         # 写入启动命令到控制缓冲区
-        buf = SharedBufferLite("runtime.control", create=True, buffer_size=1024)
+        buf = SharedBufferLite("runtime.control", create=True, size=1024)
         buf.write({"command": "start_dataflow", "timestamp": time.time()})
 
         return {
@@ -228,7 +228,7 @@ def stop_dataflow():
         from sdk.shared_buffer_lite import SharedBufferLite
 
         # 写入停止命令到控制缓冲区
-        buf = SharedBufferLite("runtime.control", create=True, buffer_size=1024)
+        buf = SharedBufferLite("runtime.control", create=True, size=1024)
         buf.write({"command": "stop_dataflow", "timestamp": time.time()})
 
         return {

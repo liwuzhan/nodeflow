@@ -82,11 +82,22 @@ class SimulatorServer:
         self.physics = SimplePhysics()
 
         # 传感器模拟器
-        self.sensors = SensorSimulator()
+        gps_ref = self.config.get('gps_ref', {})
+        ref_lat = gps_ref.get('lat', 31.2)
+        ref_lon = gps_ref.get('lon', 121.5)
+        self.sensors = SensorSimulator(ref_lat=ref_lat, ref_lon=ref_lon)
 
-        # 田地生成器和配置
-        self.field_generator = FieldGenerator()
+        # 田地生成器和配置（田地中心在原点）
+        field_config = self.config.get('field', {})
+        field_width = field_config.get('width', 100.0)
+        field_length = field_config.get('length', 200.0)
+        # 计算base坐标使田地几何中心在(0, 0)
+        base_x = -field_width / 2
+        base_y = -field_length / 2
+        self.field_generator = FieldGenerator(base_x=base_x, base_y=base_y)
         self.field = self._generate_default_field()
+        self.field_version = 1
+        self._init_robot_near_entry(max_distance_m=50.0)
 
         # 控制
         self.running = False
@@ -96,13 +107,27 @@ class SimulatorServer:
         # 传感器频率限制
         sensor_config = self.config.get('sensors', {})
         rtk_config = sensor_config.get('rtk', {})
-        self.rtk_frequency = rtk_config.get('frequency', 20.0)  # 默认20Hz
+        self.rtk_frequency = rtk_config.get('frequency', 50.0)  # 默认50Hz
         self.rtk_period = 1.0 / self.rtk_frequency  # 秒
         self.last_rtk_time = 0.0
 
         # 统计
         self.step_count = 0
         self.request_count = 0
+
+        # RTK 日志统计
+        self.rtk_request_count = 0
+        self.rtk_success_count = 0
+        self.rtk_rate_limited_count = 0
+        self.rtk_last_log_time = time.time()
+        self.rtk_log_interval = 5.0  # 每5秒输出一次统计日志
+
+        # 速度控制日志统计
+        self.velocity_cmd_count = 0
+        self.velocity_last_log_time = time.time()
+        self.last_velocity_cmd = (0.0, 0.0)
+
+        logger.info(f"RTK 配置: 频率={self.rtk_frequency}Hz, 周期={self.rtk_period*1000:.1f}ms")
 
     def _generate_default_field(self) -> Dict[str, Any]:
         """生成默认的田地配置"""
@@ -114,14 +139,20 @@ class SimulatorServer:
         logger.info(f"Generating {field_type} field: {width}m x {length}m")
 
         if field_type == 'rectangular':
-            return self.field_generator.generate_rectangular_field(width, length)
+            field = self.field_generator.generate_rectangular_field(width, length)
         else:
             num_points = field_config.get('num_points', 6)
             field = self.field_generator.generate_irregular_field(width, length, num_points)
             num_obstacles = field_config.get('num_obstacles', 0)
             if num_obstacles > 0:
                 field = self.field_generator.generate_simple_obstacles(field, num_obstacles)
-            return field
+        holes_cfg = field_config.get('holes', {})
+        enabled = holes_cfg.get('enabled', False)
+        num_holes = holes_cfg.get('num_holes', 0)
+        size_ratio = holes_cfg.get('size_ratio', 0.05)
+        if enabled and num_holes > 0 and size_ratio > 0.0:
+            field = self.field_generator.generate_random_holes(field, num_holes, size_ratio)
+        return field
 
     def _load_config(self, config_path: str = None) -> Dict[str, Any]:
         """加载配置文件"""
@@ -138,6 +169,27 @@ class SimulatorServer:
         else:
             logger.warning(f"Config file not found: {config_path}, using defaults")
             return {}
+
+    def _init_robot_near_entry(self, max_distance_m: float = 50.0):
+        """将机器人初始位置设置在入口点附近（不超过指定距离）"""
+        try:
+            entry_points = self.field.get("entry_points", [])
+            if not entry_points:
+                return
+            ex, ey = entry_points[0]
+            cx, cy = self.field.get("center", (ex, ey))
+            import random, math
+            r = random.uniform(0.0, max_distance_m)
+            theta = random.uniform(0.0, 2 * math.pi)
+            self.state.x = ex + r * math.cos(theta)
+            self.state.y = ey + r * math.sin(theta)
+            # 使航向朝向田地中心
+            dx = cx - self.state.x
+            dy = cy - self.state.y
+            self.state.yaw = math.atan2(dy, dx)
+        except Exception:
+            # 安全降级：保持默认原点
+            pass
 
     def start(self):
         """启动服务器"""
@@ -250,8 +302,12 @@ class SimulatorServer:
                 return self._get_state()
             elif req_type == "get_field":
                 return self._get_field()
+            elif req_type == "refresh_field":
+                return self._refresh_field(request)
             elif req_type == "reset":
                 return self._reset()
+            elif req_type == "get_config":
+                return self._get_config()
             else:
                 return {
                     "status": "error",
@@ -274,11 +330,18 @@ class SimulatorServer:
         elif sensor_type == "rtk_gps":
             # RTK GPS 频率限制
             current_time = time.time()
+            self.rtk_request_count += 1
+
             if current_time - self.last_rtk_time >= self.rtk_period:
                 data = self.sensors.get_rtk_gps_data(self.state)
                 self.last_rtk_time = current_time
+                self.rtk_success_count += 1
+
+                # 定期输出RTK统计日志
+                self._log_rtk_stats(current_time, data)
             else:
                 # 返回缓冲的数据（等待下一个周期）
+                self.rtk_rate_limited_count += 1
                 return {
                     "status": "ok",
                     "sensor": sensor_type,
@@ -302,6 +365,62 @@ class SimulatorServer:
             "data": data,
             "sim_time": self.state.sim_time
         }
+
+    def _log_rtk_stats(self, current_time: float, data: Dict[str, Any]):
+        """定期输出RTK统计日志"""
+        if current_time - self.rtk_last_log_time >= self.rtk_log_interval:
+            elapsed = current_time - self.rtk_last_log_time
+            total = self.rtk_request_count
+            success = self.rtk_success_count
+            limited = self.rtk_rate_limited_count
+
+            if total > 0:
+                success_rate = (success / total) * 100
+                # 输出统计
+                logger.info(
+                    f"[RTK统计] 请求={total}, 成功={success} ({success_rate:.1f}%), "
+                    f"限流={limited}, 实际频率={success/elapsed:.1f}Hz"
+                )
+
+                # 输出当前RTK数据摘要
+                lat = data.get('latitude', 0)
+                lon = data.get('longitude', 0)
+                heading = data.get('heading', 0)
+                rtk_status = data.get('rtk_status', 'UNKNOWN')
+                logger.info(
+                    f"[RTK数据] lat={lat:.8f}, lon={lon:.8f}, "
+                    f"heading={heading:.2f}°, status={rtk_status}"
+                )
+
+                # 输出车辆位置（世界坐标）
+                logger.info(
+                    f"[车辆位置] x={self.state.x:.2f}m, y={self.state.y:.2f}m, "
+                    f"yaw={self.state.yaw:.4f}rad ({self.state.yaw*180/3.14159:.1f}°)"
+                )
+
+            # 重置统计
+            self.rtk_request_count = 0
+            self.rtk_success_count = 0
+            self.rtk_rate_limited_count = 0
+            self.rtk_last_log_time = current_time
+
+    def _log_velocity_stats(self, current_time: float):
+        """定期输出速度控制统计日志"""
+        if current_time - self.velocity_last_log_time >= self.rtk_log_interval:
+            elapsed = current_time - self.velocity_last_log_time
+            count = self.velocity_cmd_count
+            v, w = self.last_velocity_cmd
+
+            if count > 0:
+                freq = count / elapsed
+                logger.info(
+                    f"[速度控制] 接收命令={count}, 频率={freq:.1f}Hz, "
+                    f"当前: v={v:.3f}m/s, w={w:.3f}rad/s"
+                )
+
+            # 重置统计
+            self.velocity_cmd_count = 0
+            self.velocity_last_log_time = current_time
 
     def _set_actuator(self, request: Dict[str, Any]) -> Dict[str, Any]:
         """设置执行器"""
@@ -327,6 +446,11 @@ class SimulatorServer:
             angular_vel = data.get("angular_velocity", 0.0)
 
             self.kinematics.set_velocity_control(linear_vel, angular_vel)
+            self.velocity_cmd_count += 1
+            self.last_velocity_cmd = (linear_vel, angular_vel)
+
+            # 定期输出速度控制日志
+            self._log_velocity_stats(time.time())
 
             return {
                 "status": "ok",
@@ -358,6 +482,7 @@ class SimulatorServer:
         return {
             "status": "ok",
             "field": self.field,
+            "version": self.field_version,
             "sim_time": self.state.sim_time
         }
 
@@ -374,6 +499,38 @@ class SimulatorServer:
             "status": "ok",
             "message": "Simulation reset"
         }
+
+    def _get_config(self) -> Dict[str, Any]:
+        """获取仿真器配置（GPS参考点等）"""
+        gps_ref = self.config.get('gps_ref', {})
+        return {
+            "status": "ok",
+            "config": {
+                "gps_ref": {
+                    "lon": gps_ref.get('lon', 121.5),
+                    "lat": gps_ref.get('lat', 31.2)
+                }
+            }
+        }
+
+    def _refresh_field(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        """刷新田地并重置初始位置"""
+        logger.info("Refreshing field")
+        try:
+            self.field = self._generate_default_field()
+            self.field_version += 1
+            self._init_robot_near_entry(max_distance_m=50.0)
+            return {
+                "status": "ok",
+                "field": self.field,
+                "version": self.field_version,
+                "message": "Field refreshed"
+            }
+        except Exception as e:
+            return {
+                "status": "error",
+                "message": str(e)
+            }
 
 
 def main():

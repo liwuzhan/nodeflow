@@ -34,6 +34,8 @@ class NodeMonitor:
 
         # 重启回调函数（由外部提供）
         self.restart_callback: Optional[Callable] = None
+        self.start_times: Dict[str, float] = {}
+        self.stable_reset_seconds: float = 300.0
 
     def start_monitoring(
         self,
@@ -50,6 +52,9 @@ class NodeMonitor:
         self.processes = processes
         self.restart_callback = restart_callback
         self.running = True
+        now = time.time()
+        for node_id in processes.keys():
+            self.start_times[node_id] = now
 
         # 启动监控线程
         self.monitor_thread = threading.Thread(
@@ -83,6 +88,12 @@ class NodeMonitor:
                 if ret_code is not None:
                     # 进程已退出
                     crashed_nodes.append((node_id, ret_code))
+                else:
+                    started_at = self.start_times.get(node_id)
+                    if started_at:
+                        if self.retry_tracker.get_retry_count(node_id) > 0:
+                            if time.time() - started_at >= self.stable_reset_seconds:
+                                self.retry_tracker.reset(node_id)
 
             # 处理崩溃的节点
             for node_id, ret_code in crashed_nodes:
@@ -145,6 +156,7 @@ class NodeMonitor:
 
                 if new_process:
                     self.processes[node_id] = new_process
+                    self.start_times[node_id] = time.time()
                     logger.info(f"Node '{node_id}' restarted with PID {new_process.pid}")
                 else:
                     logger.error(f"Failed to restart node '{node_id}'")

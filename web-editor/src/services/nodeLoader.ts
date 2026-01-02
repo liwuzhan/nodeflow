@@ -5,7 +5,7 @@
 
 import type { NodeManifest } from '@/models'
 
-const API_BASE_URL = '/api'
+const API_BASE_URL = (import.meta as any).env?.VITE_API_BASE_URL || '/api'
 
 /**
  * 从后端列出所有可用的节点包

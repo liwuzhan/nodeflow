@@ -51,3 +51,11 @@ params:
   pivot_threshold_deg:
     type: float
     default: 15.0
+  decel_start_distance:
+    type: float
+    default: 2.0
+    description: "开始减速的距离阈值 (米)"
+  final_stop_distance:
+    type: float
+    default: 0.5
+    description: "终点停止距离阈值 (米)"

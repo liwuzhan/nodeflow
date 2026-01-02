@@ -21,6 +21,8 @@ class SensorSimulator:
 
     def __init__(
         self,
+        ref_lat: float = 31.2,
+        ref_lon: float = 121.5,
         gps_noise_std: float = 0.5,      # GPS 噪声标准差 (米)
         imu_accel_noise: float = 0.1,    # 加速度噪声 (m/s²)
         imu_gyro_noise: float = 0.01,    # 陀螺仪噪声 (rad/s)
@@ -34,12 +36,12 @@ class SensorSimulator:
             random.seed(seed)
 
         # GPS 参考点 (用于转换为经纬度)
-        self.gps_ref_lat = 40.7128  # 纽约纬度
-        self.gps_ref_lon = -74.0060  # 纽约经度
+        self.gps_ref_lat = ref_lat
+        self.gps_ref_lon = ref_lon
 
         # 度/米转换系数（近似）
-        self.meters_per_degree_lat = 111000.0  # 1度纬度 ≈ 111km
-        self.meters_per_degree_lon = 85000.0   # 1度经度 ≈ 85km (at 40°N)
+        self.meters_per_degree_lat = 111320.0  # WGS84 平均
+        self.meters_per_degree_lon = 111320.0 * math.cos(math.radians(self.gps_ref_lat))
 
         # RTK GPS 状态模拟
         self.rtk_fix_count = 0
@@ -163,6 +165,9 @@ class SensorSimulator:
 
         self.last_rtk_status = rtk_status
 
+        # 航向角换算：仿真 yaw=0 指向 +X（东），CCW 为正；要求 heading 北向为0、CW为正
+        # 映射：heading_deg = (-yaw_deg + 90) mod 360
+        heading_deg = (-(math.degrees(state.yaw)) + 90.0) % 360.0
         return {
             # 基础位置信息
             "latitude": lat,
@@ -192,7 +197,7 @@ class SensorSimulator:
             "ratio": random.uniform(3.0, 10.0) if rtk_status == "FIXED" else random.uniform(2.0, 3.0),
 
             # 双天线 RTK 输出（航向和俯仰）
-            "heading": math.degrees(state.yaw),      # 航向角 (0-360度, 正北为0)
+            "heading": heading_deg,
             "pitch": math.degrees(state.pitch),      # 俯仰角 (度, 机体向上为正)
             "roll": math.degrees(state.roll),        # 侧滚角 (度, 可选)
 

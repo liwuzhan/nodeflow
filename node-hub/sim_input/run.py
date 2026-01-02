@@ -1,21 +1,38 @@
 #!/usr/bin/env python3
-"""
-仿真器输入节点
-接收控制命令并发送到仿真器
-"""
-
 import sys
 import time
 import zmq
 import json
 import logging
 from pathlib import Path
+from typing import Optional
 
-# 添加项目根路径
+# Pydantic 导入
+try:
+    from pydantic import BaseModel, Field
+except ImportError:
+    class BaseModel: pass
+    def Field(*args, **kwargs): return None
+
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from sdk.nodeflow_sdk import NodeFlowSDK
+
+# --- Schema Definitions ---
+
+class VelocityCmd(BaseModel):
+    linear_velocity: float
+    angular_velocity: float
+    timestamp: float
+    status: Optional[str] = None
+
+class MotorCmd(BaseModel):
+    throttle: float
+    steering: float
+    timestamp: Optional[float] = None
+
+# --- End Schema Definitions ---
 
 logging.basicConfig(
     level=logging.INFO,

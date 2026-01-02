@@ -13,12 +13,100 @@ import json
 import logging
 from pathlib import Path
 import math
+from typing import List, Optional, Tuple, Dict, Any
+
+# Pydantic 导入
+try:
+    from pydantic import BaseModel, Field
+except ImportError:
+    # 简单的兼容性处理，实际运行时应确保安装了pydantic
+    class BaseModel: pass
+    def Field(*args, **kwargs): return None
 
 # 添加项目根路径
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from sdk.nodeflow_sdk import NodeFlowSDK
+
+# --- Schema Definitions ---
+
+class GPSFix(BaseModel):
+    timestamp: float
+    seq: int
+    lat: float = Field(..., ge=-90, le=90)
+    lon: float = Field(..., ge=-180, le=180)
+    alt: float
+    status: int
+    satellites: int
+
+class IMUData(BaseModel):
+    timestamp: float
+    seq: int
+    acc_x: float
+    acc_y: float
+    acc_z: float
+    gyro_x: float
+    gyro_y: float
+    gyro_z: float
+    mag_x: float
+    mag_y: float
+    mag_z: float
+
+class RTKFix(BaseModel):
+    timestamp: float
+    seq: int
+    lat: float = Field(..., ge=-90, le=90)
+    lon: float = Field(..., ge=-180, le=180)
+    alt: float
+    heading: float = Field(..., ge=0, le=360)
+    rtk_status: int
+    satellites: int
+    precision: float
+
+class Odometry(BaseModel):
+    timestamp: float
+    seq: int
+    x: float
+    y: float
+    theta: float
+    v_linear: float
+    v_angular: float
+
+class FieldInfo(BaseModel):
+    field_name: str
+    parcel: Dict[str, Any] # Complex structure, keep as dict for now or define deeper
+    
+class VehicleConfig(BaseModel):
+    implement_width_m: float
+    overlap_ratio: float
+    path_inset_m: float
+    pivot_turn: bool
+    yaw_rate_max_deg_s: float
+    min_turn_radius_m: float
+
+class TaskRequest(BaseModel):
+    id: str
+    parcel: Dict[str, Any]
+    vehicle: Dict[str, Any]
+
+class TaskENU(BaseModel):
+    id: str
+    parcel: Dict[str, Any]
+    vehicle: Dict[str, Any]
+    ref_lon: float
+    ref_lat: float
+    timestamp: float
+
+class StateInfo(BaseModel):
+    timestamp: float
+    seq: int
+    x: float
+    y: float
+    theta: float
+    # Add other state fields as needed
+
+# --- End Schema Definitions ---
 
 logging.basicConfig(
     level=logging.INFO,
@@ -66,37 +154,37 @@ class SimOutputNode:
         self.enable_state = self.params.get('enable_state', False)
 
         if self.enable_gps:
-            self.ports['gps'] = sdk.create_output_port('gps_fix')
+            self.ports['gps'] = sdk.create_output_port('gps_fix', schema=GPSFix)
             logger.info("GPS 输出端口已创建")
 
         if self.enable_imu:
-            self.ports['imu'] = sdk.create_output_port('imu_data')
+            self.ports['imu'] = sdk.create_output_port('imu_data', schema=IMUData)
             logger.info("IMU 输出端口已创建")
 
         if self.enable_rtk:
-            self.ports['rtk'] = sdk.create_output_port('rtk_fix')
+            self.ports['rtk'] = sdk.create_output_port('rtk_fix', schema=RTKFix)
             logger.info("RTK 输出端口已创建")
 
         if self.enable_odometry:
-            self.ports['odom'] = sdk.create_output_port('odometry')
+            self.ports['odom'] = sdk.create_output_port('odometry', schema=Odometry)
             logger.info("里程计 输出端口已创建")
 
         if self.enable_state:
-            self.ports['state'] = sdk.create_output_port('state_info')
+            self.ports['state'] = sdk.create_output_port('state_info', schema=StateInfo)
             logger.info("状态信息 输出端口已创建")
 
         # 地块和车辆配置端口（新版本）
-        self.ports['field'] = sdk.create_output_port('field_info')
-        self.ports['vehicle'] = sdk.create_output_port('vehicle_config')
+        self.ports['field'] = sdk.create_output_port('field_info', schema=FieldInfo)
+        self.ports['vehicle'] = sdk.create_output_port('vehicle_config', schema=VehicleConfig)
         logger.info("地块信息 输出端口已创建")
         logger.info("车辆配置 输出端口已创建")
 
         # 任务请求端口（兼容旧版本）
-        self.ports['task'] = sdk.create_output_port('task_request')
+        self.ports['task'] = sdk.create_output_port('task_request', schema=TaskRequest)
         logger.info("任务请求 输出端口已创建（兼容旧版本）")
 
         # 任务ENU端口（新版本）
-        self.ports['task_enu'] = sdk.create_output_port('task_enu')
+        self.ports['task_enu'] = sdk.create_output_port('task_enu', schema=TaskENU)
         logger.info("任务ENU 输出端口已创建")
 
         # 读取当前地块与版本（带重试机制，避免启动竞态）
@@ -124,17 +212,63 @@ class SimOutputNode:
         self.period = 1.0 / output_frequency
         logger.info(f"输出频率: {output_frequency} Hz (周期 {self.period*1000:.1f} ms)")
 
+    def _get_field_with_retry(self, max_retries: int = 5, retry_delay: float = 0.5) -> tuple[dict, int]:
+        """
+        带重试机制获取地块信息（解决启动竞态条件）
+        """
+        for attempt in range(max_retries):
+            field_data, version = self._get_field_current()
+
+            if version > 0:
+                return field_data, version
+
+            if attempt < max_retries - 1:
+                logger.warning(f"获取地块失败，重试 ({attempt + 1}/{max_retries})...")
+                time.sleep(retry_delay)
+
+        logger.warning(f"获取地块失败 {max_retries} 次，使用默认地块")
+        return self._default_field(), 0
+
+    def _reconnect(self):
+        """重新连接ZMQ socket"""
+        logger.warning("重新连接仿真器...")
+        self.socket.close(linger=0)
+        self.socket = self.context.socket(zmq.REQ)
+        host = self.params.get('simulator_host', 'localhost')
+        port = self.params.get('simulator_port', 5555)
+        timeout = self.params.get('timeout', 1000)
+        self.socket.connect(f"tcp://{host}:{port}")
+        self.socket.setsockopt(zmq.RCVTIMEO, timeout)
+        self.socket.setsockopt(zmq.SNDTIMEO, timeout)
+        logger.info("已重新连接")
+
+    def _send_recv(self, request: dict) -> dict:
+        """发送请求并接收响应，带重连机制"""
+        try:
+            self.socket.send_json(request)
+            return self.socket.recv_json()
+        except (zmq.error.Again, zmq.error.ZMQError) as e:
+            logger.warning(f"ZMQ通信异常 ({e})，尝试重连...")
+            self._reconnect()
+            try:
+                # 重连后重试一次
+                self.socket.send_json(request)
+                return self.socket.recv_json()
+            except Exception as e2:
+                logger.error(f"重试失败: {e2}")
+                return {}
+        except Exception as e:
+            logger.error(f"通信未知异常: {e}")
+            self._reconnect()
+            return {}
+
     def _fetch_gps_ref(self) -> tuple[float, float]:
         """
         从仿真器获取 GPS 参考点，失败则使用默认值
-
-        Returns:
-            (ref_lon, ref_lat) 元组
         """
         try:
             request = {"type": "get_config"}
-            self.socket.send_json(request)
-            response = self.socket.recv_json()
+            response = self._send_recv(request)
             if response.get("status") == "ok":
                 config = response.get("config", {})
                 gps_ref = config.get("gps_ref", {})
@@ -149,47 +283,18 @@ class SimOutputNode:
         logger.warning("使用默认 GPS 参考点: (121.5, 31.2)")
         return 121.5, 31.2
 
-    def _get_field_with_retry(self, max_retries: int = 5, retry_delay: float = 0.5) -> tuple[dict, int]:
-        """
-        带重试机制获取地块信息（解决启动竞态条件）
-
-        参数：
-        - max_retries: 最大重试次数
-        - retry_delay: 重试间隔（秒）
-
-        返回：
-        - (地块数据, 版本号) 元组
-        """
-        for attempt in range(max_retries):
-            field_data, version = self._get_field_current()
-
-            # 如果成功获取真实地块（版本号 > 0），直接返回
-            if version > 0:
-                return field_data, version
-
-            # 如果不是最后一次尝试，等待后重试
-            if attempt < max_retries - 1:
-                logger.warning(f"获取地块失败，重试 ({attempt + 1}/{max_retries})...")
-                time.sleep(retry_delay)
-
-        # 所有重试失败，返回默认地块
-        logger.warning(f"获取地块失败 {max_retries} 次，使用默认地块（将在主循环中继续尝试）")
-        return self._default_field(), 0
-
     def _get_field_current(self) -> tuple[dict, int]:
         """从仿真器读取当前地块信息与版本"""
         try:
             request = {"type": "get_field"}
-            self.socket.send_json(request)
-            response = self.socket.recv_json()
+            response = self._send_recv(request)
             if response.get("status") == "ok":
                 return response.get("field", {}), int(response.get("version", 1))
             else:
-                logger.error(f"获取地块失败: {response.get('message', 'unknown error')}")
-                return self._default_field(), 0
+                return None, 0
         except Exception as e:
             logger.error(f"获取地块异常: {e}")
-            return self._default_field(), 0
+            return None, 0
 
     def _default_field(self) -> dict:
         """默认地块（100m x 200m 矩形）"""
@@ -298,23 +403,16 @@ class SimOutputNode:
             'timestamp': time.time()
         }
 
-
     def _get_sensor(self, sensor_name: str) -> dict:
         """从仿真器获取传感器数据"""
         try:
             request = {"type": "get_sensor", "sensor": sensor_name}
-            self.socket.send_json(request)
-            response = self.socket.recv_json()
+            response = self._send_recv(request)
 
             if response.get("status") == "ok":
                 return response.get("data", {})
             else:
-                logger.warning(f"获取{sensor_name}失败: {response.get('message', '')}")
                 return {}
-
-        except zmq.error.Again:
-            logger.warning(f"获取{sensor_name}超时")
-            return {}
         except Exception as e:
             logger.error(f"获取{sensor_name}异常: {e}")
             return {}
@@ -323,8 +421,7 @@ class SimOutputNode:
         """从仿真器获取完整状态"""
         try:
             request = {"type": "get_state"}
-            self.socket.send_json(request)
-            response = self.socket.recv_json()
+            response = self._send_recv(request)
 
             if response.get("status") == "ok":
                 return response.get("state", {})
@@ -351,7 +448,8 @@ class SimOutputNode:
                 if time.time() - last_field_check >= 1.0:
                     try:
                         fld, ver = self._get_field_current()
-                        if ver != self.field_version:
+                        # 仅当获取到有效地块且版本变化时更新
+                        if fld is not None and ver != self.field_version:
                             logger.info(f"检测到地块版本变化: {self.field_version} -> {ver}")
                             self.field_version = ver
                             self.field_data = fld

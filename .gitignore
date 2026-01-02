@@ -53,3 +53,9 @@ htmlcov/
 # Project specific
 .claude/
 *.bak
+.trae/
+
+# Test reports
+.test-reports/
+*.report.json
+unittest-*.log

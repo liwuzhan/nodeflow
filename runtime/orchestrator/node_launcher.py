@@ -6,8 +6,13 @@
 import subprocess
 import json
 import os
+import sys
+import signal
 from pathlib import Path
 from typing import Dict, Optional, TextIO, Tuple
+import threading
+import logging
+from logging.handlers import RotatingFileHandler
 
 from runtime.config.models import NodeInstance, NodeManifest, EntryPoint
 from runtime.orchestrator.env_builder import EnvBuilder
@@ -66,35 +71,96 @@ class NodeLauncher:
         logger.info(f"Launching node '{node.id}' (package: {node.package})")
 
         # 1. 获取启动入口
-        entrypoint = self._get_entrypoint(node, manifest, platform)
-        if not entrypoint:
-            raise NodeLaunchError(
-                node.id, f"No entrypoint found for platform '{platform}'"
-            )
+        try:
+            entrypoint = self._get_entrypoint(node, manifest, platform)
+            if not entrypoint:
+                raise NodeLaunchError(
+                    node.id, f"No entrypoint found for platform '{platform}'"
+                )
+        except Exception as e:
+            logger.error(f"Failed to get entrypoint for {node.id}: {e}")
+            raise
 
         # 2. 构建环境变量（Shared Buffer版本：不再需要socket_manager）
-        env = self.env_builder.build_env(
-            node, manifest, self.node_hub_path, self.edges
-        )
+        try:
+            env = self.env_builder.build_env(
+                node, manifest, self.node_hub_path, self.edges
+            )
+        except Exception as e:
+            logger.error(f"Failed to build env for {node.id}: {e}")
+            raise
 
         # 3. 构建命令
-        cmd = self._build_command(node, entrypoint)
-        logger.debug(f"Command: {' '.join(cmd)}")
+        try:
+            cmd = self._build_command(node, entrypoint)
+            logger.debug(f"Command: {' '.join(cmd)}")
+        except Exception as e:
+            logger.error(f"Failed to build command for {node.id}: {e}")
+            raise
 
         # 4. 设置工作目录（节点包目录）
         cwd = os.path.join(self.node_hub_path, node.package)
         if not os.path.isdir(cwd):
             raise NodeLaunchError(node.id, f"Node package directory not found: {cwd}")
 
-        # 5-6. 创建日志文件并启动进程（重定向到文件避免管道阻塞）
+        # 5-6. 创建日志处理器并启动进程（管道→轮转文件）
         try:
-            stdout_file = open(self.log_dir / f"{node.id}.stdout.log", "w", buffering=1)
-            stderr_file = open(self.log_dir / f"{node.id}.stderr.log", "w", buffering=1)
-            self.log_files[node.id] = (stdout_file, stderr_file)
+            stdout_path = self.log_dir / f"{node.id}.stdout.log"
+            stderr_path = self.log_dir / f"{node.id}.stderr.log"
 
-            process = subprocess.Popen(
-                cmd, env=env, cwd=cwd, stdout=stdout_file, stderr=stderr_file, text=True
+            stdout_handler = RotatingFileHandler(
+                stdout_path, maxBytes=1024 * 1024 * 1024, backupCount=30
             )
+            stderr_handler = RotatingFileHandler(
+                stderr_path, maxBytes=1024 * 1024 * 1024, backupCount=30
+            )
+
+            stdout_logger = logging.getLogger(f"node.{node.id}.stdout")
+            stderr_logger = logging.getLogger(f"node.{node.id}.stderr")
+            stdout_logger.setLevel(logging.INFO)
+            stderr_logger.setLevel(logging.ERROR)
+            stdout_logger.propagate = False
+            stderr_logger.propagate = False
+            if not any(isinstance(h, RotatingFileHandler) and h.baseFilename == str(stdout_path) for h in stdout_logger.handlers):
+                stdout_logger.addHandler(stdout_handler)
+            if not any(isinstance(h, RotatingFileHandler) and h.baseFilename == str(stderr_path) for h in stderr_logger.handlers):
+                stderr_logger.addHandler(stderr_handler)
+            self.log_files[node.id] = (stdout_handler, stderr_handler)
+
+            # 创建子进程，使用独立的进程组以便后续清理
+            # start_new_session=True 确保子进程在新的会话中，便于批量终止
+            process = subprocess.Popen(
+                cmd,
+                env=env,
+                cwd=cwd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                start_new_session=True  # Unix/macOS: 创建新会话，便于清理整个进程树
+            )
+
+            def _forward(stream, logger, level_func):
+                while True:
+                    if stream is None:
+                        break
+                    line = stream.readline()
+                    if not line:
+                        if process.poll() is not None:
+                            break
+                        continue
+                    level_func(line.rstrip("\n"))
+
+            t_out = threading.Thread(
+                target=_forward, args=(process.stdout, stdout_logger, stdout_logger.info), daemon=True
+            )
+            t_err = threading.Thread(
+                target=_forward, args=(process.stderr, stderr_logger, stderr_logger.error), daemon=True
+            )
+            t_out.start()
+            t_err.start()
+            if not hasattr(self, "log_threads"):
+                self.log_threads = {}
+            self.log_threads[node.id] = (t_out, t_err)
 
             logger.info(f"Node '{node.id}' started with PID {process.pid}")
             logger.debug(
@@ -223,9 +289,9 @@ class NodeLauncher:
         self, process: subprocess.Popen, node_id: str, timeout: float = 5.0
     ):
         """
-        优雅地终止进程
+        优雅地终止进程及其整个进程组
 
-        策略: SIGTERM → wait(timeout) → SIGKILL if needed
+        策略: SIGTERM(进程组) → wait(timeout) → SIGKILL(进程组) if needed
 
         参数：
         - process: subprocess.Popen对象
@@ -241,14 +307,28 @@ class NodeLauncher:
         logger.info(f"Terminating node '{node_id}' (PID {process.pid})")
 
         try:
-            # 发送 SIGTERM 进行优雅关闭
+            # 发送 SIGTERM 到整个进程组（包括所有子进程）
+            # 当使用 start_new_session=True 时，process.pid 就是进程组 ID
             try:
-                process.terminate()
+                if sys.platform != "win32":
+                    # Unix/macOS: 杀死整个进程组
+                    os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+                else:
+                    # Windows: 无法杀死进程组，只能杀死主进程
+                    process.terminate()
             except ProcessLookupError:
                 # 进程在 poll() 和 terminate() 之间退出
                 logger.debug(f"Node '{node_id}' exited before terminate signal")
                 self.close_node_logs(node_id)
                 return
+            except OSError as e:
+                logger.warning(f"Failed to send SIGTERM to process group for '{node_id}': {e}")
+                # 降级到单个进程 kill
+                try:
+                    process.terminate()
+                except ProcessLookupError:
+                    self.close_node_logs(node_id)
+                    return
 
             # 等待优雅退出
             try:
@@ -258,12 +338,25 @@ class NodeLauncher:
                 # 优雅关闭超时，强制 kill
                 logger.warning(f"Node '{node_id}' did not terminate in {timeout}s, sending SIGKILL")
                 try:
-                    process.kill()
+                    if sys.platform != "win32":
+                        # Unix/macOS: 杀死整个进程组
+                        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                    else:
+                        # Windows: 无法杀死进程组
+                        process.kill()
+
                     process.wait(timeout=2.0)  # SIGKILL 后短暂等待
                     logger.info(f"Node '{node_id}' killed")
                 except ProcessLookupError:
                     # 进程在超时后但 kill 前退出
                     logger.debug(f"Node '{node_id}' exited before kill signal")
+                except OSError:
+                    # 进程组已不存在，尝试杀死单个进程
+                    try:
+                        process.kill()
+                        process.wait(timeout=1.0)
+                    except (ProcessLookupError, subprocess.TimeoutExpired):
+                        logger.debug(f"Node '{node_id}' already exited")
                 except subprocess.TimeoutExpired:
                     # 极端罕见: 进程无响应 SIGKILL (内核问题)
                     logger.error(f"Node '{node_id}' did not respond to SIGKILL")
@@ -287,11 +380,22 @@ class NodeLauncher:
         参数：
         - node_id: 节点ID
         """
-        if node_id in self.log_files:
-            stdout_file, stderr_file = self.log_files[node_id]
+        if node_id in getattr(self, "log_threads", {}):
+            t_out, t_err = self.log_threads[node_id]
             try:
-                stdout_file.close()
-                stderr_file.close()
+                t_out.join(timeout=2.0)
+            except Exception:
+                pass
+            try:
+                t_err.join(timeout=2.0)
+            except Exception:
+                pass
+            del self.log_threads[node_id]
+        if node_id in self.log_files:
+            stdout_handler, stderr_handler = self.log_files[node_id]
+            try:
+                stdout_handler.close()
+                stderr_handler.close()
             except Exception as e:
                 logger.warning(f"Error closing log files for node '{node_id}': {e}")
             finally:

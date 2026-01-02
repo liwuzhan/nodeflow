@@ -331,7 +331,12 @@ class NodeFlowRuntime:
             self.coordinator = StartupCoordinator(self.launcher, self.registry)
 
             # 启动所有节点
-            self.processes = self.coordinator.startup_nodes(self.topology_layers, self.nodes_dict)
+            self.processes = self.coordinator.startup_nodes(
+                self.topology_layers,
+                self.nodes_dict,
+                startup_timeout=2.0,  # 减少等待时间，仅用于检测启动初期崩溃
+                startup_delay=1.0
+            )
 
             logger.info(f"All {len(self.processes)} nodes started successfully")
 
@@ -402,8 +407,8 @@ class NodeFlowRuntime:
                 self.coordinator.shutdown_nodes(self.processes)
                 self.processes = {}
 
-            # 清理 PID 文件
-            self._cleanup_pid_file()
+            # 注意：不删除 PID 文件，因为在守护进程模式下 Runtime 还在运行
+            # PID 文件只在 Runtime 完全退出时才删除
 
             self.dataflow_running = False
             logger.info("Dataflow stopped successfully")
@@ -617,7 +622,7 @@ class NodeFlowRuntime:
             control_buf = None
             try:
                 from sdk.shared_buffer_lite import SharedBufferLite
-                control_buf = SharedBufferLite("runtime.control", create=True, buffer_size=1024)
+                control_buf = SharedBufferLite("runtime.control", create=True, size=1024)
                 logger.info("Control buffer ready: runtime.control")
             except Exception as e:
                 logger.error(f"Failed to create control buffer: {e}")

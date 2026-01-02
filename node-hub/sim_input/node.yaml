@@ -13,7 +13,7 @@ entrypoints:
 ports:
   inputs:
     - name: velocity_cmd
-      type: json
+      type: control.velocity
       description: "速度控制命令 (linear_velocity, angular_velocity) - 优先级1"
 
     - name: motor_cmd

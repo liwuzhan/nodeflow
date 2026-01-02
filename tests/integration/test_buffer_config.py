@@ -166,8 +166,8 @@ def test_yaml_config_loading():
     assert global_path_port is not None, "未找到global_path输出端口"
 
     # 验证配置
-    assert global_path_port.buffer_size == 1024 * 1024, \
-        f"Expected 1MB, got {global_path_port.buffer_size}"
+    assert global_path_port.buffer_size == 3097152, \
+        f"Expected 3MB, got {global_path_port.buffer_size}"
     assert global_path_port.conflate == True, \
         f"Expected conflate=True, got {global_path_port.conflate}"
 

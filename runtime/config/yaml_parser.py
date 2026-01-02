@@ -151,7 +151,9 @@ class YAMLParser:
                 inputs.append(PortDef(
                     name=port_data['name'],
                     type=port_data.get('type', 'any'),
-                    description=port_data.get('description', '')
+                    description=port_data.get('description', ''),
+                    buffer_size=port_data.get('buffer_size', 1024 * 1024),
+                    conflate=port_data.get('conflate', True)
                 ))
 
             # 输出端口
@@ -160,7 +162,9 @@ class YAMLParser:
                 outputs.append(PortDef(
                     name=port_data['name'],
                     type=port_data.get('type', 'any'),
-                    description=port_data.get('description', '')
+                    description=port_data.get('description', ''),
+                    buffer_size=port_data.get('buffer_size', 1024 * 1024),
+                    conflate=port_data.get('conflate', True)
                 ))
 
             # 解析params

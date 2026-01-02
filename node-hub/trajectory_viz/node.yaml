@@ -6,6 +6,9 @@ entrypoints:
   linux:
     kind: python
     cmd: ["python3", "run.py"]
+  darwin:
+    kind: python
+    cmd: ["python3", "run.py"]
   windows:
     kind: python
     cmd: ["python", "run.py"]

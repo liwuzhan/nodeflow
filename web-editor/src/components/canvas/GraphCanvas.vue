@@ -7,60 +7,67 @@
     @click="handleCanvasClick"
     @mousemove="handleMouseMove"
     @mouseup="handleMouseUp"
+    @mousedown="handleMouseDown"
+    @wheel.prevent="handleWheel"
   >
     <!-- 画布背景网格 -->
-    <div class="canvas-grid"></div>
+    <div class="canvas-grid" :style="gridStyle"></div>
 
-    <!-- SVG层 - 渲染所有连接线 -->
-    <svg class="edges-layer">
-      <!-- 已存在的边 -->
-      <CustomEdge
-        v-for="[edgeId, edge] in graphStore.edges"
-        :key="edgeId"
-        :edge-id="edgeId"
-        :from-node-id="edge.from_node"
-        :from-port="edge.from_port"
-        :from-port-type="getPortType(edge.from_node, edge.from_port, 'output')"
-        :from-x="getPortPosition(edge.from_node, edge.from_port, 'output').x"
-        :from-y="getPortPosition(edge.from_node, edge.from_port, 'output').y"
-        :to-node-id="edge.to_node"
-        :to-port="edge.to_port"
-        :to-port-type="getPortType(edge.to_node, edge.to_port, 'input')"
-        :to-x="getPortPosition(edge.to_node, edge.to_port, 'input').x"
-        :to-y="getPortPosition(edge.to_node, edge.to_port, 'input').y"
-        :is-selected="graphStore.selectedEdgeId === edgeId"
-        @select="() => graphStore.selectEdge(edgeId)"
-        @delete="() => graphStore.deleteEdge(edgeId)"
-      />
+    <!-- 变换容器 -->
+    <div class="transform-container" :style="transformStyle">
+      <!-- SVG层 - 渲染所有连接线 -->
+      <svg class="edges-layer" width="10000" height="10000">
+        <!-- 已存在的边 -->
+        <CustomEdge
+          v-for="[edgeId, edge] in graphStore.edges"
+          :key="edgeId"
+          :edge-id="edgeId"
+          :from-node-id="edge.from_node"
+          :from-port="edge.from_port"
+          :from-port-type="getPortType(edge.from_node, edge.from_port, 'output')"
+          :from-x="getPortPosition(edge.from_node, edge.from_port, 'output').x"
+          :from-y="getPortPosition(edge.from_node, edge.from_port, 'output').y"
+          :to-node-id="edge.to_node"
+          :to-port="edge.to_port"
+          :to-port-type="getPortType(edge.to_node, edge.to_port, 'input')"
+          :to-x="getPortPosition(edge.to_node, edge.to_port, 'input').x"
+          :to-y="getPortPosition(edge.to_node, edge.to_port, 'input').y"
+          :is-selected="graphStore.selectedEdgeId === edgeId"
+          @select="() => graphStore.selectEdge(edgeId)"
+          @delete="() => graphStore.deleteEdge(edgeId)"
+        />
 
-      <!-- 连接预览线 -->
-      <line
-        v-if="connectionState.connecting"
-        :x1="connectionState.startX"
-        :y1="connectionState.startY"
-        :x2="connectionState.currentX"
-        :y2="connectionState.currentY"
-        stroke="#409eff"
-        stroke-width="2"
-        stroke-dasharray="5,5"
-        fill="none"
-        class="connection-preview"
-      />
-    </svg>
+        <!-- 连接预览线 -->
+        <line
+          v-if="connectionState.connecting"
+          :x1="connectionState.startX"
+          :y1="connectionState.startY"
+          :x2="connectionState.currentX"
+          :y2="connectionState.currentY"
+          stroke="#409eff"
+          stroke-width="2"
+          stroke-dasharray="5,5"
+          fill="none"
+          class="connection-preview"
+        />
+      </svg>
 
-    <!-- 节点容器 -->
-    <div class="nodes-container">
-      <CustomNode
-        v-for="nodeId in graphStore.allNodeIds"
-        :key="nodeId"
-        :node-id="nodeId"
-        :node="graphStore.getNode(nodeId)!"
-        :is-selected="graphStore.selectedNodeId === nodeId"
-        @select="() => graphStore.selectNode(nodeId)"
-        @update-position="(pos) => graphStore.updateNodePosition(nodeId, pos)"
-        @delete="() => graphStore.deleteNode(nodeId)"
-        @start-connect="handleStartConnection"
-      />
+      <!-- 节点容器 -->
+      <div class="nodes-container">
+        <CustomNode
+          v-for="nodeId in graphStore.allNodeIds"
+          :key="nodeId"
+          :node-id="nodeId"
+          :node="graphStore.getNode(nodeId)!"
+          :is-selected="graphStore.selectedNodeId === nodeId"
+          :port-connections="getNodePortConnections(nodeId)"
+          @select="() => graphStore.selectNode(nodeId)"
+          @update-position="(pos) => graphStore.updateNodePosition(nodeId, pos)"
+          @delete="() => graphStore.deleteNode(nodeId)"
+          @start-connect="handleStartConnection"
+          @disconnect-port="(portName) => handleDisconnectPort(nodeId, portName)"
+        />
+      </div>
     </div>
 
     <!-- 提示文字 -->
@@ -81,18 +88,35 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useGraphStore } from '@/stores/graph'
 import { useNodeLibraryStore } from '@/stores/nodeLibrary'
+import { getInputPorts, getOutputPorts } from '@/models'
 import CustomNode from './CustomNode.vue'
 import CustomEdge from './CustomEdge.vue'
 import type { ConnectionStartData } from './PortHandle.vue'
 import { validateConnection } from '@/services/typeChecker'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 const graphStore = useGraphStore()
 const nodeLibraryStore = useNodeLibraryStore()
 const canvasRef = ref<HTMLElement | null>(null)
+
+// 画布变换状态
+const transform = ref({
+  zoom: 1,
+  panX: 0,
+  panY: 0,
+})
+
+// 平移状态
+const panState = ref({
+  panning: false,
+  startX: 0,
+  startY: 0,
+  initialPanX: 0,
+  initialPanY: 0,
+})
 
 // 拖拽预览状态
 const dragPreview = ref({
@@ -113,6 +137,23 @@ const connectionState = ref({
   startY: 0,
   currentX: 0,
   currentY: 0,
+})
+
+// 变换样式
+const transformStyle = computed(() => {
+  return {
+    transform: `translate(${transform.value.panX}px, ${transform.value.panY}px) scale(${transform.value.zoom})`,
+    transformOrigin: '0 0',
+  }
+})
+
+// 网格样式（随缩放调整）
+const gridStyle = computed(() => {
+  const gridSize = 20 * transform.value.zoom
+  return {
+    backgroundSize: `${gridSize}px ${gridSize}px`,
+    backgroundPosition: `${transform.value.panX}px ${transform.value.panY}px`,
+  }
 })
 
 function handleDragOver(e: DragEvent) {
@@ -149,22 +190,31 @@ function handleDrop(e: DragEvent) {
     return
   }
 
-  // 获取canvas相对位置
+  // 获取canvas相对位置，并应用逆变换
   if (!canvasRef.value) return
   const rect = canvasRef.value.getBoundingClientRect()
-  const x = e.clientX - rect.left - 50 // 中心对齐
-  const y = e.clientY - rect.top - 30
+  const clientX = e.clientX - rect.left
+  const clientY = e.clientY - rect.top
+
+  // 应用逆变换：从屏幕坐标转换为世界坐标
+  const worldX = (clientX - transform.value.panX) / transform.value.zoom - 50
+  const worldY = (clientY - transform.value.panY) / transform.value.zoom - 30
 
   // 添加节点
   try {
-    const nodeId = graphStore.addNode(packageName, { x, y })
-    console.log(`Added node to canvas: ${nodeId} at (${x}, ${y})`)
+    const nodeId = graphStore.addNode(packageName, { x: worldX, y: worldY })
+    console.log(`Added node to canvas: ${nodeId} at (${worldX}, ${worldY})`)
   } catch (error) {
     console.error('Failed to add node:', error)
   }
 }
 
 function handleCanvasClick(e: MouseEvent) {
+  // 如果正在平移，不处理点击
+  if (panState.value.panning) {
+    return
+  }
+
   // 如果正在连接，取消连接
   if (connectionState.value.connecting) {
     connectionState.value.connecting = false
@@ -173,39 +223,109 @@ function handleCanvasClick(e: MouseEvent) {
 
   // 如果点击的是canvas自身（不是节点），取消选择
   if ((e.target as HTMLElement).classList.contains('graph-canvas') ||
-      (e.target as HTMLElement).classList.contains('canvas-grid')) {
+      (e.target as HTMLElement).classList.contains('canvas-grid') ||
+      (e.target as HTMLElement).classList.contains('transform-container')) {
     graphStore.selectNode(null)
     graphStore.selectEdge(null)
   }
 }
 
+// 鼠标滚轮缩放
+function handleWheel(e: WheelEvent) {
+  if (!canvasRef.value) return
+
+  const rect = canvasRef.value.getBoundingClientRect()
+  const mouseX = e.clientX - rect.left
+  const mouseY = e.clientY - rect.top
+
+  // 计算缩放前的世界坐标
+  const worldX = (mouseX - transform.value.panX) / transform.value.zoom
+  const worldY = (mouseY - transform.value.panY) / transform.value.zoom
+
+  // 计算新的缩放级别
+  const zoomDelta = -e.deltaY * 0.001
+  const newZoom = Math.max(0.1, Math.min(3, transform.value.zoom + zoomDelta))
+
+  // 更新缩放
+  transform.value.zoom = newZoom
+
+  // 调整平移，使鼠标位置保持不变
+  transform.value.panX = mouseX - worldX * newZoom
+  transform.value.panY = mouseY - worldY * newZoom
+}
+
+// 鼠标按下（开始平移）
+function handleMouseDown(e: MouseEvent) {
+  // 中键拖拽画布
+  if (e.button === 1) {
+    e.preventDefault()
+    panState.value.panning = true
+    panState.value.startX = e.clientX
+    panState.value.startY = e.clientY
+    panState.value.initialPanX = transform.value.panX
+    panState.value.initialPanY = transform.value.panY
+  }
+}
+
 // 开始连接
 function handleStartConnection(data: ConnectionStartData) {
+  if (!canvasRef.value) return
+
+  // 将屏幕坐标转换为画布坐标
+  const rect = canvasRef.value.getBoundingClientRect()
+  const canvasX = (data.clientX - rect.left - transform.value.panX) / transform.value.zoom
+  const canvasY = (data.clientY - rect.top - transform.value.panY) / transform.value.zoom
+
   connectionState.value.connecting = true
   connectionState.value.fromNodeId = data.nodeId
   connectionState.value.fromPort = data.portName
   connectionState.value.fromPortType = data.portType
   connectionState.value.fromPosition = data.position
-  connectionState.value.startX = data.clientX
-  connectionState.value.startY = data.clientY
-  connectionState.value.currentX = data.clientX
-  connectionState.value.currentY = data.clientY
+  connectionState.value.startX = canvasX
+  connectionState.value.startY = canvasY
+  connectionState.value.currentX = canvasX
+  connectionState.value.currentY = canvasY
 
-  console.log('Start connection:', data)
+  console.log('Start connection:', {
+    nodeId: data.nodeId,
+    port: data.portName,
+    screenPos: { x: data.clientX, y: data.clientY },
+    canvasPos: { x: canvasX, y: canvasY }
+  })
 }
 
-// 鼠标移动（更新连接预览）
+// 鼠标移动（更新连接预览或平移画布）
 function handleMouseMove(e: MouseEvent) {
-  if (!connectionState.value.connecting) return
-
   if (!canvasRef.value) return
   const rect = canvasRef.value.getBoundingClientRect()
-  connectionState.value.currentX = e.clientX - rect.left
-  connectionState.value.currentY = e.clientY - rect.top
+
+  // 优先处理平移
+  if (panState.value.panning) {
+    const deltaX = e.clientX - panState.value.startX
+    const deltaY = e.clientY - panState.value.startY
+
+    transform.value.panX = panState.value.initialPanX + deltaX
+    transform.value.panY = panState.value.initialPanY + deltaY
+    return
+  }
+
+  // 处理连接预览 - 转换为画布坐标
+  if (connectionState.value.connecting) {
+    const canvasX = (e.clientX - rect.left - transform.value.panX) / transform.value.zoom
+    const canvasY = (e.clientY - rect.top - transform.value.panY) / transform.value.zoom
+    connectionState.value.currentX = canvasX
+    connectionState.value.currentY = canvasY
+  }
 }
 
-// 鼠标释放（完成或取消连接）
+// 鼠标释放（完成或取消连接，或结束平移）
 function handleMouseUp(e: MouseEvent) {
+  // 结束平移
+  if (panState.value.panning) {
+    panState.value.panning = false
+    return
+  }
+
   if (!connectionState.value.connecting) return
 
   // 检查是否在目标端口上释放
@@ -304,40 +424,144 @@ function getPortType(nodeId: string, portName: string, direction: 'input' | 'out
   const manifest = nodeLibraryStore.getManifest(node.package)
   if (!manifest) return 'any'
 
-  const ports = direction === 'input' ? manifest.inputs : manifest.outputs
-  const port = ports?.find(p => p.name === portName)
+  const ports = direction === 'input' ? getInputPorts(manifest) : getOutputPorts(manifest)
+  const port = ports.find(p => p.name === portName)
   return port?.type || 'any'
 }
 
 // 获取端口在画布上的位置
 function getPortPosition(nodeId: string, portName: string, direction: 'input' | 'output'): { x: number; y: number } {
   const node = graphStore.getNode(nodeId)
-  if (!node) return { x: 0, y: 0 }
+  if (!node) {
+    console.warn(`getPortPosition: Node ${nodeId} not found`)
+    return { x: 0, y: 0 }
+  }
 
   const manifest = nodeLibraryStore.getManifest(node.package)
-  if (!manifest) return { x: 0, y: 0 }
+  if (!manifest) {
+    console.warn(`getPortPosition: Manifest for ${node.package} not found`)
+    return { x: 0, y: 0 }
+  }
 
-  const ports = direction === 'input' ? manifest.inputs : manifest.outputs
-  const portIndex = ports?.findIndex(p => p.name === portName) ?? -1
+  const inputPorts = getInputPorts(manifest)
+  const outputPorts = getOutputPorts(manifest)
 
-  if (portIndex === -1) return { x: 0, y: 0 }
+  const ports = direction === 'input' ? inputPorts : outputPorts
+  const portIndex = ports.findIndex(p => p.name === portName)
 
-  // 估算位置（基于节点位置和端口索引）
-  // 节点头部约40px，端口高度约24px，起始偏移约60px
+  if (portIndex === -1) {
+    console.warn(`getPortPosition: Port ${portName} not found in ${direction} ports`)
+    return { x: 0, y: 0 }
+  }
+
+  // 计算位置
   const nodeX = node.position.x
   const nodeY = node.position.y
   const nodeWidth = 200 // CustomNode最小宽度
   const headerHeight = 40
-  const portsLabelHeight = 24
-  const portHeight = 24
+  const sectionLabelHeight = 24
+  const portHeight = 20 // 更新：match PortHandle min-height
 
-  const portY = nodeY + headerHeight + portsLabelHeight + portIndex * portHeight + portHeight / 2
+  // Y 坐标计算
+  let portY = nodeY + headerHeight
 
-  // 输入端口在左侧，输出端口在右侧
+  if (direction === 'input') {
+    // 输入端口：从header下方开始
+    portY += sectionLabelHeight + portIndex * portHeight + portHeight / 2
+  } else {
+    // 输出端口：需要加上输入section的高度（如果存在）
+    if (inputPorts.length > 0) {
+      portY += sectionLabelHeight + inputPorts.length * portHeight + 8 // 加上 border
+    }
+    portY += sectionLabelHeight + portIndex * portHeight + portHeight / 2
+  }
+
+  // X 坐标：输入在左侧边缘，输出在右侧边缘
   const portX = direction === 'input' ? nodeX : nodeX + nodeWidth
+
+  console.log(`📍 Port ${nodeId}.${portName} (${direction}[${portIndex}]):`,
+    `position=(${portX.toFixed(1)}, ${portY.toFixed(1)})`,
+    `node=(${nodeX}, ${nodeY})`)
 
   return { x: portX, y: portY }
 }
+
+// 获取节点输入端口的连接状态
+function getNodePortConnections(nodeId: string): Record<string, boolean> {
+  const connections: Record<string, boolean> = {}
+
+  // 遍历所有边，找出连接到此节点输入端口的边
+  for (const [_, edge] of graphStore.edges) {
+    if (edge.to_node === nodeId) {
+      connections[edge.to_port] = true
+    }
+  }
+
+  return connections
+}
+
+// 断开输入端口的连线
+function handleDisconnectPort(nodeId: string, portName: string) {
+  // 找到连接到此端口的边
+  for (const [edgeId, edge] of graphStore.edges) {
+    if (edge.to_node === nodeId && edge.to_port === portName) {
+      graphStore.deleteEdge(edgeId)
+      ElMessage.success('连线已断开')
+      return
+    }
+  }
+}
+
+// 处理键盘事件
+function handleKeyDown(e: KeyboardEvent) {
+  // 如果正在输入（input/textarea），不处理
+  if ((e.target as HTMLElement).tagName === 'INPUT' ||
+      (e.target as HTMLElement).tagName === 'TEXTAREA') {
+    return
+  }
+
+  // Delete 或 Backspace 删除选中的节点/连线
+  if (e.key === 'Delete' || e.key === 'Backspace') {
+    e.preventDefault()
+    deleteSelected()
+  }
+}
+
+// 删除选中的节点或连线
+function deleteSelected() {
+  if (graphStore.selectedNodeId) {
+    const nodeId = graphStore.selectedNodeId
+    const node = graphStore.getNode(nodeId)
+
+    ElMessageBox.confirm(
+      `确定要删除节点 "${node?.package}" (${nodeId}) 吗？相关的连线也会被删除。`,
+      '删除节点',
+      {
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+        type: 'warning',
+      }
+    ).then(() => {
+      graphStore.deleteNode(nodeId)
+      ElMessage.success('节点已删除')
+    }).catch(() => {
+      // 用户取消
+    })
+  } else if (graphStore.selectedEdgeId) {
+    const edgeId = graphStore.selectedEdgeId
+    graphStore.deleteEdge(edgeId)
+    ElMessage.success('连线已删除')
+  }
+}
+
+// 生命周期
+onMounted(() => {
+  window.addEventListener('keydown', handleKeyDown)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeyDown)
+})
 </script>
 
 <style scoped>
@@ -366,16 +590,27 @@ function getPortPosition(nodeId: string, portName: string, direction: 'input' | 
   background-size: 20px 20px;
   pointer-events: none;
   opacity: 0.5;
+  transition: background-position 0.05s ease-out;
+}
+
+.transform-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 10000px;
+  height: 10000px;
+  will-change: transform;
 }
 
 .edges-layer {
   position: absolute;
   top: 0;
   left: 0;
-  width: 100%;
-  height: 100%;
+  width: 10000px;
+  height: 10000px;
   pointer-events: none;
   z-index: 1;
+  overflow: visible;
 }
 
 .edges-layer > * {
@@ -393,9 +628,11 @@ function getPortPosition(nodeId: string, portName: string, direction: 'input' | 
 }
 
 .nodes-container {
-  position: relative;
-  width: 100%;
-  height: 100%;
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 10000px;
+  height: 10000px;
   z-index: 2;
 }
 

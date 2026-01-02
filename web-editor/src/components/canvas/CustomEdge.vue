@@ -22,11 +22,12 @@
 
     <!-- 删除按钮（选中时显示） -->
     <g v-if="isSelected" :transform="`translate(${midPoint.x - 12}, ${midPoint.y - 12})`">
-      <circle cx="12" cy="12" r="12" fill="white" stroke="#409eff" :stroke-width="2" />
-      <g @click.stop="handleDelete">
+      <circle cx="12" cy="12" r="12" fill="white" stroke="#409eff" :stroke-width="2" class="delete-bg" />
+      <g @click.stop="handleDelete" class="delete-icon">
         <line x1="8" y1="8" x2="16" y2="16" stroke="#f56c6c" :stroke-width="2" />
         <line x1="16" y1="8" x2="8" y2="16" stroke="#f56c6c" :stroke-width="2" />
       </g>
+      <title>点击删除连线</title>
     </g>
 
     <!-- 类型标签（悬停时显示） -->
@@ -118,7 +119,11 @@ const edgePath = computed(() => {
   const cp2x = props.toX - offset
   const cp2y = props.toY
 
-  return `M ${props.fromX} ${props.fromY} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${props.toX} ${props.toY}`
+  const path = `M ${props.fromX} ${props.fromY} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${props.toX} ${props.toY}`
+
+  console.log(`Edge ${props.edgeId}: from(${props.fromX}, ${props.fromY}) to(${props.toX}, ${props.toY}) path=${path}`)
+
+  return path
 })
 
 // 计算箭头点坐标
@@ -185,5 +190,25 @@ function handleDelete() {
 
 .edge-arrow {
   transition: fill 0.2s;
+}
+
+.delete-icon {
+  cursor: pointer;
+  pointer-events: all;
+}
+
+.delete-icon:hover line {
+  stroke: #ff0000;
+  stroke-width: 3;
+}
+
+.delete-bg {
+  pointer-events: all;
+  cursor: pointer;
+}
+
+.delete-bg:hover {
+  fill: #fff5f5;
+  stroke: #f56c6c;
 }
 </style>

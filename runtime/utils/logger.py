@@ -45,6 +45,9 @@ def setup_logger(name: str = "nodeflow", level: str = "INFO") -> logging.Logger:
 def get_logger(name: str) -> logging.Logger:
     """
     获取或创建日志记录器
+    
+    为了确保所有模块都继承主logger的配置，我们会将名称前缀统一为 "nodeflow."
+    除非名称已经是 "nodeflow" 或以 "nodeflow." 开头。
 
     参数：
     - name: 记录器名称（通常使用模块名__name__）
@@ -52,7 +55,14 @@ def get_logger(name: str) -> logging.Logger:
     返回：
     - Logger对象
     """
-    return logging.getLogger(name)
+    if name == "nodeflow" or name.startswith("nodeflow."):
+        real_name = name
+    else:
+        # 移除可能的 runtime. 前缀以避免重复 (可选，视项目结构而定)
+        # 这里简单地将所有模块作为 nodeflow 的子模块处理
+        real_name = f"nodeflow.{name}"
+        
+    return logging.getLogger(real_name)
 
 
 # 主框架日志记录器

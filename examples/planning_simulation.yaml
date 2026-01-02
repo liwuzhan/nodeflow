@@ -51,8 +51,8 @@ nodes:
       enable_odometry: false     # 禁用里程计
       enable_state: false        # 禁用状态调试
 
-      # 输出频率
-      output_frequency: 50.0     # 50Hz 输出频率
+      # 输出频率（匹配市面RTK设备标准频率）
+      output_frequency: 20.0     # 20Hz 输出频率
 
       # 车辆配置（用于规划）
       implement_width_m: 3.0     # 作业幅宽 3 米
@@ -96,23 +96,33 @@ nodes:
     description: "基于视野区域的前瞻点选择器 (v2.0)"
     params:
       # 视野区域参数（推荐低速覆盖场景）
-      view_distance: 3.0      # 视野中心距车辆 3m
+      view_distance: 2.0      # 视野中心距车辆 3m
       view_width: 4.0         # 视野宽度 4m (覆盖作业宽度)
       view_depth: 1.5         # 视野深度 1.5m
       goal_tolerance: 1.5     # 终点容差 1.5m
       max_search_points: 100  # 最大搜索点数
       # 初始消费参数
-      initial_check_points: 50       # 初始化时检查的前N个点（足够覆盖路径）
+      initial_check_points: 10       # 初始化时检查的前N个点
       initial_consume_distance: 2.0  # 距离小于此值的点视为已消费 (米)
+      # 视野自动扩宽参数（U形弯适配）
+      min_view_points: 3      # 视野内最少点数
+      view_expand_factor: 2.0 # 点数不足时扩宽倍数
+      max_view_width: 12.0    # 最大视野宽度
+      # 持续消费参数（防止跳过点）
+      continuous_consume_distance: 1.5  # 每帧自动消费距离过近的点
+
   - id: track_controller
     package: track_controller
     description: "履带控制，支持原地转向"
     params:
-      max_speed: 1.0
+      max_speed: 2.0
       min_speed: 0.0             # 允许速度降到0，以便精确停止
       heading_p_gain: 2.0
       max_angular_velocity: 1.0
       pivot_threshold_deg: 20.0  # 增大原地转向阈值，避免频繁切换
+      # 减速参数
+      decel_start_distance: 3.0  # 开始减速的距离 (米)
+      final_stop_distance: 0.5   # 终点停止距离 (米)
 
   # ┌─────────────────────────────────────────────────────────────────────┐
   # │ 仿真器输入 (接收控制命令)                                            │

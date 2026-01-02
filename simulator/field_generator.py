@@ -55,8 +55,9 @@ class FieldGenerator:
             "length": length,
             "area": width * length,
             "center": (self.base_x + width/2, self.base_y + length/2),
-            "obstacles": [],  # 暂无障碍物
-            "entry_points": [(self.base_x, self.base_y)]  # 默认左下角为入口
+            "obstacles": [],
+            "entry_points": [(self.base_x, self.base_y)],
+            "holes": []
         }
 
     def generate_irregular_field(self, width: float, length: float,
@@ -106,7 +107,8 @@ class FieldGenerator:
             "area": area,
             "center": (center_x, center_y),
             "obstacles": [],
-            "entry_points": [entry_point]
+            "entry_points": [entry_point],
+            "holes": []
         }
 
     def generate_simple_obstacles(self, field: Dict[str, Any],
@@ -145,6 +147,33 @@ class FieldGenerator:
             })
 
         field["obstacles"] = obstacles
+        return field
+
+    def generate_random_holes(self, field: Dict[str, Any], num_holes: int, size_ratio: float = 0.05, segments: int = 16) -> Dict[str, Any]:
+        boundary = field.get("boundary", [])
+        if not boundary or num_holes <= 0 or size_ratio <= 0.0:
+            return field
+        min_x = min(p[0] for p in boundary)
+        max_x = max(p[0] for p in boundary)
+        min_y = min(p[1] for p in boundary)
+        max_y = max(p[1] for p in boundary)
+        area = field.get("area", (max_x - min_x) * (max_y - min_y))
+        holes = field.get("holes", [])
+        for _ in range(num_holes):
+            import math
+            hole_area = max(1e-3, area * size_ratio)
+            r = math.sqrt(hole_area / math.pi) * 0.5
+            margin = r * 1.5
+            cx = random.uniform(min_x + margin, max_x - margin)
+            cy = random.uniform(min_y + margin, max_y - margin)
+            pts = []
+            for i in range(segments):
+                ang = 2 * math.pi * i / segments
+                x = cx + r * math.cos(ang)
+                y = cy + r * math.sin(ang)
+                pts.append((x, y))
+            holes.append(pts)
+        field["holes"] = holes
         return field
 
     def _calculate_polygon_area(self, points: List[Tuple[float, float]]) -> float:

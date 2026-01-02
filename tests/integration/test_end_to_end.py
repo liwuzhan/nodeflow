@@ -19,7 +19,6 @@ from runtime.config.validator import ConfigValidator
 from runtime.node_hub.node_registry import NodeRegistry
 from runtime.graph.topology import TopologyAnalyzer
 from runtime.graph.validator import GraphValidator
-from runtime.ipc.socket_manager import SocketManager
 from runtime.orchestrator.node_launcher import NodeLauncher
 from runtime.orchestrator.startup_coordinator import StartupCoordinator
 from runtime.monitoring.node_monitor import NodeMonitor
@@ -83,10 +82,7 @@ def test_complete_workflow():
     print("\n[6/7] 启动节点...")
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        socket_manager = SocketManager(tmpdir)
-        socket_manager.initialize()
-
-        launcher = NodeLauncher("node-hub", socket_manager, config.edges)
+        launcher = NodeLauncher("node-hub", config.edges)
         coordinator = StartupCoordinator(launcher, registry)
 
         nodes_dict = {n.id: n for n in config.nodes}

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-安全区域构建模块
+安全区域构建模块（ENU纯净版）
 
-包含安全区域构建、坐标转换和作业方向计算等功能。
+输入输出均为ENU坐标（米），不涉及GPS坐标转换。
 """
 
 import math
@@ -11,75 +11,47 @@ from typing import List, Tuple, Dict, Union
 
 import numpy as np
 from shapely.geometry import Polygon, Point, MultiPolygon
-from shapely.ops import unary_union, transform
+from shapely.ops import unary_union
 from shapely import minimum_rotated_rectangle
-from pyproj import Transformer
 
 # 修改导入路径
 from .models import VehicleConfig
 
 
-def guess_utm_epsg(lon: float, lat: float) -> int:
-    """根据经纬度猜测UTM投影的EPSG代码。"""
-    zone = int((lon + 180) / 6) + 1
-    if lat >= 0:
-        return 32600 + zone  # WGS84 / UTM 北半球
-    else:
-        return 32700 + zone  # 南半球
-
-
-def wgs84_to_local_transformer(ref_lon: float, ref_lat: float) -> Transformer:
-    """创建WGS84到本地UTM坐标系的转换器。"""
-    epsg = guess_utm_epsg(ref_lon, ref_lat)
-    return Transformer.from_crs(4326, epsg, always_xy=True)
-
-
-def local_to_wgs84_transformer(ref_lon: float, ref_lat: float) -> Transformer:
-    """创建本地UTM坐标系到WGS84的转换器。"""
-    epsg = guess_utm_epsg(ref_lon, ref_lat)
-    return Transformer.from_crs(epsg, 4326, always_xy=True)
-
-
-def to_local_coords(transformer: Transformer, coords: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
-    """将WGS84坐标转换为本地坐标。"""
-    return [transformer.transform(lon, lat) for lon, lat in coords]
-
-
-def to_wgs84_coords(transformer: Transformer, coords: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
-    """将本地坐标转换为WGS84坐标。"""
-    return [transformer.transform(x, y) for x, y in coords]
-
-
-def to_wgs_geometry(t_wgs: Transformer, geom):
-    """将几何对象从本地坐标系转换为WGS84坐标系。"""
-    return transform(lambda x, y, z=None: t_wgs.transform(x, y), geom)
-
-
 def build_safe_area(parcel: Dict, cfg: VehicleConfig) -> Tuple[Union[MultiPolygon, Polygon], Tuple[float, float]]:
     """
-    构建安全作业区域。
-    
+    构建安全作业区域（ENU版本）。
+
     Args:
         parcel: 地块信息字典 (支持 ParcelData.to_dict() 格式)
+            - 'outer': [(x, y), ...] ENU外边界坐标（米）
+            - 'holes': [[(x, y), ...], ...] 孔洞坐标（米）
+            - 'points': [(x, y, diam), ...] 点障碍坐标和直径（米）
         cfg: 车辆配置
-        
+
     Returns:
         (安全作业区域, (参考经度, 参考纬度))
+        注意：参考点设为(0, 0)，仅用于占位符
     """
-    # 参考点：用外环第一个点确定UTM
+    # 输入已是ENU坐标，无需转换
     if not parcel.get('outer'):
         return Polygon(), (0, 0)
 
-    ref_lon, ref_lat = parcel['outer'][0]
-    t_local = wgs84_to_local_transformer(ref_lon, ref_lat)
+    # 直接使用ENU坐标
+    outer_xy = parcel['outer']
+    hole_polys = [Polygon(h) for h in parcel['holes'] if len(h) >= 3]
 
-    outer_xy = to_local_coords(t_local, parcel['outer'])
-    hole_polys = [Polygon(to_local_coords(t_local, h)) for h in parcel['holes'] if len(h) >= 3]
     point_buffers = []
-    for (lon, lat, diam) in parcel['points']:
-        x, y = t_local.transform(lon, lat)
-        r = diam * 0.5 + cfg.path_inset_m
-        point_buffers.append(Point(x, y).buffer(r, resolution=16))
+    for point_data in parcel['points']:
+        if len(point_data) >= 3:
+            x, y, diam = point_data[0], point_data[1], point_data[2]
+            r = diam * 0.5 + cfg.path_inset_m
+            point_buffers.append(Point(x, y).buffer(r, resolution=16))
+        elif len(point_data) >= 2:
+            # 兼容没有直径的情况
+            x, y = point_data[0], point_data[1]
+            r = cfg.path_inset_m
+            point_buffers.append(Point(x, y).buffer(r, resolution=16))
 
     outer_poly = Polygon(outer_xy)
     # 外边界安全内缩
@@ -96,7 +68,8 @@ def build_safe_area(parcel: Dict, cfg: VehicleConfig) -> Tuple[Union[MultiPolygo
     else:
         work_area = safe_outer
 
-    return work_area, (ref_lon, ref_lat)
+    # 返回(0, 0)作为参考点占位符（ENU版本不需要GPS参考点）
+    return work_area, (0.0, 0.0)
 
 
 def compute_job_direction(work_area: Union[Polygon, MultiPolygon]) -> float:

@@ -23,7 +23,7 @@ ports:
       description: "车辆姿态 (x, y, theta) - 必须包含航向"
   outputs:
     - name: next_point
-      type: json
+      type: planning.waypoint
       description: "前瞻点坐标及状态信息"
 
 params:
@@ -65,3 +65,25 @@ params:
     type: number
     default: 2.0
     description: "距离小于此值的点视为已消费 (米)"
+
+  # 视野自动扩宽参数
+  min_view_points:
+    type: integer
+    default: 3
+    description: "视野内最少点数，少于此值时扩宽视野"
+
+  view_expand_factor:
+    type: number
+    default: 2.0
+    description: "视野扩宽倍数"
+
+  max_view_width:
+    type: number
+    default: 12.0
+    description: "最大视野宽度 (米)"
+
+  # 持续消费参数
+  continuous_consume_distance:
+    type: number
+    default: 1.5
+    description: "每帧检查，距离小于此值的点自动消费 (米) - 防止跳过点"

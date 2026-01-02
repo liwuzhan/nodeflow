@@ -16,14 +16,15 @@
       </div>
       <el-icon
         class="delete-btn"
-        @click.stop="() => $emit('delete')"
+        title="删除节点"
+        @click.stop="handleDelete"
       >
         <Close />
       </el-icon>
     </div>
 
     <!-- 输入端口（左侧） -->
-    <div class="ports-section inputs">
+    <div v-if="inputPorts.length > 0" class="ports-section inputs">
       <div class="ports-label">输入</div>
       <div class="ports-list">
         <PortHandle
@@ -34,13 +35,15 @@
           :port-type="port.type || 'any'"
           position="left"
           :index="index"
+          :is-connected="portConnections[port.name] || false"
           @start-connect="$emit('startConnect', $event)"
+          @disconnect="handleDisconnect(port.name)"
         />
       </div>
     </div>
 
     <!-- 输出端口（右侧） -->
-    <div class="ports-section outputs">
+    <div v-if="outputPorts.length > 0" class="ports-section outputs">
       <div class="ports-label">输出</div>
       <div class="ports-list">
         <PortHandle
@@ -55,17 +58,6 @@
         />
       </div>
     </div>
-
-    <!-- 节点参数概览 -->
-    <div v-if="manifest && manifest.params" class="node-params">
-      <div class="params-label">参数</div>
-      <div class="params-list">
-        <div v-for="(schema, key) in manifest.params" :key="key" class="param-item">
-          <span class="param-name">{{ key }}</span>
-          <span v-if="schema.required" class="required">*</span>
-        </div>
-      </div>
-    </div>
   </div>
 </template>
 
@@ -76,11 +68,14 @@ import { getInputPorts, getOutputPorts } from '@/models'
 import type { NodeInstanceUI } from '@/models/RuntimeConfig'
 import type { ConnectionStartData } from './PortHandle.vue'
 import PortHandle from './PortHandle.vue'
+import { ElMessageBox, ElMessage } from 'element-plus'
+import { Close, Box } from '@element-plus/icons-vue'
 
 interface Props {
   nodeId: string
   node: NodeInstanceUI
   isSelected: boolean
+  portConnections?: Record<string, boolean> // 端口连接状态 { portName: isConnected }
 }
 
 interface Emits {
@@ -88,9 +83,12 @@ interface Emits {
   (e: 'updatePosition', pos: { x: number; y: number }): void
   (e: 'delete'): void
   (e: 'startConnect', data: ConnectionStartData): void
+  (e: 'disconnectPort', portName: string): void
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), {
+  portConnections: () => ({}),
+})
 const emit = defineEmits<Emits>()
 
 const nodeLibraryStore = useNodeLibraryStore()
@@ -145,6 +143,27 @@ function handleMouseUp() {
   isDragging = false
   document.removeEventListener('mousemove', handleMouseMove)
   document.removeEventListener('mouseup', handleMouseUp)
+}
+
+function handleDelete() {
+  ElMessageBox.confirm(
+    `确定要删除节点 "${props.node.package}" (${props.node.id}) 吗？相关的连线也会被删除。`,
+    '删除节点',
+    {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning',
+    }
+  ).then(() => {
+    emit('delete')
+    ElMessage.success('节点已删除')
+  }).catch(() => {
+    // 用户取消
+  })
+}
+
+function handleDisconnect(portName: string) {
+  emit('disconnectPort', portName)
 }
 </script>
 
@@ -240,6 +259,7 @@ function handleMouseUp() {
 .ports-section {
   padding: 8px 0;
   border-bottom: 1px solid #f0f0f0;
+  position: relative;
 
   &:last-child {
     border-bottom: none;
@@ -254,92 +274,29 @@ function handleMouseUp() {
   text-transform: uppercase;
 }
 
-.ports-list {
+/* 输入端口：标签和端口都靠左 */
+.ports-section.inputs .ports-label {
+  text-align: left;
+}
+
+.ports-section.inputs .ports-list {
   display: flex;
   flex-direction: column;
+  gap: 2px;
+  align-items: flex-start;
 }
 
-.port {
-  display: flex;
-  align-items: center;
-  padding: 4px 12px;
-  font-size: 12px;
-  gap: 8px;
-
-  &:hover {
-    background-color: #f5f7fa;
-  }
+/* 输出端口：标签和端口都靠右 */
+.ports-section.outputs .ports-label {
+  text-align: right;
 }
 
-.input-port {
-  justify-content: flex-start;
-}
-
-.output-port {
-  justify-content: flex-end;
-  flex-direction: row-reverse;
-}
-
-.port-handle {
-  width: 8px;
-  height: 8px;
-  background-color: #409eff;
-  border-radius: 50%;
-  flex-shrink: 0;
-  cursor: crosshair;
-
-  &:hover {
-    background-color: #66b1ff;
-    box-shadow: 0 0 0 4px rgba(64, 158, 255, 0.2);
-  }
-}
-
-.port-name {
-  color: #666;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.node-params {
-  padding: 8px 0;
-}
-
-.params-label {
-  padding: 4px 12px;
-  font-size: 11px;
-  font-weight: 600;
-  color: #999;
-  text-transform: uppercase;
-}
-
-.params-list {
+.ports-section.outputs .ports-list {
   display: flex;
   flex-direction: column;
+  gap: 2px;
+  align-items: flex-end;
 }
 
-.param-item {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 12px;
-  font-size: 12px;
-  color: #666;
-
-  &:hover {
-    background-color: #f5f7fa;
-  }
-}
-
-.param-name {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.required {
-  color: #f56c6c;
-  font-weight: 600;
-}
+/* 端口样式由 PortHandle 组件管理 */
 </style>

@@ -1,0 +1,142 @@
+车辆配置文件（路径规划用）TXT 规则 v1
+
+1. 目标与范围
+- 仅包含与路径/运动规划相关的参数：几何尺寸、运动学类型、转弯/速度/坡度等限制、地形适配与规划提示。
+- 不包含非规划参数（发动机、液压、质量等）。
+
+2. 文件头（建议）
+- `VERSION <int>`：版本号，例如 `VERSION 1`。
+- `UNITS distance=m speed=kmh angle=deg accel=ms2`：单位约定。
+- 注释：以 `;` 或 `#` 开头的整行视为注释。
+
+3. 配置块结构
+- 每个车辆一块：`VEHICLE_CONFIG <id> <name>` 开始，`END` 结束；`<name>` 若含空格需双引号。
+- 字段说明如下（按组可多行出现，顺序不敏感）：
+
+4. 基本类型与运动学
+- `TYPE <WHEELED|TRACKED|BOAT_TOW>`：车辆类型（轮式、履带、船拖）。
+- `KINEMATICS MODEL <ackermann|skid|vessel_tow> [PIVOT_TURN <yes|no>] [REVERSING_ALLOWED <yes|no>]`
+  - `ackermann`：轮式转向模型（最小转弯半径约束）。
+  - `skid`：履带滑移转向（可近似原地转弯，`PIVOT_TURN` 可为 `yes`）。
+  - `vessel_tow`：船舶牵引（欠驱动、拖曳偏移约束）。
+
+5. 几何尺寸（用于碰撞与转弯约束）
+- `DIMENSIONS LENGTH_M <float> WIDTH_M <float> [WHEELBASE_M <float>] [TRACK_WIDTH_M <float>] [HITCH_LENGTH_M <float>] [TRAILER_LENGTH_M <float>] [DRAFT_M <float>]`
+  - `LENGTH_M/ WIDTH_M`：本体包络尺寸。
+  - `WHEELBASE_M`：轴距（轮式）。
+  - `TRACK_WIDTH_M`：履带宽（履带）。
+  - `HITCH_LENGTH_M`：牵引点至被拖物连线长度（拖曳/船拖）。
+  - `TRAILER_LENGTH_M`：被拖物长度（拖曳/船拖）。
+  - `DRAFT_M`：吃水（船拖，避免浅水）。
+
+6. 安全包络与轨迹内缩
+- `ENVELOPE SAFETY_MARGIN_M <float> [PATH_INSET_M <float>]`
+  - `SAFETY_MARGIN_M`：碰撞检测扩展边距。
+  - `PATH_INSET_M`：规划时对边界/孔的内缩距离（避免贴边）。
+
+7. 速度与加速度限制
+- `LIMITS WORK_MAX_KMH <float> TRANSIT_MAX_KMH <float> A_LONG_MAX_MS2 <float> A_LAT_MAX_MS2 <float> [YAW_RATE_MAX_DEGS <float>]`
+  - 与 AGCode 中的速度策略一致：作业/过渡上限、纵向/侧向加速度、最大偏航角速度。
+
+8. 作业行距与农具参数
+- `IMPLEMENT ROW_SPACING_M <float> IMPLEMENT_WIDTH_M <float> [OVERLAP_RATIO <float>]`
+  - `ROW_SPACING_M`：作业行距（米），相邻作业行中心线之间的距离。
+  - `IMPLEMENT_WIDTH_M`：农具工作宽度（米），实际作业覆盖宽度。
+  - `OVERLAP_RATIO`：重叠率（0-1），相邻作业行的重叠比例，默认为0.1（10%重叠）。
+- 约束关系：
+  - 通常 `ROW_SPACING_M = IMPLEMENT_WIDTH_M × (1 - OVERLAP_RATIO)`
+  - 例如：农具宽度24米，重叠率10%，则行距 = 24 × 0.9 = 21.6米
+
+9. 转弯与可行性约束
+- `TURN_CONSTRAINTS MIN_TURN_RADIUS_M <float> [PIVOT_RADIUS_M <float>] [REVERSE_TURN_ALLOWED <yes|no>]`
+  - `MIN_TURN_RADIUS_M`：最小可行转弯半径（ackermann 必填）。
+  - `PIVOT_RADIUS_M`：原地转弯半径（履带，若支持原地转弯可设近 0）。
+  - `REVERSE_TURN_ALLOWED`：允许在倒车状态完成转弯。
+
+10. 坡度/横坡限制（陆上）
+- `SLOPE_LIMITS GRADE_MAX_PERCENT <float> [CROSS_SLOPE_MAX_PERCENT <float>]`
+  - 最大纵坡与横坡，用于避坡或限速（船拖可省略）。
+
+11. 地形/环境适配
+- `TERRAIN ALLOWED <csv>`：允许的地形类别（示例：`firm, field_road, soft, muddy, water, channel`）。
+- 可选：`TERRAIN AVOID <csv>`：明确不可进入的地形。
+
+12. 拖曳特性（拖车/船拖）
+- `TOW [OFFTRACK_MAX_M <float>] [TRAILER_COUNT <int>]`
+  - `OFFTRACK_MAX_M`：最大允许离轨（被拖物相对牵引路径的偏移）。
+  - `TRAILER_COUNT`：拖车/被拖物数量（规划时考虑串联）。
+
+13. 规划提示（非硬约束）
+- `PLANNER_HINTS [HEADLAND_SPACE_M <float>] [PREFERRED_PASS_WIDTH_M <float>] [WATER_DEPTH_MIN_M <float>]`
+  - `HEADLAND_SPACE_M`：头地转弯所需最小空间（供分行布局参考）。
+  - `PREFERRED_PASS_WIDTH_M`：偏好作业行宽（喷幅/耙幅）。
+  - `WATER_DEPTH_MIN_M`：船拖最低水深。
+
+14. 约束与校验建议
+- 必填：`TYPE`、`KINEMATICS`、`DIMENSIONS LENGTH_M/ WIDTH_M`、`LIMITS`、`TURN_CONSTRAINTS`（ackermann 必填）。
+- 合法范围：速度>0，半径>0，坡度 0–100%，加速度>0。
+- 组合校验：
+  - ackermann：`MIN_TURN_RADIUS_M` 与 `WIDTH_M`、`WHEELBASE_M` 一致性。
+  - skid：若 `PIVOT_TURN yes`，`PIVOT_RADIUS_M` 可接近 0。
+  - vessel_tow：水深、吃水、`OFFTRACK_MAX_M` 与路径贴边策略一致。
+
+15. 示例见 `vehicle_config_example.txt`
+
+16. 字段必填/选填清单（一目了然）
+- 术语：
+  - 必填：必须提供，否则规划器无法生成可行路径。
+  - 选填：可选参数；若缺省，规划器按保守值或跳过相关约束。
+- 通用必填（所有类型都需要）：
+  - `TYPE`
+  - `KINEMATICS MODEL`
+  - `DIMENSIONS LENGTH_M`、`DIMENSIONS WIDTH_M`
+  - `LIMITS WORK_MAX_KMH`、`LIMITS TRANSIT_MAX_KMH`、`LIMITS A_LONG_MAX_MS2`、`LIMITS A_LAT_MAX_MS2`
+  - `IMPLEMENT ROW_SPACING_M`、`IMPLEMENT IMPLEMENT_WIDTH_M`
+- 通用选填：
+  - `LIMITS YAW_RATE_MAX_DEGS`
+  - `IMPLEMENT OVERLAP_RATIO`
+  - `ENVELOPE SAFETY_MARGIN_M`、`ENVELOPE PATH_INSET_M`
+  - `SLOPE_LIMITS GRADE_MAX_PERCENT`、`SLOPE_LIMITS CROSS_SLOPE_MAX_PERCENT`
+  - `TERRAIN ALLOWED` / `TERRAIN AVOID`
+  - `PLANNER_HINTS HEADLAND_SPACE_M`、`PLANNER_HINTS PREFERRED_PASS_WIDTH_M`、`PLANNER_HINTS WATER_DEPTH_MIN_M`
+  - `DIMENSIONS WHEELBASE_M`、`DIMENSIONS TRACK_WIDTH_M`、`DIMENSIONS HITCH_LENGTH_M`、`DIMENSIONS TRAILER_LENGTH_M`、`DIMENSIONS DRAFT_M`
+- 类型特定必填/选填：
+  - 轮式（`TYPE WHEELED` + `MODEL ackermann`）：
+    - 必填：`TURN_CONSTRAINTS MIN_TURN_RADIUS_M`
+    - 选填（推荐）：`DIMENSIONS WHEELBASE_M`、`TURN_CONSTRAINTS REVERSE_TURN_ALLOWED`
+  - 履带（`TYPE TRACKED` + `MODEL skid`）：
+    - 必填：`TURN_CONSTRAINTS MIN_TURN_RADIUS_M` 或 `TURN_CONSTRAINTS PIVOT_RADIUS_M` 至少其一（若 `PIVOT_TURN yes`，推荐用 `PIVOT_RADIUS_M`）
+    - 选填：`DIMENSIONS TRACK_WIDTH_M`
+  - 船拖（`TYPE BOAT_TOW` + `MODEL vessel_tow`）：
+    - 必填：`DIMENSIONS DRAFT_M`
+    - 选填（推荐）：`TURN_CONSTRAINTS MIN_TURN_RADIUS_M`、`TOW OFFTRACK_MAX_M`、`TOW TRAILER_COUNT`
+
+17. 最小合法块示例（各类型）
+; 轮式（Ackermann）最小必需字段
+VEHICLE_CONFIG tractor-min "轮式-最小"
+TYPE WHEELED
+KINEMATICS MODEL ackermann
+DIMENSIONS LENGTH_M 4.8 WIDTH_M 2.3
+TURN_CONSTRAINTS MIN_TURN_RADIUS_M 6.0
+LIMITS WORK_MAX_KMH 9 TRANSIT_MAX_KMH 15 A_LONG_MAX_MS2 0.6 A_LAT_MAX_MS2 0.5
+IMPLEMENT ROW_SPACING_M 21.6 IMPLEMENT_WIDTH_M 24.0 OVERLAP_RATIO 0.1
+END
+
+; 履带（Skid）最小必需字段（支持近原地转弯）
+VEHICLE_CONFIG crawler-min "履带-最小"
+TYPE TRACKED
+KINEMATICS MODEL skid PIVOT_TURN yes
+DIMENSIONS LENGTH_M 5.2 WIDTH_M 2.6
+TURN_CONSTRAINTS PIVOT_RADIUS_M 0.2
+LIMITS WORK_MAX_KMH 8 TRANSIT_MAX_KMH 12 A_LONG_MAX_MS2 0.7 A_LAT_MAX_MS2 0.6
+IMPLEMENT ROW_SPACING_M 18.0 IMPLEMENT_WIDTH_M 20.0 OVERLAP_RATIO 0.1
+END
+
+; 船拖（Vessel Tow）最小必需字段
+VEHICLE_CONFIG vessel-min "船拖-最小"
+TYPE BOAT_TOW
+KINEMATICS MODEL vessel_tow
+DIMENSIONS LENGTH_M 8.0 WIDTH_M 2.5 DRAFT_M 0.8
+LIMITS WORK_MAX_KMH 8 TRANSIT_MAX_KMH 12 A_LONG_MAX_MS2 0.3 A_LAT_MAX_MS2 0.2
+IMPLEMENT ROW_SPACING_M 9.0 IMPLEMENT_WIDTH_M 10.0 OVERLAP_RATIO 0.1
+END

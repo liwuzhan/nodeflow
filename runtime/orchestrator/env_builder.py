@@ -8,6 +8,7 @@ from typing import Dict, List
 
 from runtime.config.models import NodeInstance, NodeManifest, Edge
 from runtime.utils.logger import get_logger
+from runtime.utils.constants import TMP_ROOT
 
 logger = get_logger(__name__)
 
@@ -23,37 +24,27 @@ class EnvBuilder:
         edges: List[Edge]
     ) -> Dict[str, str]:
         """
-        为节点构建环境变量字典（ZeroMQ版本）
+        为节点构建环境变量
 
-        构建的环境变量包括：
-        - NODE_ID: 节点实例ID
-        - NODE_HUB_PATH: 节点库根目录
-        - NODE_IN_<PORT_NAME>: 输入端口ZMQ地址（对应每个输入端口）
-        - NODE_OUT_<PORT_NAME>: 输出端口ZMQ地址（对应每个输出端口）
+        Args:
+            node: 节点实例配置
+            manifest: 节点清单
+            node_hub_path: 节点仓库根目录
+            edges: 全局边列表
 
-        与Shared Buffer版本的区别：
-        - 环境变量传递ZMQ地址而非缓冲区名称
-        - ZMQ地址格式：ipc:///tmp/nodeflow/source_node.source_port
-
-        参数：
-        - node: NodeInstance对象
-        - manifest: NodeManifest对象
-        - node_hub_path: 节点库根目录
-        - edges: 边列表
-
-        返回：
-        - 环境变量字典
+        Returns:
+            Dict[str, str]: 环境变量字典
         """
-        # 复制当前环境
         env = os.environ.copy()
-
-        # 添加通用环境变量
+        
+        # 基础环境变量
         env['NODE_ID'] = node.id
-        env['NODE_HUB_PATH'] = node_hub_path
-
-        logger.debug(f"Building environment for node '{node.id}':")
-        logger.debug(f"  NODE_ID={node.id}")
-        logger.debug(f"  NODE_HUB_PATH={node_hub_path}")
+        env['PYTHONPATH'] = os.path.abspath(os.path.join(node_hub_path, '..'))
+        # 确保当前目录也在PYTHONPATH中
+        env['PYTHONPATH'] = f"{os.getcwd()}:{env['PYTHONPATH']}"
+        
+        # 强制无缓冲输出
+        env['PYTHONUNBUFFERED'] = '1'
 
         # 为每个输入端口添加环境变量
         for input_port in manifest.inputs:
@@ -67,8 +58,7 @@ class EnvBuilder:
                     break
 
             if source_edge:
-                # 生成ZMQ地址：ipc:///tmp/nodeflow/source_node.source_port
-                zmq_address = f"ipc:///tmp/nodeflow/{source_edge.from_node}.{source_edge.from_port}"
+                zmq_address = f"ipc:///{TMP_ROOT}/{source_edge.from_node}.{source_edge.from_port}"
                 env_var_name = f'NODE_IN_{port_name}'
                 env[env_var_name] = zmq_address
                 logger.debug(f"  {env_var_name}={zmq_address}")
@@ -83,8 +73,7 @@ class EnvBuilder:
         for output_port in manifest.outputs:
             port_name = output_port.name
 
-            # 生成ZMQ地址：ipc:///tmp/nodeflow/node_id.port_name
-            zmq_address = f"ipc:///tmp/nodeflow/{node.id}.{port_name}"
+            zmq_address = f"ipc:///{TMP_ROOT}/{node.id}.{port_name}"
             env_var_name = f'NODE_OUT_{port_name}'
             env[env_var_name] = zmq_address
 

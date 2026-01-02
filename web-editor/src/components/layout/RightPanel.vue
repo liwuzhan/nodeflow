@@ -4,7 +4,10 @@
       <h3>属性面板</h3>
     </div>
 
-    <div class="panel-content">
+    <!-- 选项卡 -->
+    <el-tabs v-model="activeTab" class="panel-tabs">
+      <el-tab-pane label="节点属性" name="properties">
+        <div class="panel-content">
       <el-empty
         v-if="!graphStore.selectedNodeId"
         description="选择一个节点查看属性"
@@ -74,16 +77,25 @@
           </div>
         </div>
       </div>
-    </div>
+        </div>
+      </el-tab-pane>
+
+      <el-tab-pane label="分组管理" name="groups">
+        <GroupManager />
+      </el-tab-pane>
+    </el-tabs>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useGraphStore } from '@/stores/graph'
 import { useNodeLibraryStore } from '@/stores/nodeLibrary'
 import { getInputPorts, getOutputPorts } from '@/models'
 import ParamInput from '../properties/ParamInput.vue'
+import GroupManager from '../properties/GroupManager.vue'
+
+const activeTab = ref('properties')
 
 const graphStore = useGraphStore()
 const nodeLibraryStore = useNodeLibraryStore()
@@ -137,8 +149,25 @@ function updateParam(paramName: string, value: any) {
   color: #333;
 }
 
-.panel-content {
+.panel-tabs {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.panel-tabs :deep(.el-tabs__content) {
+  flex: 1;
+  overflow: hidden;
+}
+
+.panel-tabs :deep(.el-tab-pane) {
+  height: 100%;
+  overflow: hidden;
+}
+
+.panel-content {
+  height: 100%;
   overflow-y: auto;
   padding: 16px;
 }

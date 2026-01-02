@@ -6,10 +6,10 @@
     :data-position="position"
     :class="[
       positionClass,
-      { connecting: isConnecting, active: isActive, invalid: showInvalid },
+      { connecting: isConnecting, active: isActive, invalid: showInvalid, connected: isConnected },
     ]"
-    :title="`${portName} (${portType})`"
-    @mousedown.stop="startConnection"
+    :title="portTitle"
+    @mousedown.stop="handleMouseDown"
     @mouseenter="onMouseEnter"
     @mouseleave="onMouseLeave"
   >
@@ -27,12 +27,14 @@ interface Props {
   portType: string
   position: 'left' | 'right' // 'left' for input, 'right' for output
   index: number // 端口在列表中的序号
+  isConnected?: boolean // 是否有连线连接到此端口
 }
 
 interface Emits {
   (e: 'startConnect', data: ConnectionStartData): void
   (e: 'endConnect'): void
   (e: 'checkCompatibility', data: CompatibilityCheckData): void
+  (e: 'disconnect'): void // 断开连线
 }
 
 export interface ConnectionStartData {
@@ -51,7 +53,9 @@ export interface CompatibilityCheckData {
   toPortType: string
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), {
+  isConnected: false,
+})
 const emit = defineEmits<Emits>()
 
 const isActive = ref(false)
@@ -61,6 +65,14 @@ const isConnecting = ref(false)
 // 端口CSS类名
 const positionClass = computed(() => `position-${props.position}`)
 
+// 端口提示信息
+const portTitle = computed(() => {
+  if (props.position === 'left' && props.isConnected) {
+    return `${props.portName} (${props.portType}) - 点击断开连线`
+  }
+  return `${props.portName} (${props.portType})`
+})
+
 // 点的颜色（根据类型和状态）
 const dotColor = computed(() => {
   if (showInvalid.value) {
@@ -69,11 +81,26 @@ const dotColor = computed(() => {
   if (isActive.value || isConnecting.value) {
     return '#409eff' // 蓝色 - 活跃/连接中
   }
+  // 已连接的输入端口显示橙色
+  if (props.position === 'left' && props.isConnected) {
+    return '#e6a23c' // 橙色 - 已连接
+  }
   if (props.portType === 'any') {
     return '#909399' // 灰色 - any类型
   }
   return '#67c23a' // 绿色 - 正常
 })
+
+function handleMouseDown(e: MouseEvent) {
+  // 如果是输入端口且已连接，点击断开连线
+  if (props.position === 'left' && props.isConnected) {
+    emit('disconnect')
+    return
+  }
+
+  // 否则开始连线
+  startConnection(e)
+}
 
 function startConnection(e: MouseEvent) {
   const rect = (e.target as HTMLElement).getBoundingClientRect()
@@ -118,25 +145,53 @@ defineExpose({
 .port-handle {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 6px;
-  border-radius: 3px;
+  gap: 4px;
+  padding: 3px 8px;
   cursor: crosshair;
   transition: all 0.2s;
   user-select: none;
+  position: relative;
+  min-height: 20px;
 }
 
-.port-handle:hover {
-  background-color: rgba(64, 158, 255, 0.1);
+.port-handle:hover .handle-label {
+  color: #409eff;
+  font-weight: 500;
 }
 
+/* 输入端口：dot 在最左边，伸出节点边缘，label 在右边 */
 .port-handle.position-left {
   justify-content: flex-start;
+  padding-left: 8px;
 }
 
+.port-handle.position-left .handle-dot {
+  position: absolute;
+  left: -4px; /* 伸出节点左边缘 */
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.port-handle.position-left .handle-label {
+  margin-left: 8px; /* 与左边缘保持距离 */
+}
+
+/* 输出端口：dot 在最右边，伸出节点边缘，label 在左边 */
 .port-handle.position-right {
   justify-content: flex-end;
-  flex-direction: row-reverse;
+  padding-right: 8px;
+}
+
+.port-handle.position-right .handle-dot {
+  position: absolute;
+  right: -4px; /* 伸出节点右边缘 */
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.port-handle.position-right .handle-label {
+  margin-right: 8px; /* 与右边缘保持距离 */
+  text-align: right;
 }
 
 .handle-dot {
@@ -160,17 +215,28 @@ defineExpose({
 }
 
 .handle-label {
-  font-size: 11px;
-  color: #666;
-  flex: 1;
-  min-width: 0;
+  font-size: 12px;
+  color: #333;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.port-handle:hover .handle-label {
-  color: #333;
-  font-weight: 500;
+/* 已连接的输入端口 */
+.port-handle.connected.position-left {
+  cursor: pointer;
+}
+
+.port-handle.connected.position-left .handle-dot {
+  box-shadow: 0 0 0 2px rgba(230, 162, 60, 0.3);
+}
+
+.port-handle.connected.position-left:hover .handle-dot {
+  background-color: #f56c6c !important;
+  box-shadow: 0 0 0 3px rgba(245, 108, 108, 0.3);
+}
+
+.port-handle.connected.position-left:hover .handle-label {
+  color: #f56c6c;
 }
 </style>

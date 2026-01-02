@@ -11,11 +11,11 @@ entrypoints:
 ports:
   inputs:
     - name: rtk_fix
-      type: json
+      type: sensor.rtk
       description: "原始RTK数据"
   outputs:
     - name: filtered_rtk
-      type: json
+      type: sensor.rtk
       description: "平滑后的RTK数据"
 params:
   alpha_pos:

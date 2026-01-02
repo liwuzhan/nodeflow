@@ -8,10 +8,12 @@ import { ref, computed } from 'vue'
 import type { NodeInstanceUI, Edge } from '@/models/RuntimeConfig'
 import { createDefaultParams } from '@/models/RuntimeConfig'
 import { useNodeLibraryStore } from './nodeLibrary'
+import { useGroupStore } from './group'
 import { generateNodeInstanceId } from '@/utils/idGenerator'
 
 export const useGraphStore = defineStore('graph', () => {
   const nodeLibraryStore = useNodeLibraryStore()
+  const groupStore = useGroupStore()
 
   // State
   const nodes = ref(new Map<string, NodeInstanceUI>())
@@ -133,6 +135,9 @@ export const useGraphStore = defineStore('graph', () => {
     for (const [edgeId] of relatedEdges) {
       edges.value.delete(edgeId)
     }
+
+    // 从所有分组中移除节点
+    groupStore.removeNodeFromAllGroups(nodeId)
 
     // 删除节点
     nodes.value.delete(nodeId)

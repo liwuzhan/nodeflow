@@ -6,9 +6,9 @@
 
     <div class="toolbar-center">
       <el-button-group>
-        <el-button type="primary" icon="Plus">新建</el-button>
-        <el-button icon="Folder">打开</el-button>
-        <el-button icon="Download">保存</el-button>
+        <el-button type="primary" icon="Plus" @click="handleNew">新建</el-button>
+        <el-button icon="Folder" @click="handleOpen">打开</el-button>
+        <el-button icon="Download" @click="handleSave">保存</el-button>
       </el-button-group>
     </div>
 
@@ -48,7 +48,15 @@ import { validateGraph } from '@/services/validator'
 import type { ValidationResult } from '@/services/validator'
 import ValidationDialog from '../dialogs/ValidationDialog.vue'
 import ExportDialog from '../dialogs/ExportDialog.vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import {
+  createProjectFromCurrentState,
+  loadProjectToEditor,
+  downloadProject,
+  uploadProject,
+  validateProject,
+} from '@/services/projectManager'
+import type { Project } from '@/models/Project'
 
 const uiStore = useUiStore()
 const graphStore = useGraphStore()
@@ -61,6 +69,8 @@ const validationResult = ref<ValidationResult>({
   errors: [],
   warnings: [],
 })
+
+let currentProject: Project | null = null
 
 function handleValidate() {
   // 构建 manifest map
@@ -122,6 +132,96 @@ function handleExport() {
 
 function showExportDialog() {
   exportDialogVisible.value = true
+}
+
+// 项目管理方法
+
+function handleNew() {
+  if (graphStore.nodeCount > 0) {
+    ElMessageBox.confirm(
+      '是否要新建项目？当前编辑的内容将被清空。',
+      '新建项目',
+      {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning',
+      }
+    )
+      .then(() => {
+        graphStore.clearGraph()
+        currentProject = null
+        ElMessage.success('新建项目成功')
+      })
+      .catch(() => {
+        // 用户取消
+      })
+  } else {
+    graphStore.clearGraph()
+    currentProject = null
+    ElMessage.success('新建项目成功')
+  }
+}
+
+function handleSave() {
+  if (graphStore.nodeCount === 0) {
+    ElMessage.warning('项目为空，无法保存')
+    return
+  }
+
+  ElMessageBox.prompt('请输入项目名称', '保存项目', {
+    confirmButtonText: '保存',
+    cancelButtonText: '取消',
+    inputPattern: /^.{1,100}$/,
+    inputErrorMessage: '项目名称长度应该在 1 到 100 个字符之间',
+    inputValue: currentProject?.metadata.name || '新项目',
+  })
+    .then(({ value: projectName }) => {
+      try {
+        // 从当前状态创建项目
+        const project = createProjectFromCurrentState(projectName)
+
+        // 验证项目
+        const validation = validateProject(project)
+        if (!validation.valid) {
+          ElMessage.error('项目验证失败：' + validation.errors.join('; '))
+          return
+        }
+
+        currentProject = project
+
+        // 下载项目文件
+        downloadProject(project)
+        ElMessage.success(`项目 "${projectName}" 保存成功`)
+      } catch (error) {
+        console.error('Save project error:', error)
+        ElMessage.error('保存项目失败：' + String(error))
+      }
+    })
+    .catch(() => {
+      // 用户取消
+    })
+}
+
+async function handleOpen() {
+  try {
+    const project = await uploadProject()
+
+    // 验证项目
+    const validation = validateProject(project)
+    if (!validation.valid) {
+      ElMessage.error('项目文件无效：' + validation.errors.join('; '))
+      return
+    }
+
+    // 加载项目
+    loadProjectToEditor(project)
+    currentProject = project
+
+    ElMessage.success(`项目 "${project.metadata.name}" 加载成功`)
+  } catch (error) {
+    console.error('Open project error:', error)
+    ElMessage.error('打开项目失败：' + String(error))
+  }
 }
 </script>
 

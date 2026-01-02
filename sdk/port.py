@@ -9,8 +9,16 @@
 
 import time
 import zmq
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Type, Union
 from pathlib import Path
+
+# 尝试导入 Pydantic
+try:
+    from pydantic import BaseModel
+    HAS_PYDANTIC = True
+except ImportError:
+    HAS_PYDANTIC = False
+    BaseModel = None  # type: ignore
 
 # 导入共享模块
 import sys
@@ -47,7 +55,7 @@ class OutputPort:
     - ZMQ提供实时通知，减少轮询
     """
 
-    def __init__(self, name: str, zmq_address: str):
+    def __init__(self, name: str, zmq_address: str, schema: Optional[Type['BaseModel']] = None):
         """
         初始化输出端口
 
@@ -55,13 +63,18 @@ class OutputPort:
         - name: 端口名 (如 'rtk_fix')
         - zmq_address: ZMQ地址 (如 'ipc:///tmp/nodeflow/sim_output.rtk_fix')
                       通常由Runtime通过环境变量传入
+        - schema: Pydantic模型类 (可选)，用于数据校验
         """
         import os
 
         self.name = name
         self.zmq_address = zmq_address
+        self.schema = schema
         self.socket: Optional[zmq.Socket] = None
         self.buffer: Optional[SharedBufferLite] = None
+
+        # 校验模式：loose, strict, off (default)
+        self.validation_mode = os.getenv("NODE_SCHEMA_VALIDATION", "off").lower()
 
         # 从ZMQ地址提取buffer名称
         self.buffer_name = zmq_address.split('/')[-1]
@@ -121,20 +134,91 @@ class OutputPort:
             logger.error(f"OutputPort '{self.name}' setup failed: {e}")
             raise
 
-    def send(self, data: Dict[str, Any]):
+    def get_schema_json(self) -> Optional[Dict[str, Any]]:
+        """
+        获取端口 Schema 的 JSON 描述
+        """
+        if not self.schema or not HAS_PYDANTIC:
+            return None
+        
+        try:
+            # Pydantic V2
+            if hasattr(self.schema, 'model_json_schema'):
+                return self.schema.model_json_schema()
+            # Pydantic V1
+            elif hasattr(self.schema, 'schema'):
+                return self.schema.schema()
+            else:
+                return None
+        except Exception as e:
+            logger.warning(f"Failed to generate JSON schema for port '{self.name}': {e}")
+            return None
+
+    def send(self, data: Union[Dict[str, Any], 'BaseModel']):
         """
         发送数据（混合方案）
 
         步骤：
+        0. 数据校验 (如果配置了schema)
         1. 写入Shared Buffer（持久化）
         2. 发送ZMQ通知（实时通知）
 
         参数：
-        - data: 要发送的数据字典
+        - data: 要发送的数据 (字典 或 Pydantic模型实例)
         """
         if not self.buffer or not self.socket:
             logger.error(f"OutputPort '{self.name}' not ready")
             return
+
+        # 0. Schema Validation
+        if self.schema and self.validation_mode != "off":
+            if not HAS_PYDANTIC:
+                logger.warning(f"OutputPort '{self.name}' has schema but Pydantic is not installed.")
+            else:
+                try:
+                    # 如果是 Pydantic 对象，先转换为 dict
+                    if isinstance(data, self.schema):
+                        # 已经是正确的 Model 实例，转换为 dict
+                        # 使用 model_dump (v2) 或 dict (v1)
+                        if hasattr(data, 'model_dump'):
+                            data = data.model_dump()
+                        else:
+                            data = data.dict()
+                    elif isinstance(data, dict):
+                        # 如果是 dict，尝试 validate
+                        # model_validate (v2) or parse_obj (v1)
+                        if hasattr(self.schema, 'model_validate'):
+                            validated_obj = self.schema.model_validate(data)
+                            data = validated_obj.model_dump()
+                        else:
+                            validated_obj = self.schema.parse_obj(data)
+                            data = validated_obj.dict()
+                    else:
+                        raise TypeError(f"Data must be dict or {self.schema.__name__}, got {type(data)}")
+
+                except Exception as e:
+                    error_msg = f"OutputPort '{self.name}' schema validation failed: {e}"
+                    if self.validation_mode == "strict":
+                        logger.error(error_msg)
+                        raise ValueError(error_msg) from e
+                    else:
+                        logger.warning(error_msg)
+                        # Loose mode: 即使校验失败也尝试发送（如果它是 dict）
+                        if not isinstance(data, dict) and hasattr(data, 'model_dump'):
+                             data = data.model_dump()
+                        elif not isinstance(data, dict) and hasattr(data, 'dict'):
+                             data = data.dict()
+                        
+                        if not isinstance(data, dict):
+                             # 无法转换为 dict，必须放弃
+                             logger.error(f"OutputPort '{self.name}' cannot convert invalid data to dict. Drop.")
+                             return
+
+        # 如果没有 schema，但传入了 Pydantic 对象，尝试自动转换
+        elif HAS_PYDANTIC and hasattr(data, 'model_dump'):
+             data = data.model_dump()
+        elif HAS_PYDANTIC and hasattr(data, 'dict'):
+             data = data.dict()
 
         try:
             # 1. 写入Shared Buffer

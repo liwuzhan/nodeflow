@@ -77,6 +77,18 @@ def main():
         initial_check_points = int(sdk.params.get("initial_check_points", 10))
         initial_consume_distance = float(sdk.params.get("initial_consume_distance", 2.0))
 
+        # 视野自动扩宽参数
+        min_view_points = int(sdk.params.get("min_view_points", 3))
+        view_expand_factor = float(sdk.params.get("view_expand_factor", 2.0))
+        max_view_width = float(sdk.params.get("max_view_width", 12.0))
+
+        # 持续消费参数
+        continuous_consume_distance = float(sdk.params.get("continuous_consume_distance", 1.5))
+
+        sdk.logger.info(f"初始消费: 检查{initial_check_points}点, 距离<{initial_consume_distance}m")
+        sdk.logger.info(f"视野扩宽: 最少{min_view_points}点, 扩宽x{view_expand_factor}, 最大{max_view_width}m")
+        sdk.logger.info(f"持续消费: 距离<{continuous_consume_distance}m")
+
         # 2. 初始化 L4 原子层算法
         config = ViewConfig(
             view_distance=view_distance,
@@ -85,7 +97,11 @@ def main():
             goal_tolerance=goal_tolerance,
             max_search_points=max_search_points,
             initial_check_points=initial_check_points,
-            initial_consume_distance=initial_consume_distance
+            initial_consume_distance=initial_consume_distance,
+            min_view_points=min_view_points,
+            view_expand_factor=view_expand_factor,
+            max_view_width=max_view_width,
+            continuous_consume_distance=continuous_consume_distance
         )
         selector = WaypointSelector(config)
 

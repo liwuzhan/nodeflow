@@ -1,7 +1,16 @@
 #!/usr/bin/env python3
 """
-Logger Node - 多输入日志记录节点
-接收来自多个输入端口的数据，在内存中缓冲，并通过 Web 界面实时展示
+Logger Node - 多输入日志记录节点 (L3 分子层)
+
+L3 职责：只负责数据搬运和调用 L4 原子层
+- 从输入端口读取数据
+- 调用 atom.py 处理日志条目
+- 管理 Web 服务器和文件输出
+- 保证线程安全
+
+架构：
+- atom.py (L4): 纯算法，无依赖
+- run.py (L3): 数据搬运 + Web 服务
 """
 
 import asyncio
@@ -9,40 +18,65 @@ import json
 import os
 import sys
 import time
-from collections import deque
+import threading
 from pathlib import Path
-from threading import Thread, Lock
 from typing import Any, Dict, List, Optional
+from threading import Thread, Lock
 
-# Add SDK to path
+# 添加 SDK 路径
 sdk_path = os.path.join(os.path.dirname(__file__), '../../..', 'sdk')
 if sdk_path not in sys.path:
     sys.path.insert(0, sdk_path)
 
+# FastAPI 导入（L3 依赖）
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 import uvicorn
 
 from nodeflow_sdk import NodeFlowSDK
 
+# 导入 L4 原子层
+import atom
 
-class LogBuffer:
-    """线程安全的日志缓冲区"""
+
+class ThreadSafeLogBuffer:
+    """线程安全的日志缓冲区包装器"""
 
     def __init__(self, max_size: int = 1000):
-        self.buffer = deque(maxlen=max_size)
+        self.buffer = atom.LogBuffer(max_size)
         self.lock = Lock()
         self.subscribers: List[WebSocket] = []
 
-    def append(self, log_entry: Dict[str, Any]) -> None:
-        """添加日志条目"""
+    def add_entry(self, entry: Dict[str, Any]) -> atom.LogEntry:
+        """添加日志条目（线程安全）"""
         with self.lock:
-            self.buffer.append(log_entry)
+            log_entry = self.buffer.add_entry(entry)
+            return log_entry
 
-    def get_all(self) -> List[Dict[str, Any]]:
-        """获取所有日志条目"""
+    def get_all(self) -> List[atom.LogEntry]:
+        """获取所有日志条目（线程安全）"""
         with self.lock:
-            return list(self.buffer)
+            return self.buffer.get_all()
+
+    def get_recent(self, count: int) -> List[atom.LogEntry]:
+        """获取最近的 N 条日志（线程安全）"""
+        with self.lock:
+            return self.buffer.get_recent(count)
+
+    def clear(self) -> None:
+        """清空缓冲区（线程安全）"""
+        with self.lock:
+            self.buffer.clear()
+
+    def size(self) -> int:
+        """当前缓冲区大小（线程安全）"""
+        with self.lock:
+            return self.buffer.size()
+
+    def get_stats(self) -> Dict[str, Any]:
+        """获取缓冲区统计信息（线程安全）"""
+        with self.lock:
+            return self.buffer.get_stats()
 
     def add_subscriber(self, websocket: WebSocket) -> None:
         """添加 WebSocket 订阅者"""
@@ -59,19 +93,17 @@ class LogBuffer:
 
 
 class LoggerNode:
-    """日志记录节点"""
+    """日志记录节点 (L3)"""
 
     def __init__(self, sdk: NodeFlowSDK):
         self.sdk = sdk
+        self.running = True
 
         # 参数配置
         self.web_port = int(sdk.get_param('web_port', 8001))
         self.buffer_size = int(sdk.get_param('buffer_size', 1000))
-        self.enable_file_log = sdk.get_param('enable_file_log', False) == True or sdk.get_param('enable_file_log', False) == 'true'
+        self.enable_file_log = sdk.get_param('enable_file_log', False) in [True, 'true', 'True']
         self.log_file_path = sdk.get_param('log_file_path', './logs/logger.jsonl')
-
-        # 初始化缓冲区
-        self.log_buffer = LogBuffer(self.buffer_size)
 
         # 创建输入端口
         self.input_ports = {
@@ -79,6 +111,9 @@ class LoggerNode:
             'input2': sdk.create_input_port('input2'),
             'input3': sdk.create_input_port('input3'),
         }
+
+        # 初始化线程安全缓冲区
+        self.log_buffer = ThreadSafeLogBuffer(self.buffer_size)
 
         # 文件日志
         self.log_file: Optional[Any] = None
@@ -91,7 +126,6 @@ class LoggerNode:
 
         # Web 服务线程
         self.web_thread: Optional[Thread] = None
-        self.running = True
 
     def _setup_file_logging(self) -> None:
         """初始化文件日志"""
@@ -115,10 +149,13 @@ class LoggerNode:
         async def get_logs():
             """获取历史日志"""
             logs = self.log_buffer.get_all()
+            # 转换为字典格式（兼容现有 Web 界面）
+            logs_dict = [entry.to_dict() if hasattr(entry, 'to_dict') else entry
+                        for entry in logs]
             return {
-                "count": len(logs),
-                "logs": logs,
-                "buffer_size": self.log_buffer.buffer.maxlen,
+                "count": len(logs_dict),
+                "logs": logs_dict,
+                "buffer_size": self.buffer_size,
                 "subscribers": self.log_buffer.get_subscriber_count()
             }
 
@@ -142,6 +179,15 @@ class LoggerNode:
 
     def _get_html_template(self) -> str:
         """生成内嵌的 HTML 仪表盘"""
+        # 使用现有 HTML 模板（保持不变）
+        html_template_path = Path(__file__).parent / "web_template.html"
+        if html_template_path.exists():
+            with open(html_template_path, 'r', encoding='utf-8') as f:
+                return f.read()
+
+        # 如果模板文件不存在，使用内嵌模板（现有代码中的模板）
+        # 这里为了简洁，我们保留现有内嵌模板
+        # 实际项目中可以将 HTML 提取到单独文件
         return """<!DOCTYPE html>
 <html>
 <head>
@@ -527,12 +573,14 @@ class LoggerNode:
 </body>
 </html>"""
 
-    async def _broadcast_to_websockets(self, log_entry: Dict[str, Any]) -> None:
+    async def _broadcast_to_websockets(self, log_entry: atom.LogEntry) -> None:
         """向所有 WebSocket 订阅者广播日志条目"""
         dead_subscribers = []
         for ws in self.log_buffer.subscribers:
             try:
-                await ws.send_json(log_entry)
+                # 使用 atom.LogFormatter 格式化用于 WebSocket 的数据
+                formatted = atom.LogFormatter.format_for_html(log_entry)
+                await ws.send_json(formatted)
             except Exception:
                 dead_subscribers.append(ws)
 
@@ -552,6 +600,32 @@ class LoggerNode:
         except Exception as e:
             self.sdk.logger.error(f"Web server error: {e}")
 
+    def _create_log_entry(self, port_name: str, data: Any) -> Dict[str, Any]:
+        """创建日志条目字典"""
+        # 尝试从数据中提取有用信息
+        log_entry = {
+            'timestamp': time.time(),
+            'port': port_name,
+            'data': data,
+            'level': 'INFO'
+        }
+
+        # 如果数据是字典，尝试提取 seq 和 node_id
+        if isinstance(data, dict):
+            if 'timestamp' in data:
+                log_entry['timestamp'] = data['timestamp']
+            if 'seq' in data:
+                log_entry['seq'] = data['seq']
+            if 'node_id' in data:
+                log_entry['node_id'] = data['node_id']
+            # 尝试识别错误或警告级别
+            if 'error' in str(data).lower() or 'exception' in str(data).lower():
+                log_entry['level'] = 'ERROR'
+            elif 'warning' in str(data).lower() or 'warn' in str(data).lower():
+                log_entry['level'] = 'WARNING'
+
+        return log_entry
+
     def run(self) -> None:
         """主循环 - 读取输入端口并处理日志"""
         # 启动 Web 服务线程
@@ -570,25 +644,27 @@ class LoggerNode:
                         # 非阻塞读取最新数据
                         data = port.recv_latest()
                         if data is not None:
-                            # 构造日志条目
-                            log_entry = {
-                                'timestamp': time.time(),
-                                'port': port_name,
-                                'data': data
-                            }
+                            # 创建日志条目
+                            log_entry_dict = self._create_log_entry(port_name, data)
 
-                            # 写入内存缓冲区
-                            self.log_buffer.append(log_entry)
+                            # 添加到缓冲区
+                            log_entry = self.log_buffer.add_entry(log_entry_dict)
 
                             # 写入文件（如果启用）
                             if self.log_file:
                                 try:
-                                    self.log_file.write(json.dumps(log_entry) + '\n')
+                                    self.log_file.write(
+                                        atom.LogFormatter.format_for_json(log_entry) + '\n'
+                                    )
                                 except Exception as e:
                                     self.sdk.logger.error(f"File write error: {e}")
 
                             # 广播到 WebSocket 客户端
                             asyncio.run(self._broadcast_to_websockets(log_entry))
+
+                            # 可选：控制台输出（调试用）
+                            # console_msg = atom.LogFormatter.format_for_console(log_entry)
+                            # self.sdk.logger.debug(console_msg)
 
                     except Exception as e:
                         self.sdk.logger.error(f"Error reading {port_name}: {e}")
