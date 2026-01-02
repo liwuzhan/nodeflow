@@ -2,6 +2,47 @@
 
 所有值得注意的项目更改都将记录在此文件中。
 
+## [2026-01-02]
+
+### 🧹 项目整理与文档更新
+
+**变更概要**：
+整理项目文件结构，归档历史文档，更新 README 和文档链接。
+
+**主要变更**：
+
+1. **文档归档**
+   - 58 个历史文档 → `docs/old/`
+   - AI 评审报告 → `docs/评审报告/`
+
+2. **目录整理**
+   - 根目录散落文档 → `docs/`
+   - 测试文件 → `tests/`
+   - 删除 `examples/` 中的测试配置文件
+
+3. **端口类型修正**
+   - `rtk_filter.rtk_fix`: `json` → `sensor.rtk`
+   - `rtk_filter.filtered_rtk`: `json` → `sensor.rtk`
+   - `waypoint_selector.next_point`: `json` → `planning.waypoint`
+   - `sim_input.velocity_cmd`: `json` → `control.velocity`
+   - Web 编辑器现在可以正确连接所有节点
+
+4. **新增文档**
+   - `docs/PROJECT_OVERVIEW_20260102.md` - 项目综述（AI 驱动开发总结）
+   - `.test_template/` - 测试模板目录
+
+5. **配置更新**
+   - `.gitignore` - 忽略测试报告文件
+
+**影响的文件**：
+- 307 个文件变更
+- 28,992 行新增
+- 11,791 行删除
+
+**测试状态**: 54/54 单元测试通过 ✅
+
+---
+
 ## [2026-01-01]
 
 ### 📊 结构化日志系统上线 - 完整验证

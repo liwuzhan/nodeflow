@@ -1,6 +1,6 @@
-# 机器人节点化框架（Robot NodeFlow）
+# NodeFlow - 机器人节点编排框架
 
-[![Python Version](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
+[![Python Version](https://img.shields.io/badge/python-3.12%2B-blue)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Code Style](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![Type Checked](https://img.shields.io/badge/type%20checked-mypy-informational)](http://mypy-lang.org/)
@@ -25,7 +25,7 @@
 
 ## 📋 系统要求
 
-- **Python**: 3.10 或更高版本
+- **Python**: 3.12 或更高版本
 - **操作系统**: Linux / macOS (Unix Domain Socket 支持)
 - **依赖**: 见 `requirements.txt`
 
@@ -64,14 +64,14 @@ python3 -m mypy --ignore-missing-imports mcp_server.py runtime_manager.py
 ### 3. 运行示例
 
 ```bash
-# 基础示例 - 单节点运行
-python3 -m runtime.main examples/test_mock_single.yaml
-
-# 数据流示例 - 节点链
-python3 -m runtime.main examples/test_mock_chain.yaml
+# 完整仿真场景（推荐）
+python3 -m runtime.main examples/planning_simulation.yaml
 
 # 查看可用节点
 python3 -m tools.cli.core.cli node list
+
+# 查看节点日志
+nodeflow logs --follow
 ```
 
 ---
@@ -79,47 +79,48 @@ python3 -m tools.cli.core.cli node list
 ## 🏗️ 项目结构
 
 ```
-robot-nodeflow/
+node/
 ├── runtime/              # 运行时框架核心
-│   ├── config/           # 配置解析 (YAML Parser, Validator)
-│   ├── node_hub/         # 节点发现与注册
-│   ├── graph/            # 图拓扑分析 (循环检测、启动排序)
-│   ├── orchestrator/     # 节点编排与生命周期管理
-│   ├── ipc/              # IPC 通信 (Socket + MsgPack)
-│   ├── monitoring/       # 监控与故障恢复
+│   ├── config/           # 配置解析
+│   ├── graph/            # 图拓扑分析
+│   ├── orchestrator/     # 节点编排与生命周期
 │   └── utils/            # 工具函数
 │
 ├── sdk/                  # 节点开发 SDK
-│   ├── nodeflow_sdk.py   # SDK 主类 (Node 基类)
-│   └── port.py           # 端口抽象 (InputPort, OutputPort)
+│   ├── doc/              # SDK 文档
+│   ├── test_utils/       # 测试工具
+│   └── utils/            # 地理坐标等工具
 │
-├── node-hub/             # 节点库 (可插拔节点包)
-│   ├── global_coverage/  # GPS 覆盖率节点
-│   ├── sim_gps/          # GPS 模拟器
-│   ├── sim_imu/          # IMU 模拟器
-│   ├── velocity_controller/  # 速度控制器
+├── node-hub/             # 节点库
+│   ├── coord_transform/  # 坐标转换网关
+│   ├── global_coverage/  # 全局覆盖规划
+│   ├── waypoint_selector/# 前瞻点选择
+│   ├── track_controller/ # 轨迹跟踪控制
+│   ├── sim_output/       # 仿真器输出
+│   ├── sim_input/        # 仿真器输入
 │   └── ...               # 更多节点
 │
-├── mcp_server.py         # MCP 服务 (AI 辅助调试)
-├── runtime_manager.py    # 运行时进程管理
+├── simulator/            # 农田仿真器
+│   └── docs/             # 仿真器文档
 │
-├── examples/             # 示例配置文件
-│   ├── test_mock_single.yaml     # 单节点示例
-│   ├── test_mock_chain.yaml      # 节点链示例
-│   └── test_mock_pipeline.yaml   # 完整管道示例
+├── web-editor/           # Web 可视化编辑器
+│   └── docs/             # 编辑器文档
+│
+├── tools/cli/            # 命令行工具
+│   └── commands/         # CLI 命令
 │
 ├── tests/                # 测试套件
 │   ├── unit/             # 单元测试
-│   ├── integration/      # 集成测试
-│   └── mcp/              # MCP 服务测试
+│   └── integration/      # 集成测试
 │
 ├── docs/                 # 文档
-│   ├── architecture.md              # 架构设计
-│   ├── api-reference.md             # API 参考
-│   ├── MCP_SERVICE_FIX_REPORT.md    # MCP 服务修复报告
-│   └── SIMULATOR_GUIDE.md           # 仿真器使用指南
+│   ├── old/              # 历史文档归档
+│   ├── 评审报告/          # AI 评审报告
+│   └── CHANGELOG.md      # 更新日志
 │
-└── scripts/              # 开发工具脚本
+├── mcp_server.py         # MCP 服务 (AI 辅助调试)
+├── runtime_manager.py    # 运行时进程管理
+└── pytest.ini            # 测试配置
 ```
 
 ---
@@ -349,15 +350,29 @@ python -m pytest test/ -v
 
 ## 📚 文档
 
+### 核心文档
+
 | 文档 | 描述 |
 |------|------|
-| [Buffer 配置实现](docs/BUFFER_CONFIG_IMPLEMENTATION.md) | 缓冲区配置功能详细文档（2025-12-24）⭐ |
-| [混合 IPC 架构](docs/ZMQ_HYBRID_IPC_IMPLEMENTATION.md) | SharedBuffer + ZeroMQ 混合方案（2025-12-24）⭐ |
-| [Buffer 配置示例](examples/BUFFER_CONFIG_EXAMPLE.yaml) | 各类传感器缓冲区配置参考表 |
-| [工作总结 2024-12-24](docs/SESSION_SUMMARY_20251224.md) | 最新工作总结报告 |
-| [MCP 服务修复报告](docs/MCP_SERVICE_FIX_REPORT.md) | 安全修复、稳定性改进（2025-12-22） |
-| [架构设计](docs/architecture.md) | 系统架构、设计决策、性能优化 |
-| [API 参考](docs/api-reference.md) | SDK API、配置参考、节点开发指南 |
+| [项目综述](docs/PROJECT_OVERVIEW_20260102.md) | 项目全面介绍，AI 驱动开发总结 ⭐ |
+| [更新日志](docs/CHANGELOG.md) | 完整的版本变更记录 |
+| [SDK 快速入门](sdk/doc/SDK_GETTING_STARTED.md) | 10 分钟上手 NodeFlow SDK |
+| [SDK API 参考](sdk/doc/SDK_API_REFERENCE.md) | 完整的 SDK API 文档 |
+| [SDK 最佳实践](sdk/doc/SDK_BEST_PRACTICES.md) | 架构设计、性能优化 |
+| [节点开发规范](node-hub/doc/节点开发规范.md) | 节点开发标准和最佳实践 |
+
+### 功能文档
+
+| 文档 | 描述 |
+|------|------|
+| [结构化日志系统](docs/STRUCTURED_LOGGING_GUIDE.md) | JSON 日志 + CLI 聚合工具 |
+| [父进程监控机制](docs/PARENT_PROCESS_WATCHDOG.md) | 僵尸进程自动清理 |
+| [ENU 坐标系统一](docs/old/ENU_DECOUPLED_V2_FINAL_SUMMARY.md) | 坐标系架构重构总结 |
+
+### 历史文档
+
+- 更多历史文档已归档到 [`docs/old/`](docs/old/) 目录
+- AI 评审报告见 [`docs/评审报告/`](docs/评审报告/)
 
 ---
 
@@ -499,40 +514,37 @@ nodes:
 
 ## 🔄 最近更新
 
+### 2026-01-02
+- 🧹 **项目整理**: 归档历史文档、清理测试文件、更新目录结构
+- 🔧 **端口类型修正**: 修复节点 YAML 端口类型，Web 编辑器连接正常
+- 📚 **项目综述**: 新增 `docs/PROJECT_OVERVIEW_20260102.md` 完整项目介绍
+- 📦 **测试模板**: 新增 `.test_template/` 便于快速创建节点测试
+
+### 2026-01-01
+- 📊 **结构��日志**: JSON 格式日志 + CLI 聚合工具 (`nodeflow logs`)
+- ✅ **完整验证**: 端到端测试通过，642+ 条日志记录
+
+### 2025-12-29
+- 🛡️ **父进程监控**: ParentProcessWatchdog 防止孤儿进程
+
+### 2025-12-27
+- ✨ **ENU 坐标统一**: 坐标转换集中到 coord_transform 网关
+- 🚨 **子进程清理**: 修复进程泄漏问题
+
 ### 2025-12-28
-- 📜 **Schema 校验**: 引入 Pydantic 定义数据契约，实现 "Code as Single Source of Truth"
-- 🏥 **CLI 健康检查**: 新增 `nodeflow health check` 命令，基于 Metadata 进行离线数据合规性体检
-- ⚡ **零开销运行**: 运行时默认关闭校验，仅在 CLI 工具中按需采样检查，兼顾性能与规范
+- 📜 **Schema 校验**: Pydantic 数据契约，CLI 健康检查
 
 ### 2025-12-26
-- 🔒 **IPC 关键修复**: 修复共享内存竞态条件（写入顺序、Optimistic Read 模式）
-- 🔢 **序列号回绕处理**: 正确处理 32 位计数器溢出（模运算）
-- 🧭 **坐标系对齐**: 修复控制器角速度符号反转问题（数学坐标系 ↔ 地理坐标系）
-- 📊 **轨迹统计优化**: 排除接近起点阶段，平均偏差从 2.31m 降至 0.03m（实际精度 3cm）
-- 🧹 **缓冲区自动清理**: 框架启动时自动清理旧缓冲数据，默认启用
+- 🔒 **IPC 修复**: 共享内存竞态条件、序列号回绕处理
+- 🧭 **坐标系对齐**: 修复控制器角速度符号
 
 ### 2025-12-24
-- 📦 **缓冲区配置**: 实现灵活的输出端口缓冲区配置（1MB 默认、可配置 5-50MB+）
-- 🎯 **混合 IPC 架构**: 完整实现 SharedBuffer + ZeroMQ 混合方案，解决分层启动数据丢失问题
-- ✅ **完整测试**: 7/7 buffer 配置测试通过，100% 向后兼容
-- 📚 **文档完善**: 新增实现文档、配置示例、工作总结（600+ 行）
-- 🔧 **SDK 增强**: OutputPort 支持从环境变量读取 buffer 配置
+- 📦 **缓冲区配置**: 灵活的输出端口缓冲区配置（1MB-50MB+）
+- 🎯 **混合 IPC**: SharedBuffer + ZeroMQ 架构
 
 ### 2025-12-22
-- 🔒 **安全加固**: 修复 MCP 服务路径穿越漏洞（P0 Critical）
-- 🚀 **稳定性改进**: 解决运行时启动超时问题（subprocess PIPE）
-- ✨ **代码质量**: mypy 类型错误清零、black 格式化完成
-- 📝 **文档完善**: 新增详细修复报告（1,081 行）
-
-### 2025-12-21
-- 🔧 **消息序列化**: 从 JSON 迁移到 MsgPack（3x 性能提升）
-- 🧪 **测试重组**: 统一测试框架、新增 Mock 节点库
-- 📦 **Python 升级**: 迁移到 Python 3.12，类型注解完善
-
-### 2025-12-20
-- 🧠 **MCP 服务**: 实现 AI 辅助调试能力（7 个工具）
-- 🎯 **拓扑优化**: 改进启动排序算法、循环依赖检测
-- 📊 **监控增强**: 节点健康检查、自动重启机制
+- 🔒 **安全加固**: 修复 MCP 服务路径穿越漏洞
+- 🚀 **稳定性**: 运行时启动超时问题解决
 
 ---
 
