@@ -1,7 +1,7 @@
 # NodeFlow - 机器人节点编排框架
 
 [![Python Version](https://img.shields.io/badge/python-3.12%2B-blue)](https://www.python.org/downloads/)
-[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![License](https://img.shields.io/badge/license-GPLv3-blue)](LICENSE)
 [![Code Style](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![Type Checked](https://img.shields.io/badge/type%20checked-mypy-informational)](http://mypy-lang.org/)
 
@@ -571,7 +571,7 @@ nodes:
 
 ## 📄 许可证
 
-本项目采用 [MIT License](LICENSE) 开源协议。
+本项目采用 [GPLv3 License](LICENSE) 开源协议。
 
 ---
 
