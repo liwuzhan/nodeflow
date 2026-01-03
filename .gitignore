@@ -51,7 +51,6 @@ htmlcov/
 .pytest_cache/
 
 # Project specific
-.claude/
 *.bak
 .trae/
 
@@ -59,3 +58,6 @@ htmlcov/
 .test-reports/
 *.report.json
 unittest-*.log
+
+# Claude Code (只排除本地配置)
+.claude/*.local.json
