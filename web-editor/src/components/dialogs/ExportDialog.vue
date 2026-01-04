@@ -38,6 +38,42 @@
 
     <el-divider />
 
+    <!-- 保存选项 -->
+    <div class="save-mode-section">
+      <div class="section-title">保存选项</div>
+      <el-radio-group v-model="saveMode" class="save-mode-group">
+        <el-radio value="download">
+          <el-icon><Download /></el-icon>
+          下载到本地
+        </el-radio>
+        <el-radio value="examples">
+          <el-icon><FolderOpened /></el-icon>
+          保存到 examples 目录
+        </el-radio>
+      </el-radio-group>
+
+      <!-- 文件名输入（仅在保存到 examples 时显示） -->
+      <div v-if="saveMode === 'examples'" class="filename-input">
+        <el-input
+          v-model="filename"
+          placeholder="输入文件名（例如：my_config.yaml）"
+          clearable
+        >
+          <template #prepend>文件名</template>
+        </el-input>
+        <el-alert
+          type="info"
+          :closable="false"
+          show-icon
+          style="margin-top: 8px"
+        >
+          文件将保存到项目的 examples 目录，如果文件已存在将提示是否覆盖
+        </el-alert>
+      </div>
+    </div>
+
+    <el-divider />
+
     <!-- YAML 预览 -->
     <div class="yaml-preview-section">
       <div class="preview-header">
@@ -47,7 +83,7 @@
             <el-icon><DocumentCopy /></el-icon>
             复制
           </el-button>
-          <el-button size="small" @click="downloadYaml">
+          <el-button size="small" @click="handleDownload">
             <el-icon><Download /></el-icon>
             下载
           </el-button>
@@ -71,9 +107,22 @@
     <!-- 按钮 -->
     <template #footer>
       <el-button @click="visible = false">关闭</el-button>
-      <el-button type="primary" @click="downloadYaml">
+      <el-button
+        v-if="saveMode === 'download'"
+        type="primary"
+        @click="handleDownload"
+      >
         <el-icon><Download /></el-icon>
         下载 YAML
+      </el-button>
+      <el-button
+        v-if="saveMode === 'examples'"
+        type="success"
+        :loading="saving"
+        @click="handleSaveToExamples"
+      >
+        <el-icon><FolderOpened /></el-icon>
+        保存到 Examples
       </el-button>
     </template>
   </el-dialog>
@@ -82,9 +131,15 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import type { NodeInstanceUI, Edge } from '@/models/RuntimeConfig'
-import { exportToYaml, downloadYaml as downloadYamlFile, copyYamlToClipboard } from '@/services/yamlExporter'
-import { DocumentCopy, Download, WarningFilled, InfoFilled } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import {
+  exportToYaml,
+  downloadYaml as downloadYamlFile,
+  copyYamlToClipboard,
+  saveYamlToExamples,
+  checkFileExistsInExamples,
+} from '@/services/yamlExporter'
+import { DocumentCopy, Download, WarningFilled, InfoFilled, FolderOpened } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 interface Props {
   modelValue: boolean
@@ -101,6 +156,9 @@ const props = defineProps<Props>()
 const emit = defineEmits<Emits>()
 
 const visible = ref(props.modelValue)
+const saveMode = ref<'download' | 'examples'>('download')
+const filename = ref('')
+const saving = ref(false)
 
 const config = ref({
   graphId: 'graph_default',
@@ -145,12 +203,62 @@ async function copyToClipboard() {
   }
 }
 
-function downloadYaml() {
+function handleDownload() {
   try {
     downloadYamlFile(yamlContent.value, `runtime_${config.value.graphId}.yaml`)
     ElMessage.success('YAML 文件下载成功')
   } catch (error) {
     ElMessage.error('下载失败')
+  }
+}
+
+async function handleSaveToExamples() {
+  // 验证文件名
+  if (!filename.value.trim()) {
+    ElMessage.warning('请输入文件名')
+    return
+  }
+
+  let finalFilename = filename.value.trim()
+
+  // 自动添加 .yaml 后缀
+  if (!finalFilename.endsWith('.yaml')) {
+    finalFilename += '.yaml'
+  }
+
+  saving.value = true
+
+  try {
+    // 检查文件是否存在
+    const exists = await checkFileExistsInExamples(finalFilename)
+
+    if (exists) {
+      // 文件存在，询问是否覆盖
+      await ElMessageBox.confirm(
+        `文件 "${finalFilename}" 已存在，是否覆盖？`,
+        '确认覆盖',
+        {
+          confirmButtonText: '覆盖',
+          cancelButtonText: '取消',
+          type: 'warning',
+        }
+      )
+
+      // 用户确认覆盖
+      await saveYamlToExamples(finalFilename, yamlContent.value, true)
+    } else {
+      // 文件不存在，直接保存
+      await saveYamlToExamples(finalFilename, yamlContent.value, false)
+    }
+
+    ElMessage.success(`配置已保存到 examples/${finalFilename}`)
+    visible.value = false
+  } catch (error) {
+    if (error !== 'cancel') {
+      ElMessage.error('保存失败：' + String(error))
+    }
+  } finally {
+    saving.value = false
   }
 }
 </script>
@@ -233,5 +341,31 @@ function downloadYaml() {
 .warning-box :deep(.el-icon) {
   flex-shrink: 0;
   margin-top: 2px;
+}
+
+.save-mode-section {
+  margin-bottom: 12px;
+}
+
+.section-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: #333;
+  margin-bottom: 12px;
+}
+
+.save-mode-group {
+  display: flex;
+  gap: 24px;
+}
+
+.save-mode-group :deep(.el-radio__label) {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.filename-input {
+  margin-top: 16px;
 }
 </style>

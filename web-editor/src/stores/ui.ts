@@ -8,6 +8,7 @@ import { ref } from 'vue'
 
 export const useUiStore = defineStore('ui', () => {
   // State
+  const currentView = ref<'editor' | 'runtime'>('editor')
   const leftPanelWidth = ref(280)
   const rightPanelWidth = ref(320)
   const rightPanelVisible = ref(true)
@@ -15,6 +16,10 @@ export const useUiStore = defineStore('ui', () => {
   const theme = ref<'light' | 'dark'>('light')
 
   // Actions
+  function setCurrentView(view: 'editor' | 'runtime') {
+    currentView.value = view
+  }
+
   function setLeftPanelWidth(width: number) {
     leftPanelWidth.value = Math.max(200, Math.min(width, 600))
   }
@@ -36,11 +41,13 @@ export const useUiStore = defineStore('ui', () => {
   }
 
   return {
+    currentView,
     leftPanelWidth,
     rightPanelWidth,
     rightPanelVisible,
     selectedNodeId,
     theme,
+    setCurrentView,
     setLeftPanelWidth,
     setRightPanelWidth,
     toggleRightPanel,

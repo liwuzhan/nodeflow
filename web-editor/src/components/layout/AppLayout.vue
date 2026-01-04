@@ -3,7 +3,8 @@
     <!-- 顶部工具栏 -->
     <TopToolbar />
 
-    <div class="layout-content">
+    <!-- 编辑器视图 -->
+    <div v-if="uiStore.currentView === 'editor'" class="layout-content">
       <!-- 左侧节点库面板 -->
       <div
         class="left-panel"
@@ -39,6 +40,11 @@
         @mousedown="startDragRightDivider"
       ></div>
     </div>
+
+    <!-- Runtime 控制视图 -->
+    <div v-else-if="uiStore.currentView === 'runtime'" class="layout-content runtime-content">
+      <RuntimeView />
+    </div>
   </div>
 </template>
 
@@ -49,6 +55,7 @@ import TopToolbar from './TopToolbar.vue'
 import LeftPanel from './LeftPanel.vue'
 import RightPanel from './RightPanel.vue'
 import GraphCanvas from '@/components/canvas/GraphCanvas.vue'
+import RuntimeView from '@/views/RuntimeView.vue'
 
 const uiStore = useUiStore()
 const dragging = ref(false)
@@ -136,5 +143,11 @@ function stopDrag() {
   &:hover {
     background-color: #409eff;
   }
+}
+
+.runtime-content {
+  width: 100%;
+  padding: 20px;
+  overflow-y: auto;
 }
 </style>

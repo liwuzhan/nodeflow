@@ -147,3 +147,42 @@ export function getYamlPreview(yamlContent: string, maxLines: number = 50): stri
 
   return yamlContent
 }
+
+/**
+ * 保存 YAML 到 examples 目录
+ */
+export async function saveYamlToExamples(
+  filename: string,
+  yamlContent: string,
+  overwrite: boolean = false
+): Promise<void> {
+  const { saveConfigToExamples } = await import('@/services/runtimeApi')
+
+  try {
+    await saveConfigToExamples({
+      filename,
+      content: yamlContent,
+      overwrite,
+    })
+  } catch (error) {
+    if (String(error) === 'FILE_EXISTS') {
+      throw new Error('文件已存在')
+    }
+    throw error
+  }
+}
+
+/**
+ * 检查 examples 目录中是否存在指定文件
+ */
+export async function checkFileExistsInExamples(filename: string): Promise<boolean> {
+  const { listExampleConfigs } = await import('@/services/runtimeApi')
+
+  try {
+    const configs = await listExampleConfigs()
+    return configs.some(config => config.name === filename)
+  } catch (error) {
+    console.error('Failed to check file existence:', error)
+    return false
+  }
+}

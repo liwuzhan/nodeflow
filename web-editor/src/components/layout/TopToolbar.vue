@@ -1,10 +1,18 @@
 <template>
   <div class="top-toolbar">
     <div class="toolbar-left">
-      <h1 class="title">NodeFlow Editor</h1>
+      <h1 class="title">NodeFlow</h1>
+      <el-tabs
+        v-model="currentView"
+        class="view-tabs"
+        @tab-change="handleViewChange"
+      >
+        <el-tab-pane label="编辑器" name="editor" />
+        <el-tab-pane label="Runtime 控制" name="runtime" />
+      </el-tabs>
     </div>
 
-    <div class="toolbar-center">
+    <div class="toolbar-center" v-if="uiStore.currentView === 'editor'">
       <el-button-group>
         <el-button type="primary" icon="Plus" @click="handleNew">新建</el-button>
         <el-button icon="Folder" @click="handleOpen">打开</el-button>
@@ -13,8 +21,10 @@
     </div>
 
     <div class="toolbar-right">
-      <el-button icon="Search" @click="handleValidate">验证图</el-button>
-      <el-button type="success" icon="Share" @click="handleExport">导出YAML</el-button>
+      <template v-if="uiStore.currentView === 'editor'">
+        <el-button icon="Search" @click="handleValidate">验证图</el-button>
+        <el-button type="success" icon="Share" @click="handleExport">导出YAML</el-button>
+      </template>
       <el-tooltip content="切换主题">
         <el-button
           :icon="uiStore.theme === 'light' ? 'Moon' : 'Sun'"
@@ -40,7 +50,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { useUiStore } from '@/stores/ui'
 import { useGraphStore } from '@/stores/graph'
 import { useNodeLibraryStore } from '@/stores/nodeLibrary'
@@ -61,6 +71,16 @@ import type { Project } from '@/models/Project'
 const uiStore = useUiStore()
 const graphStore = useGraphStore()
 const nodeLibraryStore = useNodeLibraryStore()
+
+// 视图切换
+const currentView = computed({
+  get: () => uiStore.currentView,
+  set: (val) => uiStore.setCurrentView(val)
+})
+
+function handleViewChange(view: string) {
+  uiStore.setCurrentView(view as 'editor' | 'runtime')
+}
 
 const validationDialogVisible = ref(false)
 const exportDialogVisible = ref(false)
@@ -239,6 +259,9 @@ async function handleOpen() {
 
 .toolbar-left {
   flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 20px;
 }
 
 .title {
@@ -246,6 +269,25 @@ async function handleOpen() {
   font-weight: bold;
   margin: 0;
   color: #333;
+}
+
+.view-tabs {
+  --el-tabs-header-height: 36px;
+}
+
+.view-tabs :deep(.el-tabs__header) {
+  margin: 0;
+}
+
+.view-tabs :deep(.el-tabs__nav-wrap::after) {
+  display: none;
+}
+
+.view-tabs :deep(.el-tabs__item) {
+  padding: 0 16px;
+  height: 36px;
+  line-height: 36px;
+  font-size: 14px;
 }
 
 .toolbar-center {
