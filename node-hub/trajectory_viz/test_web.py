@@ -25,7 +25,7 @@ def main():
 
     # 启动 Web 服务器
     print("\n1. 启动 Web 服务器...")
-    start_web_server(host='127.0.0.1', port=5000)
+    start_web_server(host='127.0.0.1', port=8080)
 
     # 等待服务器启动
     time.sleep(2)
@@ -107,7 +107,7 @@ def main():
 
     print("\n✅ 测试数据已推送")
     print("\n" + "=" * 70)
-    print("🌐 请在浏览器中打开: http://localhost:5000")
+    print("🌐 请在浏览器中打开: http://localhost:8080")
     print("=" * 70)
     print("\n按 Ctrl+C 退出...")
 

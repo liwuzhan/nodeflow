@@ -1,20 +1,26 @@
 #!/usr/bin/env python3
 """
-轨迹可视化 Web 服务器
-使用 Flask + SocketIO 实现实时数据推送
+轨迹可视化 Web 服务器（工具模块）
+
+功能：
+- 提供 Flask + SocketIO Web服务器
+- 实时推送轨迹数据到浏览器
+- Plotly.js 交互式可视化
+
+职责：纯粹的Web服务，无业务逻辑
 """
 
 import threading
 from flask import Flask, render_template_string
 from flask_socketio import SocketIO, emit
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List, Tuple
 
 # Flask 应用
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'trajectory-viz-secret'
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
-# 全局数据存储
+# 全局数据存储（简单内存缓存）
 current_data = {
     "field_boundary": None,
     "planned_path": None,
@@ -412,7 +418,7 @@ def update_trajectory_data(field_boundary=None, planned_path=None,
     socketio.emit('trajectory_update', current_data)
 
 
-def start_web_server(host='0.0.0.0', port=5000):
+def start_web_server(host='0.0.0.0', port=8080):
     """
     启动 Web 服务器（在单独的线程中）
 

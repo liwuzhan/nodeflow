@@ -1,6 +1,6 @@
 name: trajectory_viz
-version: "2.0.2"
-description: "轨迹实时可视化节点 - Web 版本（Flask + WebSocket + Plotly.js）"
+version: "2.1.0"
+description: "轨迹实时可视化节点 - Web 版本（按L3/L4规范重构）"
 
 entrypoints:
   linux:
@@ -32,13 +32,13 @@ ports:
 params:
   web_host:
     type: string
-    default: "0.0.0.0"
-    description: "Web 服务器监听地址（0.0.0.0 表示所有网络接口）"
+    default: "127.0.0.1"
+    description: "Web 服务器监听地址（127.0.0.1 仅本机，0.0.0.0 所有网络）"
 
   web_port:
     type: integer
-    default: 5000
-    description: "Web 服务器端口号"
+    default: 8080
+    description: "Web 服务器端口号（建议使用 >1024 的端口避免权限问题）"
 
   timeout:
     type: float
@@ -48,4 +48,4 @@ params:
   update_interval:
     type: float
     default: 5.0
-    description: "日志打印间隔（秒）。数据推送是近实时的（0.1秒防抖），此参数仅控制日志频率"
+    description: "日志打印间隔（秒）。数据推送是近实时的（0.5秒防抖），此参数仅控制日志频率"

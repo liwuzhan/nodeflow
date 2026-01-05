@@ -23,7 +23,7 @@
 # 启动前准备：
 #   1. 启动仿真器: python3 simulator/server.py
 #   2. 运行场景: python3 -m runtime.main examples/planning_simulation.yaml
-#   3. 在浏览器中打开 http://localhost:5000 查看实时轨迹可视化
+#   3. 在浏览器中打开 http://localhost:8080 查看实时轨迹可视化
 
 graph_id: planning_simulation
 graph_version: 1.0
@@ -153,8 +153,8 @@ nodes:
     package: trajectory_viz
     description: "实时 Web 可视化（Flask + WebSocket + Plotly.js）"
     params:
-      web_host: "0.0.0.0"        # 监听所有网络接口（支持局域网访问）
-      web_port: 5000             # Web 服务器端口
+      web_host: "0.0.0.0"      # 仅本机访问（更安全）
+      web_port: 8080             # 使用 8080 端口（避免权限问题）
       timeout: 0.0               # 不自动退出
       update_interval: 5.0       # 日志打印间隔（数据推送是近实时的）
 
@@ -296,9 +296,9 @@ edges:
 #
 # 4. 可视化:
 #    - trajectory_viz 接收 ENU 路径和姿态
-#    - 启动 Web 服务器（默认端口 5000）
+#    - 启动 Web 服务器（默认端口 8080）
 #    - 通过 WebSocket 实时推送数据到浏览器
-#    - 访问 http://localhost:5000 查看实时轨迹
+#    - 访问 http://localhost:8080 查看实时轨迹
 #    - 使用 Plotly.js 绘制交互式图表（支持缩放、平移）
 #
 # 5. 日志:

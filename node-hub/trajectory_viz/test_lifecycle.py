@@ -18,7 +18,7 @@ def test_server_lifecycle():
 
     # 1. 启动服务器
     print("\n1️⃣  启动 Web 服务器...")
-    server_thread = start_web_server(host='127.0.0.1', port=5001)
+    server_thread = start_web_server(host='127.0.0.1', port=8080)
     print(f"   线程状态: {'运行中' if server_thread.is_alive() else '已停止'}")
     print(f"   daemon 模式: {server_thread.daemon}")
 
@@ -36,7 +36,7 @@ def test_server_lifecycle():
 
     # 3. 等待几秒
     print("\n3️⃣  服务器运行中...")
-    print(f"   访问: http://127.0.0.1:5001")
+    print(f"   访问: http://127.0.0.1:8080")
     for i in range(5, 0, -1):
         print(f"   {i} 秒后自动退出...")
         time.sleep(1)
@@ -48,7 +48,7 @@ def test_server_lifecycle():
     print("\n" + "=" * 70)
     print("✅ 测试完成")
     print("   主程序退出后，daemon 线程会被 Python 自动清理")
-    print("   端口 5001 应该在几秒内释放")
+    print("   端口 8080 应该在几秒内释放")
     print("=" * 70)
 
 if __name__ == "__main__":

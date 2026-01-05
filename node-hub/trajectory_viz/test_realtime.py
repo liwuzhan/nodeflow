@@ -18,7 +18,7 @@ def test_realtime_update():
 
     # 启动 Web 服务器
     print("\n1. 启动 Web 服务器...")
-    start_web_server(host='127.0.0.1', port=5002)
+    start_web_server(host='127.0.0.1', port=8080)
     time.sleep(1)
 
     # 设置静态数据
@@ -35,7 +35,7 @@ def test_realtime_update():
     )
 
     print(f"\n3. 模拟轨迹点逐个到达（每 0.5 秒一个点）...")
-    print(f"   🌐 在浏览器中打开: http://127.0.0.1:5002")
+    print(f"   🌐 在浏览器中打开: http://127.0.0.1:8080")
     print(f"   观察轨迹是否平滑实时更新\n")
 
     # 模拟轨迹点逐个到达
