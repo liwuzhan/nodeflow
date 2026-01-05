@@ -1,0 +1,4 @@
+# YOLO 目标检测节点依赖
+opencv-python>=4.5.0
+numpy>=1.20.0
+ultralytics>=8.0.0
