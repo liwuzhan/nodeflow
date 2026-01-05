@@ -16,7 +16,8 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from sdk.nodeflow_sdk import NodeFlowSDK
-from atom import calculate_trajectory_metrics, generate_trajectory_image
+from atom import calculate_trajectory_metrics
+from web_server import start_web_server, update_trajectory_data
 
 # --- Schema Definitions ---
 
@@ -42,8 +43,8 @@ class PoseENU(BaseModel):
     timestamp: float
     rtk_status: Any
 
-class TrajectoryImage(BaseModel):
-    image_path: str
+class TrajectoryWebURL(BaseModel):
+    url: str
     timestamp: str
     update_count: int
     stats: Dict[str, Any]
@@ -51,12 +52,10 @@ class TrajectoryImage(BaseModel):
 # --- End Schema Definitions ---
 
 class TrajectoryVisualizerNode:
-    """轨迹可视化节点（L3层）"""
+    """轨迹可视化节点（L3层）- Web 实时版本"""
 
-    def __init__(self, output_dir: str, update_interval: float):
-        self.output_dir = Path(output_dir)
+    def __init__(self, update_interval: float):
         self.update_interval = update_interval
-        self.output_dir.mkdir(parents=True, exist_ok=True)
 
         # 当前任务数据（单帧）
         self.current_task_id: Optional[str] = None
@@ -154,8 +153,8 @@ class TrajectoryVisualizerNode:
         except Exception as e:
             print(f"✗ 处理pose_enu失败: {e}")
 
-    def try_generate_visualization(self) -> Optional[Tuple[str, Dict[str, Any]]]:
-        """尝试生成可视化（如果数据就绪且时间到了）"""
+    def try_update_visualization(self) -> Optional[Dict[str, Any]]:
+        """尝试推送可视化数据到 Web 客户端（如果数据就绪且时间到了）"""
         current_time = time.time()
 
         # 检查更新间隔
@@ -166,7 +165,7 @@ class TrajectoryVisualizerNode:
         if not self.is_ready():
             return None
 
-        # 生成可视化
+        # 计算指标并推送数据
         try:
             metrics = calculate_trajectory_metrics(
                 self.planned_path,
@@ -174,31 +173,21 @@ class TrajectoryVisualizerNode:
                 approach_threshold_m=5.0
             )
 
-            # 生成图像
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_path = self.output_dir / f"trajectory_viz_{timestamp}.jpg"
-
-            success = generate_trajectory_image(
+            # 推送数据到 Web 客户端
+            update_trajectory_data(
                 field_boundary=self.field_boundary,
                 planned_path=self.planned_path,
                 actual_trajectory=self.actual_trajectory,
-                actual_trajectory_with_heading=self.actual_trajectory_with_heading,
-                metrics=metrics,
-                output_path=output_path,
-                figsize=(14.0, 12.0),
-                dpi=150,
-                ref_lon=self.ref_lon,
-                ref_lat=self.ref_lat
+                metrics=metrics
             )
 
-            if success:
-                self.update_count += 1
-                self.last_update_time = current_time
-                print(f"✓ 可视化已保存: {output_path}")
-                return (str(output_path), metrics)
+            self.update_count += 1
+            self.last_update_time = current_time
+            print(f"✓ 数据已推送到 Web 客户端 (更新 #{self.update_count})")
+            return metrics
 
         except Exception as e:
-            print(f"✗ 生成可视化失败: {e}")
+            print(f"✗ 推送数据失败: {e}")
 
         return None
 
@@ -207,32 +196,37 @@ def main():
     """主函数"""
     with NodeFlowSDK(log_level="INFO") as sdk:
         print("=" * 70)
-        print("轨迹对比可视化节点启动 (L3层 - 数据流管理)")
+        print("轨迹可视化节点启动 (Web 实时版本)")
         print("=" * 70)
 
         # 读取参数
-        output_dir = sdk.params.get("output_dir", "./logs/jpg")
-        update_interval = float(sdk.params.get("update_interval", 10.0))
+        update_interval = float(sdk.params.get("update_interval", 5.0))
         timeout = float(sdk.params.get("timeout", 0.0))
+        web_port = int(sdk.params.get("web_port", 5000))
+        web_host = sdk.params.get("web_host", "0.0.0.0")
 
-        print(f"输出目录: {output_dir}")
         print(f"更新间隔: {update_interval}秒")
+        print(f"Web 端口: {web_port}")
         if timeout > 0:
             print(f"超时: {timeout}秒")
         else:
             print(f"超时: 禁用（timeout=0.0）")
 
+        # 启动 Web 服务器
+        start_web_server(host=web_host, port=web_port)
+        print()
+
         # 创建输入输出端口
         task_port = sdk.create_input_port("task_enu")
         path_port = sdk.create_input_port("global_path")
         pose_port = sdk.create_input_port("pose_enu")
-        output_port = sdk.create_output_port("trajectory_image", schema=TrajectoryImage)
+        output_port = sdk.create_output_port("web_url", schema=TrajectoryWebURL)
 
-        print("端口已创建: task_enu, global_path, pose_enu -> trajectory_image")
+        print("端口已创建: task_enu, global_path, pose_enu -> web_url")
         print()
 
         # 创建节点实例
-        node = TrajectoryVisualizerNode(output_dir, update_interval)
+        node = TrajectoryVisualizerNode(update_interval)
 
         start_time = time.time()
         loop_count = 0
@@ -272,12 +266,11 @@ def main():
                     print(f"[状态] {ready_status} | 轨迹点: {len(node.actual_trajectory)} | 已更新: {node.update_count}次")
                     last_log_time = current_time
 
-                # 尝试生成可视化
-                result = node.try_generate_visualization()
-                if result:
-                    image_path, metrics = result
+                # 尝试推送可视化数据
+                metrics = node.try_update_visualization()
+                if metrics:
                     output_data = {
-                        "image_path": image_path,
+                        "url": f"http://{web_host}:{web_port}",
                         "timestamp": datetime.now().isoformat(),
                         "update_count": node.update_count,
                         "stats": metrics
@@ -302,6 +295,8 @@ def main():
         print(f"  接收轨迹点数: {node.pose_count}")
         print(f"  生成可视化次数: {node.update_count}")
         print(f"  最后任务ID: {node.current_task_id}")
+        print("=" * 70)
+        print("🔴 节点即将退出，Web 服务器将自动关闭（daemon 线程）")
         print("=" * 70)
 
 

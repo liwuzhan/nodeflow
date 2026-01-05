@@ -1,6 +1,6 @@
 name: trajectory_viz
-version: "1.0"
-description: "轨迹对比可视化节点 - 对比规划轨迹和实际GPS轨迹"
+version: "2.0"
+description: "轨迹实时可视化节点 - Web 版本（Flask + WebSocket + Plotly.js）"
 
 entrypoints:
   linux:
@@ -25,20 +25,20 @@ ports:
       type: localization.pose_enu
       description: "ENU坐标系姿态，用于记录实际轨迹 (x, y, theta)"
   outputs:
-    - name: trajectory_image
+    - name: web_url
       type: json
-      description: "生成的轨迹可视化图像路径和统计信息"
+      description: "Web 可视化界面的 URL 和统计信息"
 
 params:
-  output_dir:
+  web_host:
     type: string
-    default: "./trajectory_viz"
-    description: "输出目录（相对于节点目录）"
+    default: "0.0.0.0"
+    description: "Web 服务器监听地址（0.0.0.0 表示所有网络接口）"
 
-  image_format:
-    type: string
-    default: "jpg"
-    description: "输出图像格式 (jpg, png)"
+  web_port:
+    type: integer
+    default: 5000
+    description: "Web 服务器端口号"
 
   timeout:
     type: float
@@ -48,19 +48,4 @@ params:
   update_interval:
     type: float
     default: 5.0
-    description: "轨迹更新间隔 (秒)"
-
-  dpi:
-    type: integer
-    default: 150
-    description: "输出图像DPI分辨率"
-
-  figsize_width:
-    type: float
-    default: 12.0
-    description: "图像宽度 (英寸)"
-
-  figsize_height:
-    type: float
-    default: 10.0
-    description: "图像高度 (英寸)"
+    description: "轨迹更新间隔 (秒)，实时推送数据到 Web 客户端"
