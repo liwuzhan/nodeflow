@@ -1,5 +1,5 @@
 name: trajectory_viz
-version: "2.0"
+version: "2.0.2"
 description: "轨迹实时可视化节点 - Web 版本（Flask + WebSocket + Plotly.js）"
 
 entrypoints:
@@ -48,4 +48,4 @@ params:
   update_interval:
     type: float
     default: 5.0
-    description: "轨迹更新间隔 (秒)，实时推送数据到 Web 客户端"
+    description: "日志打印间隔（秒）。数据推送是近实时的（0.1秒防抖），此参数仅控制日志频率"

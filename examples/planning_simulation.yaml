@@ -23,6 +23,7 @@
 # 启动前准备：
 #   1. 启动仿真器: python3 simulator/server.py
 #   2. 运行场景: python3 -m runtime.main examples/planning_simulation.yaml
+#   3. 在浏览器中打开 http://localhost:5000 查看实时轨迹可视化
 
 graph_id: planning_simulation
 graph_version: 1.0
@@ -146,19 +147,16 @@ nodes:
       input_frequency: 50.0      # 50Hz 检查输入
 
   # ┌─────────────────────────────────────────────────────────────────────┐
-  # │ 轨迹可视化 (对比规划路径和实际轨迹)                                  │
+  # │ 轨迹可视化 (实时 Web 版本)                                           │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: trajectory_viz
     package: trajectory_viz
-    description: "生成轨迹对比可视化图像"
+    description: "实时 Web 可视化（Flask + WebSocket + Plotly.js）"
     params:
-      output_dir: "/Users/wuzhanli/Desktop/node/logs/jpg"
-      image_format: "jpg"        # JPG 格式
+      web_host: "0.0.0.0"        # 监听所有网络接口（支持局域网访问）
+      web_port: 5000             # Web 服务器端口
       timeout: 0.0               # 不自动退出
-      update_interval: 10.0      # 每10秒更新一次
-      dpi: 150                   # 图像质量
-      figsize_width: 14.0        # 图像宽度
-      figsize_height: 12.0       # 图像高度
+      update_interval: 5.0       # 日志打印间隔（数据推送是近实时的）
 
   # ┌─────────────────────────────────────────────────────────────────────┐
   # │ 日志记录 (用于实时监测和复盘) - 暂时禁用以测试核心流程               │
@@ -298,8 +296,10 @@ edges:
 #
 # 4. 可视化:
 #    - trajectory_viz 接收 ENU 路径和姿态
-#    - 绘制 X-Y 平面轨迹对比图（米）
-#    - 显示航向角箭头（数学坐标系）
+#    - 启动 Web 服务器（默认端口 5000）
+#    - 通过 WebSocket 实时推送数据到浏览器
+#    - 访问 http://localhost:5000 查看实时轨迹
+#    - 使用 Plotly.js 绘制交互式图表（支持缩放、平移）
 #
 # 5. 日志:
 #    - logger 节点接收 RTK、路径、控制数据

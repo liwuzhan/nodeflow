@@ -29,6 +29,7 @@ def test_server_lifecycle():
         field_boundary=[(0, 0), (100, 0), (100, 100), (0, 100)],
         planned_path=[(10, 10), (50, 50), (90, 90)],
         actual_trajectory=[(10, 11), (50, 51), (90, 91)],
+        actual_trajectory_with_heading=[(10, 11, 0.785), (50, 51, 0.785), (90, 91, 0.785)],  # 45度角
         metrics={"planned_distance_m": 100, "actual_distance_m": 99}
     )
     print("   ✅ 数据已推送")

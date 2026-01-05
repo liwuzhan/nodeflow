@@ -19,6 +19,7 @@ current_data = {
     "field_boundary": None,
     "planned_path": None,
     "actual_trajectory": [],
+    "actual_trajectory_with_heading": [],
     "metrics": {}
 }
 
@@ -292,6 +293,45 @@ HTML_TEMPLATE = """
             // 更新图表
             Plotly.react(plotDiv, traces, layout);
 
+            // 添加航向角箭头（使用 annotations）
+            if (data.actual_trajectory_with_heading && data.actual_trajectory_with_heading.length >= 2) {
+                const headingData = data.actual_trajectory_with_heading;
+                const annotations = [];
+
+                // 每隔几个点绘制一个箭头（避免过于密集）
+                const step = Math.max(1, Math.floor(headingData.length / 20));
+
+                for (let i = 0; i < headingData.length; i += step) {
+                    const [x, y, theta] = headingData[i];
+
+                    // 箭头长度（米）
+                    const arrowLen = 3.0;
+                    const dx = Math.cos(theta) * arrowLen;
+                    const dy = Math.sin(theta) * arrowLen;
+
+                    annotations.push({
+                        x: x + dx,
+                        y: y + dy,
+                        ax: x,
+                        ay: y,
+                        xref: 'x',
+                        yref: 'y',
+                        axref: 'x',
+                        ayref: 'y',
+                        showarrow: true,
+                        arrowhead: 2,
+                        arrowsize: 1,
+                        arrowwidth: 2,
+                        arrowcolor: 'red',
+                        opacity: 0.6
+                    });
+                }
+
+                // 更新 layout 添加箭头
+                const newLayout = Object.assign({}, layout, { annotations: annotations });
+                Plotly.relayout(plotDiv, newLayout);
+            }
+
             // 更新统计信息
             updateMetrics(data.metrics || {});
         });
@@ -339,7 +379,8 @@ def handle_disconnect():
 
 
 def update_trajectory_data(field_boundary=None, planned_path=None,
-                          actual_trajectory=None, metrics=None):
+                          actual_trajectory=None, actual_trajectory_with_heading=None,
+                          metrics=None):
     """
     更新轨迹数据并推送到所有客户端
 
@@ -347,6 +388,7 @@ def update_trajectory_data(field_boundary=None, planned_path=None,
         field_boundary: 地块边界 [(x, y), ...]
         planned_path: 规划路径 [(x, y), ...]
         actual_trajectory: 实际轨迹 [(x, y), ...]
+        actual_trajectory_with_heading: 带航向角的实际轨迹 [(x, y, theta), ...]
         metrics: 统计指标字典
     """
     global current_data
@@ -359,6 +401,9 @@ def update_trajectory_data(field_boundary=None, planned_path=None,
 
     if actual_trajectory is not None:
         current_data["actual_trajectory"] = actual_trajectory
+
+    if actual_trajectory_with_heading is not None:
+        current_data["actual_trajectory_with_heading"] = actual_trajectory_with_heading
 
     if metrics is not None:
         current_data["metrics"] = metrics

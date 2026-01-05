@@ -10,6 +10,7 @@
 
 import time
 import sys
+import math
 from pathlib import Path
 
 # 添加项目路径
@@ -73,6 +74,17 @@ def main():
         (60, 50.5), (70, 49.2), (80, 50.8), (90, 49.5),
     ]
 
+    # 为每个点添加航向角（模拟）
+    actual_trajectory_with_heading = []
+    for i, (x, y) in enumerate(actual_trajectory):
+        # 简单估算航向角：根据前后点计算
+        if i < len(actual_trajectory) - 1:
+            next_x, next_y = actual_trajectory[i + 1]
+            theta = math.atan2(next_y - y, next_x - x)
+        else:
+            theta = 0.0
+        actual_trajectory_with_heading.append((x, y, theta))
+
     # 计算简单的统计指标
     metrics = {
         "planned_distance_m": 280.0,
@@ -89,6 +101,7 @@ def main():
         field_boundary=field_boundary,
         planned_path=planned_path,
         actual_trajectory=actual_trajectory,
+        actual_trajectory_with_heading=actual_trajectory_with_heading,
         metrics=metrics
     )
 

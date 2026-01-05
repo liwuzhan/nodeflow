@@ -70,8 +70,10 @@ class TrajectoryVisualizerNode:
 
         # 统计
         self.last_update_time = time.time()
+        self.last_push_time = time.time()  # 最后一次推送时间
         self.update_count = 0
         self.pose_count = 0
+        self.data_changed = False  # 数据是否有变化
 
     def is_ready(self) -> bool:
         """检查是否有足够数据用于可视化"""
@@ -102,6 +104,7 @@ class TrajectoryVisualizerNode:
 
             if isinstance(outer, list) and len(outer) >= 3:
                 self.field_boundary = outer
+                self.data_changed = True
                 print(f"✓ 地块边界: {len(outer)}个点 (ENU坐标)")
 
             # 提取GPS参考点
@@ -130,6 +133,7 @@ class TrajectoryVisualizerNode:
             path = path_data.get("path")
             if isinstance(path, list) and len(path) >= 2:
                 self.planned_path = path
+                self.data_changed = True
                 print(f"✓ 规划路径: {len(path)}个点 (ENU坐标)")
 
         except Exception as e:
@@ -149,16 +153,31 @@ class TrajectoryVisualizerNode:
                 self.actual_trajectory.append((float(x), float(y)))
                 self.actual_trajectory_with_heading.append((float(x), float(y), float(theta)))
                 self.pose_count += 1
+                self.data_changed = True  # 标记数据已变化
 
         except Exception as e:
             print(f"✗ 处理pose_enu失败: {e}")
 
-    def try_update_visualization(self) -> Optional[Dict[str, Any]]:
-        """尝试推送可视化数据到 Web 客户端（如果数据就绪且时间到了）"""
+    def try_update_visualization(self, force: bool = False) -> Optional[Dict[str, Any]]:
+        """
+        尝试推送可视化数据到 Web 客户端
+
+        Args:
+            force: 是否强制推送（忽略时间间隔限制）
+
+        Returns:
+            统计指标（如果推送成功）
+        """
         current_time = time.time()
 
-        # 检查更新间隔
-        if current_time - self.last_update_time < self.update_interval:
+        # 检查是否有数据变化
+        if not self.data_changed and not force:
+            return None
+
+        # 检查推送频率限制（防抖，避免过于频繁）
+        # 使用一个很短的间隔（0.1秒）来实现近实时更新，同时避免过载
+        min_push_interval = 0.1
+        if not force and current_time - self.last_push_time < min_push_interval:
             return None
 
         # 检查数据是否就绪
@@ -178,12 +197,19 @@ class TrajectoryVisualizerNode:
                 field_boundary=self.field_boundary,
                 planned_path=self.planned_path,
                 actual_trajectory=self.actual_trajectory,
+                actual_trajectory_with_heading=self.actual_trajectory_with_heading,
                 metrics=metrics
             )
 
             self.update_count += 1
-            self.last_update_time = current_time
-            print(f"✓ 数据已推送到 Web 客户端 (更新 #{self.update_count})")
+            self.last_push_time = current_time
+            self.data_changed = False  # 重置变化标记
+
+            # 每隔 update_interval 秒打印一次日志（避免刷屏）
+            if current_time - self.last_update_time >= self.update_interval:
+                print(f"✓ 数据已推送到 Web 客户端 (更新 #{self.update_count})")
+                self.last_update_time = current_time
+
             return metrics
 
         except Exception as e:
