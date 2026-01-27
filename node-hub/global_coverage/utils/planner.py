@@ -75,6 +75,7 @@ class GlobalCoveragePlanner:
         """
         self.output_enu = output_enu
         self.logger = logger or logging.getLogger(__name__)
+        self.last_keypoints = []  # 保存最近一次规划的关键转折点（密化前）
 
     def plan(
         self,
@@ -255,6 +256,9 @@ class GlobalCoveragePlanner:
         # 9. 输出坐标（直接返回ENU坐标，输入已经是ENU）
         # 输入parcel_data来自task_enu，已经在ENU坐标系，直接返回规划结果
         raw_coords = list(connected_local.coords)
+
+        # 保存关键转折点（密化前）
+        self.last_keypoints = raw_coords
 
         # 10. 密化路径（插值补点，确保点间距不超过指定值）
         if path_point_spacing > 0:

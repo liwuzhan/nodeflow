@@ -10,7 +10,7 @@ echo "================================"
 
 # 检查 Python 版本
 echo ""
-echo "[1/5] 检查 Python 版本..."
+echo "[1/6] 检查 Python 版本..."
 
 # 函数：检查 Python 版本是否满足要求（>= 3.10）
 check_python_version() {
@@ -53,7 +53,7 @@ echo "✅ 找到可用版本: $PYTHON_VERSION (命令: $PYTHON_CMD)"
 
 # 检查 pip
 echo ""
-echo "[2/5] 检查 pip..."
+echo "[2/6] 检查 pip..."
 if ! $PYTHON_CMD -m pip --version &> /dev/null; then
     echo "❌ pip for $PYTHON_CMD not found"
     exit 1
@@ -63,7 +63,7 @@ echo "✅ pip 已安装"
 
 # 创建虚拟环境（可选）
 echo ""
-echo "[3/5] 虚拟环境（可选）..."
+echo "[3/6] 虚拟环境（可选）..."
 if [ ! -d "venv" ]; then
     echo "是否创建虚拟环境? (y/n) [默认: n]"
     read -r create_venv
@@ -80,7 +80,7 @@ fi
 
 # 安装依赖
 echo ""
-echo "[4/5] 安装依赖..."
+echo "[4/6] 安装依赖..."
 
 # 确定要使用的 Python 命令
 if [ -d "venv" ] && [ -z "$VIRTUAL_ENV" ]; then
@@ -93,11 +93,23 @@ echo "使用: $PY"
 $PY -m pip install --upgrade pip setuptools wheel > /dev/null
 $PY -m pip install -r requirements.txt
 
-echo "✅ 依赖已安装"
+echo "✅ 核心依赖已安装"
+
+# 安装节点依赖
+echo ""
+echo "[5/6] 安装节点依赖..."
+
+if [ -f "tools/install_node_deps.py" ]; then
+    echo "正在扫描并安装 node-hub 下所有节点的依赖..."
+    $PY tools/install_node_deps.py
+    echo "✅ 节点依赖已安装"
+else
+    echo "⚠️  tools/install_node_deps.py 不存在，跳过节点依赖安装"
+fi
 
 # 验证关键模块
 echo ""
-echo "[5/5] 验证关键模块..."
+echo "[6/6] 验证关键模块..."
 
 modules=(
     "yaml"

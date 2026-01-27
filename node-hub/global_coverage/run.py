@@ -8,8 +8,10 @@ import sys
 import time
 import json
 import traceback
+import os
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Tuple
+from datetime import datetime
 
 # Pydantic 导入
 try:
@@ -49,6 +51,49 @@ class GlobalPath(BaseModel):
 
 # --- End Schema Definitions ---
 
+def save_path_to_txt(path_points: List[Tuple[float, float]], task_id: str, txt_dir: Path, logger) -> None:
+    """
+    保存关键转折点到txt文件，最多保存5个文件
+
+    Args:
+        path_points: 关键转折点列表（密化前的原始路径点）[(x, y), ...]
+        task_id: 任务ID
+        txt_dir: txt目录路径
+        logger: 日志记录器
+    """
+    try:
+        # 确保txt目录存在
+        txt_dir.mkdir(exist_ok=True)
+
+        # 生成带时间戳的文件名
+        timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"path_{timestamp_str}_{task_id}.txt"
+        filepath = txt_dir / filename
+
+        # 写入关键转折点数据
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(f"# Task ID: {task_id}\n")
+            f.write(f"# Timestamp: {timestamp_str}\n")
+            f.write(f"# Keypoints: {len(path_points)} (关键转折点，密化前)\n")
+            f.write(f"# Format: x(m), y(m)\n")
+            f.write("#" + "-" * 50 + "\n")
+
+            for i, (x, y) in enumerate(path_points):
+                f.write(f"{x:.6f}, {y:.6f}\n")
+
+        logger.info(f"✓ 关键转折点已保存: {filename} ({len(path_points)}个点)")
+
+        # 清理旧文件，保持最多5个
+        txt_files = sorted(txt_dir.glob("path_*.txt"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if len(txt_files) > 5:
+            for old_file in txt_files[5:]:
+                old_file.unlink()
+                logger.info(f"✓ 删除旧文件: {old_file.name}")
+
+    except Exception as e:
+        logger.error(f"✗ 保存轨迹点失败: {e}")
+        logger.debug(f"错误堆栈:\n{traceback.format_exc()}")
+
 def main():
     """主函数"""
     try:
@@ -58,6 +103,10 @@ def main():
             sdk.logger.info("全球覆盖路径规划节点启动 (ENU模式)")
             sdk.logger.info("模式: 接收ENU任务 -> 规划全覆盖路径 -> 输出ENU坐标")
             sdk.logger.info("=" * 70)
+
+            # 初始化txt目录
+            txt_dir = Path(__file__).parent / "txt"
+            sdk.logger.info(f"轨迹保存目录: {txt_dir}")
 
             # 读取参数
             path_point_spacing = float(sdk.params.get('path_point_spacing', 0.5))
@@ -133,7 +182,11 @@ def main():
 
                                 duration = time.time() - start_time
                                 sdk.logger.info(f"✓ 规划执行完成 - 耗时={duration*1000:.1f}ms, 生成{len(path_points)}个路径点")
-                                
+
+                                # 保存关键转折点到txt文件（密化前的原始路径点）
+                                if planner.last_keypoints:
+                                    save_path_to_txt(planner.last_keypoints, task_id, txt_dir, sdk.logger)
+
                                 # 发送结果
                                 result = {
                                     'task_id': task_id,
