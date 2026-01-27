@@ -1,0 +1,112 @@
+name: "rtk_driver"
+version: "1.0.0"
+description: "高精度RTK-GPS驱动节点，支持串口/网络通信，解析NMEA消息"
+
+metadata:
+  author: "NodeFlow AI"
+  coordinate_system: WGS84
+  output_format: "WGS84经纬度 + 航向角（数学坐标系，弧度）"
+  compatible_devices:
+    - "UM982/UMD982双天线RTK"
+    - "支持NMEA 0183协议的RTK设备"
+
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+
+ports:
+  outputs:
+    - name: rtk_fix
+      type: sensor.rtk
+      description: "RTK定位数据（WGS84坐标 + 航向 + 状态）"
+      buffer_size: 1048576  # 1MB，20Hz输出约50秒数据
+      conflate: true
+
+params:
+  # 串口配置（优先使用）
+  serial_port:
+    type: str
+    default: "/dev/ttyUSB0"
+    description: "串口设备路径（如 /dev/ttyUSB0, /dev/ttyACM0, COM3）"
+
+  serial_baudrate:
+    type: int
+    default: 115200
+    description: "串口波特率（支持 9600-921600）"
+
+  serial_timeout:
+    type: float
+    default: 1.0
+    description: "串口读取超时时间（秒）"
+
+  # 网络配置（备选）
+  use_network:
+    type: bool
+    default: false
+    description: "是否使用网络接口（TCP/UDP）"
+
+  network_host:
+    type: str
+    default: "192.168.1.100"
+    description: "RTK设备IP地址"
+
+  network_port:
+    type: int
+    default: 5000
+    description: "RTK设备网络端口"
+
+  network_protocol:
+    type: str
+    default: "tcp"
+    description: "网络协议（tcp或udp）"
+
+  # NMEA消息配置
+  nmea_message:
+    type: str
+    default: "KSXT"
+    description: "主要NMEA消息类型（KSXT, GPGGA, GPRMC）"
+
+  output_frequency:
+    type: int
+    default: 20
+    description: "输出频率（Hz），支持 1/2/5/10/20/50"
+
+  # RTK质量控制
+  min_rtk_quality:
+    type: int
+    default: 4
+    description: "最低RTK质量要求（4=固定解, 5=浮点解）"
+
+  min_satellites:
+    type: int
+    default: 10
+    description: "最少卫星数量"
+
+  # 数据处理
+  enable_smoothing:
+    type: bool
+    default: false
+    description: "是否启用位置平滑滤波"
+
+  smoothing_alpha:
+    type: float
+    default: 0.3
+    description: "平滑滤波系数（0-1）"
+
+  # 航向计算
+  heading_source:
+    type: str
+    default: "dual_antenna"
+    description: "航向来源（dual_antenna=双天线, velocity=速度推算, external=外部IMU）"
+
+  # 调试选项
+  enable_raw_log:
+    type: bool
+    default: false
+    description: "是否记录原始NMEA数据到文件"
+
+  raw_log_path:
+    type: str
+    default: "/tmp/rtk_raw.log"
+    description: "原始数据日志路径"

@@ -23,17 +23,17 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from threading import Thread, Lock
 
-# 添加 SDK 路径
-sdk_path = os.path.join(os.path.dirname(__file__), '../../..', 'sdk')
-if sdk_path not in sys.path:
-    sys.path.insert(0, sdk_path)
+# 添加项目根路径到 sys.path（使 sdk.* 包导入正常工作）
+project_root = os.path.join(os.path.dirname(__file__), '../../..')
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 # FastAPI 导入（L3 依赖）
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 import uvicorn
 
-from nodeflow_sdk import NodeFlowSDK
+from sdk.nodeflow_sdk import NodeFlowSDK
 
 # 导入 L4 原子层
 import atom
@@ -121,11 +121,15 @@ class LoggerNode:
             self._setup_file_logging()
 
         # FastAPI 应用
+        self.sdk.logger.info("Creating FastAPI app")
         self.app = FastAPI(title="NodeFlow Logger")
+        self.sdk.logger.info("Setting up routes")
         self._setup_routes()
+        self.sdk.logger.info("Routes setup complete")
 
         # Web 服务线程
         self.web_thread: Optional[Thread] = None
+        self.sdk.logger.info("LoggerNode __init__ complete")
 
     def _setup_file_logging(self) -> None:
         """初始化文件日志"""
@@ -688,8 +692,11 @@ class LoggerNode:
 def main():
     """节点主入口"""
     with NodeFlowSDK(log_level="INFO") as sdk:
+        sdk.logger.info("Creating LoggerNode instance")
         logger_node = LoggerNode(sdk)
+        sdk.logger.info("Starting LoggerNode run()")
         logger_node.run()
+        sdk.logger.info("LoggerNode run() completed")
 
 
 if __name__ == '__main__':
