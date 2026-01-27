@@ -1,0 +1,308 @@
+# NodeFlow 规划闭环 - 真实RTK版本
+#
+# 与 planning_simulation.yaml 的区别：
+#   - 使用真实RTK驱动节点替代 sim_output.rtk_fix
+#   - 保留仿真器用于地块和控制（但不使用其RTK数据）
+#   - 完整的真实RTK → 滤波 → 坐标转换 → 导航控制流程
+
+graph_id: planning_real_rtk
+graph_version: 1.0
+node_hub_path: ./node-hub
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 节点定义
+# ═══════════════════════════════════════════════════════════════════════════
+
+nodes:
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 真实RTK驱动节点（替代仿真RTK）                                        │
+  # └─────────────────────────────────────────────────────────────────────┘
+  - id: rtk_sensor
+    package: rtk_driver
+    description: "真实高精度RTK-GPS传感器驱动"
+    params:
+      # 串口配置
+      serial_port: "/dev/ttyACM3"
+      serial_baudrate: 115200
+      serial_timeout: 1.0
+      use_network: false
+
+      # NMEA消息配置
+      nmea_message: "GPRMC"
+      output_frequency: 20              # 20Hz匹配导航系统
+
+      # RTK质量控制
+      min_rtk_quality: 1                # 允许单点定位（测试用）
+      min_satellites: 5
+
+      # 数据处理
+      enable_smoothing: false
+      heading_source: "velocity"
+
+      # 调试
+      enable_raw_log: true
+      raw_log_path: "/tmp/rtk_raw.log"
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 仿真器输出 (仅用于地块和控制反馈，禁用RTK)                             │
+  # └─────────────────────────────────────────────────────────────────────┘
+  - id: sim_output
+    package: sim_output
+    description: "从仿真器读取地块信息和接收控制反馈"
+    params:
+      simulator_host: localhost
+      simulator_port: 5555
+      timeout: 2000
+
+      # 传感器开关 - 启用RTK但不使用其输出
+      enable_gps: false
+      enable_imu: false
+      enable_rtk: true               # ✅ 启用以让sim_output正常运行
+      enable_odometry: false
+      enable_state: false
+
+      output_frequency: 20.0
+
+      # 车辆配置
+      implement_width_m: 3.0
+      overlap_ratio: 0.1
+      path_inset_m: 1.0
+      pivot_turn: true
+      yaw_rate_max_deg_s: 60.0
+      min_turn_radius_m: 2.0
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 全局路径规划                                                         │
+  # └─────────────────────────────────────────────────────────────────────┘
+  - id: global_coverage
+    package: global_coverage
+    description: "根据地块和车辆配置生成全覆盖路径"
+    params:
+      path_point_spacing: 0.5
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ RTK滤波器                                                            │
+  # └─────────────────────────────────────────────────────────────────────┘
+  - id: rtk_filter
+    package: rtk_filter
+    description: "RTK滤波/融合"
+    params:
+      alpha_pos: 0.2
+      alpha_heading: 0.3
+      use_imu_yaw_rate: false
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 坐标系转换 (WGS84 → ENU)                                            │
+  # └─────────────────────────────────────────────────────────────────────┘
+  - id: coord_transform
+    package: coord_transform
+    description: "将WGS84坐标转换为ENU局部坐标系"
+    params: {}
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 前瞻点选择器                                                         │
+  # └─────────────────────────────────────────────────────────────────────┘
+  - id: waypoint_selector
+    package: waypoint_selector
+    description: "基于视野区域的前瞻点选择器"
+    params:
+      view_distance: 2.0
+      view_width: 4.0
+      view_depth: 1.5
+      goal_tolerance: 1.5
+      max_search_points: 100
+      initial_check_points: 10
+      initial_consume_distance: 2.0
+      min_view_points: 3
+      view_expand_factor: 2.0
+      max_view_width: 12.0
+      continuous_consume_distance: 1.5
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 轨迹控制器                                                           │
+  # └─────────────────────────────────────────────────────────────────────┘
+  - id: track_controller
+    package: track_controller
+    description: "履带控制，支持原地转向"
+    params:
+      max_speed: 2.0
+      min_speed: 0.0
+      heading_p_gain: 2.0
+      max_angular_velocity: 1.0
+      pivot_threshold_deg: 20.0
+      decel_start_distance: 3.0
+      final_stop_distance: 0.5
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 仿真器输入 (接收控制命令)                                            │
+  # └─────────────────────────────────────────────────────────────────────┘
+  - id: sim_input
+    package: sim_input
+    description: "将控制命令发送到仿真器"
+    params:
+      simulator_host: localhost
+      simulator_port: 5555
+      timeout: 2000
+      default_linear_velocity: 0.0
+      default_angular_velocity: 0.0
+      control_mode: velocity
+      input_frequency: 50.0
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 轨迹可视化                                                           │
+  # └─────────────────────────────────────────────────────────────────────┘
+  - id: trajectory_viz
+    package: trajectory_viz
+    description: "生成轨迹对比可视化图像"
+    params:
+      output_dir: "/tmp/rtk_trajectory"
+      image_format: "png"
+      timeout: 0.0
+      update_interval: 10.0
+      dpi: 150
+      figsize_width: 14.0
+      figsize_height: 12.0
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 日志记录与Web实时可视化（暂时禁用）                                   │
+  # └─────────────────────────────────────────────────────────────────────┘
+  # - id: logger
+  #   package: logger
+  #   description: "记录关键数据并提供Web实时展示"
+  #   params:
+  #     web_port: 8001              # Web界面端口
+  #     buffer_size: 1000           # 内存缓冲区大小
+  #     enable_file_log: true       # 启用文件日志
+  #     log_file_path: /tmp/nodeflow_data.jsonl
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 数据连接 (边)
+# ═══════════════════════════════════════════════════════════════════════════
+
+edges:
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 规划流程（使用仿真器地块数据）
+  # └─────────────────────────────────────────────────────────────────────┘
+
+  # 任务ENU → 坐标转换网关（设置参考点）
+  - from: sim_output.task_enu
+    to: coord_transform.task_enu
+    description: "任务ENU（包含参考点）→ 网关节点"
+
+  # 坐标转换网关 → 规划器
+  - from: coord_transform.task_enu
+    to: global_coverage.task_enu
+    description: "地块和车辆配置（ENU坐标）"
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 真实RTK数据流（替代仿真RTK）
+  # └─────────────────────────────────────────────────────────────────────┘
+
+  # 真实RTK → RTK滤波
+  - from: rtk_sensor.rtk_fix
+    to: rtk_filter.rtk_fix
+    description: "真实RTK数据 → 滤波"
+
+  # RTK滤波 → 坐标转换 (WGS84 → ENU)
+  - from: rtk_filter.filtered_rtk
+    to: coord_transform.rtk_fix
+    description: "滤波后的RTK → ENU坐标转换"
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 控制流程 (全部使用ENU坐标)
+  # └─────────────────────────────────────────────────────────────────────┘
+
+  # 规划路径 → 前瞻点选择
+  - from: global_coverage.global_path
+    to: waypoint_selector.global_path
+    description: "规划路径 (ENU坐标)"
+
+  - from: coord_transform.pose_enu
+    to: waypoint_selector.pose_enu
+    description: "ENU姿态 → 前瞻点选择"
+
+  # 前瞻点 + ENU姿态 → 轨迹控制
+  - from: waypoint_selector.next_point
+    to: track_controller.next_point
+    description: "前瞻点 (ENU)"
+
+  - from: coord_transform.pose_enu
+    to: track_controller.pose_enu
+    description: "ENU姿态 → 轨迹控制"
+
+  # 速度指令 → 仿真器输入
+  - from: track_controller.velocity_cmd
+    to: sim_input.velocity_cmd
+    description: "线速度和角速度"
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 可视化数据流
+  # └─────────────────────────────────────────────────────────────────────┘
+
+  # 地块信息 → 可视化
+  - from: coord_transform.task_enu
+    to: trajectory_viz.task_enu
+    description: "地块边界信息 (ENU坐标)"
+
+  # 规划路径 → 可视化
+  - from: global_coverage.global_path
+    to: trajectory_viz.global_path
+    description: "规划的全局路径 (ENU坐标)"
+
+  # ENU姿态 → 可视化
+  - from: coord_transform.pose_enu
+    to: trajectory_viz.pose_enu
+    description: "实际轨迹 (ENU坐标)"
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 监测和日志数据流（暂时禁用）
+  # └─────────────────────────────────────────────────────────────────────┘
+
+  # # 真实RTK数据 → logger (实时位置监测)
+  # - from: rtk_sensor.rtk_fix
+  #   to: logger.input1
+  #   description: "真实RTK GPS定位数据"
+
+  # # 规划路径 → logger (路径调试)
+  # - from: global_coverage.global_path
+  #   to: logger.input2
+  #   description: "全局规划路径"
+
+  # # 速度指令 → logger (控制分析)
+  # - from: track_controller.velocity_cmd
+  #   to: logger.input3
+  #   description: "速度控制指令"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 使用说明
+# ═══════════════════════════════════════════════════════════════════════════
+
+# 启动步骤：
+#
+# 1. 连接RTK设备到USB
+#
+# 2. 停止ModemManager（避免占用串口）
+#    sudo systemctl stop ModemManager
+#
+# 3. 启动仿真器（提供地块和接收控制命令）
+#    cd simulator
+#    python3 server.py
+#
+# 4. 在新终端运行完整系统
+#    cd ~/Downloads/nodeflow-enu-decoupled-v2
+#    python3 -m runtime.main examples/planning_with_real_rtk.yaml
+#
+# 5. 查看Web实时可视化界面
+#    打开浏览器访问: http://localhost:8001
+#    实时查看RTK定位、规划路径和车辆控制
+#
+# 6. 查看轨迹可视化
+#    打开 /tmp/rtk_trajectory/trajectory_latest.png
+#
+# 7. 查看RTK原始日志
+#    tail -f /tmp/rtk_raw.log
+
+# 关键区别：
+#   ✅ 使用真实RTK设备 (rtk_sensor) 而非仿真RTK (sim_output.rtk_fix)
+#   ✅ 保留仿真器用于地块数据和控制反馈
+#   ✅ 完整的导航控制流程
