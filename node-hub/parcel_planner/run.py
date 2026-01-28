@@ -214,12 +214,10 @@ class ParcelPlannerNode:
         Returns:
             True 如果成功，False 否则
         """
-        # 检查文件修改时间，未变化则跳过加载（重发上次数据）
+        # 检查文件修改时间，未变化则跳过（不重复发送相同数据）
         current_mtime = self._get_file_mtime()
         if self._last_sent_data is not None and current_mtime == self._last_file_mtime:
-            # 文件未变化，重发上次的数据（更新 timestamp）
-            self._last_sent_data['timestamp'] = time.time()
-            self.output_task_enu.send(self._last_sent_data)
+            # 文件未变化，跳过发送（避免触发下游节点的无意义工作）
             return True
 
         # 加载配置
@@ -254,21 +252,27 @@ class ParcelPlannerNode:
         # 检测数据变化
         changed = self._data_changed(task_enu)
 
-        if changed:
-            ref_lon = task_enu['ref_lon']
-            ref_lat = task_enu['ref_lat']
-            boundary_points = len(task_enu['parcel']['outer'])
-            holes_count = len(task_enu['parcel'].get('holes', []))
+        # 只有在数据真正变化时才发送（避免触发下游节点的无意义工作）
+        if not changed:
+            # 更新文件修改时间缓存，避免重复加载
+            self._last_file_mtime = current_mtime
+            return True
 
-            if self._last_sent_data is None:
-                self.sdk.logger.info(f"首次发送地块: {self.parcel_name}")
-            else:
-                self.sdk.logger.info(f"地块数据已更新: {self.parcel_name}")
+        # 数据有变化，发送并打印日志
+        ref_lon = task_enu['ref_lon']
+        ref_lat = task_enu['ref_lat']
+        boundary_points = len(task_enu['parcel']['outer'])
+        holes_count = len(task_enu['parcel'].get('holes', []))
 
-            self.sdk.logger.info(f"  GPS参考点: ({ref_lon:.6f}, {ref_lat:.6f})")
-            self.sdk.logger.info(f"  边界点数: {boundary_points}, 孔洞: {holes_count}")
-            self.sdk.logger.info(f"  车辆: 幅宽={task_enu['vehicle']['implement_width_m']}m, "
-                                 f"重叠={task_enu['vehicle']['overlap_ratio']}")
+        if self._last_sent_data is None:
+            self.sdk.logger.info(f"首次发送地块: {self.parcel_name}")
+        else:
+            self.sdk.logger.info(f"地块数据已更新: {self.parcel_name}")
+
+        self.sdk.logger.info(f"  GPS参考点: ({ref_lon:.6f}, {ref_lat:.6f})")
+        self.sdk.logger.info(f"  边界点数: {boundary_points}, 孔洞: {holes_count}")
+        self.sdk.logger.info(f"  车辆: 幅宽={task_enu['vehicle']['implement_width_m']}m, "
+                             f"重叠={task_enu['vehicle']['overlap_ratio']}")
 
         # 发送数据并缓存
         self.output_task_enu.send(task_enu)
