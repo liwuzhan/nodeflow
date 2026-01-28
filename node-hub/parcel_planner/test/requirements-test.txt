@@ -1,0 +1,12 @@
+# 测试依赖
+
+# 核心测试框架
+pytest>=7.4.0
+pytest-cov>=4.1.0  # 代码覆盖率
+
+# Web 测试
+Flask>=2.3.0
+flask-socketio>=5.3.0
+
+# 辅助工具
+pytest-mock>=3.11.0  # Mock 工具

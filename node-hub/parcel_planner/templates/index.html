@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>地块规划工具 - NodeFlow</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script type="text/javascript">
+        window._AMapSecurityConfig = {
+            securityJsCode: '{{ amap_security_code }}',
+        }
+    </script>
+    <script src="https://webapi.amap.com/maps?v=2.0&key={{ amap_api_key }}"></script>
+</head>
+<body>
+    <div class="header">
+        <h1>🚜 地块规划工具</h1>
+        <div class="status" style="display:flex;align-items:center;gap:10px;">
+            <span id="connection-status">⏳ 连接中...</span>
+            <span id="mode-display" class="mode-badge idle">👆 选择模式</span>
+        </div>
+    </div>
+
+    <div class="main-container">
+        <div class="sidebar">
+            <!-- 地块名称 -->
+            <div class="section">
+                <div class="section-title">📦 地块信息</div>
+                <div class="form-group">
+                    <label>地块名称</label>
+                    <input type="text" id="parcel-name" value="default" placeholder="输入地块名称">
+                </div>
+                <div class="form-group">
+                    <label>描述</label>
+                    <textarea id="parcel-desc" rows="2" placeholder="地块描述（可选）"></textarea>
+                </div>
+            </div>
+
+            <!-- GPS 参考点 -->
+            <div class="section">
+                <div class="section-title">📍 GPS 参考点（原点）</div>
+                <div id="ref-point-alert" class="alert alert-warning">
+                    请先设置 GPS 参考点
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>经度</label>
+                        <input type="number" id="ref-lon" step="0.000001" placeholder="121.xxxxx">
+                    </div>
+                    <div class="form-group">
+                        <label>纬度</label>
+                        <input type="number" id="ref-lat" step="0.000001" placeholder="31.xxxxx">
+                    </div>
+                </div>
+                <div class="btn-group">
+                    <button class="btn-primary" onclick="setRefPointFromInput()">从输入设置</button>
+                    <button class="btn-secondary" onclick="enableRefPointPick()">📍 在地图选点</button>
+                </div>
+            </div>
+
+            <!-- 车辆配置 -->
+            <div class="section">
+                <div class="section-title">🚛 车辆配置</div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>作业幅宽 (m)</label>
+                        <input type="number" id="implement-width" value="2.0" step="0.1" min="0.1">
+                    </div>
+                    <div class="form-group">
+                        <label>重叠率</label>
+                        <input type="number" id="overlap-ratio" value="0.1" step="0.01" min="0" max="0.5">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>路径内缩 (m)</label>
+                    <input type="number" id="path-inset" value="0.5" step="0.1" min="0">
+                </div>
+            </div>
+
+            <!-- 地块统计 -->
+            <div class="section" id="stats-section">
+                <div class="section-title">📊 地块统计</div>
+                <div class="info-box">
+                    <div class="info-row">
+                        <span class="info-label">边界点数:</span>
+                        <span class="info-value" id="stat-points">0</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">孔洞数量:</span>
+                        <span class="info-value" id="stat-holes">0</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">面积:</span>
+                        <span class="info-value" id="stat-area">-- m²</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">周长:</span>
+                        <span class="info-value" id="stat-perimeter">-- m</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 操作按钮 -->
+            <div class="section">
+                <div class="section-title">💾 操作</div>
+                <div class="btn-group" style="margin-bottom: 10px;">
+                    <button class="btn-success" onclick="saveParcel()">保存地块</button>
+                    <button class="btn-danger" onclick="clearBoundary()">清除绘制</button>
+                </div>
+                <button class="btn-secondary" onclick="refreshParcels()" style="width:100%">🔄 刷新列表</button>
+            </div>
+
+            <!-- 已保存的地块 -->
+            <div class="section">
+                <div class="section-title">📂 已保存的地块</div>
+                <ul class="parcel-list" id="parcel-list">
+                    <li style="color:#999;font-size:0.9em;">加载中...</li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="map-container">
+            <div id="map"></div>
+
+            <div class="map-controls">
+                <button class="btn-primary" onclick="enableDrawMode()">✏️ 绘制外边界</button>
+                <button class="btn-secondary" onclick="enableHoleMode()">🕳️ 绘制孔洞</button>
+                <button class="btn-secondary" onclick="finishDraw()">✓ 完成当前</button>
+                <button class="btn-secondary" onclick="finishHole()">✓ 完成孔洞</button>
+                <button class="btn-secondary" onclick="undoPoint()">↩️ 撤外边点</button>
+                <button class="btn-secondary" onclick="undoHolePoint()">↩️ 撤孔洞点</button>
+                <button class="btn-danger" onclick="clearHoles()">🗑️ 清孔洞</button>
+                <button class="btn-secondary" onclick="fitView()">🎯 适应视图</button>
+            </div>
+
+            <div class="coordinate-display">
+                <div class="coord-row">
+                    <div class="coord-item">
+                        <span class="coord-label">GPS:</span>
+                        <span class="coord-value" id="cursor-gps">--</span>
+                    </div>
+                    <div class="coord-item">
+                        <span class="coord-label">ENU:</span>
+                        <span class="coord-value" id="cursor-enu">--</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 将 API Key 传递给 JS
+        window.AMAP_API_KEY = '{{ amap_api_key }}';
+    </script>
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
