@@ -27,6 +27,11 @@ params:
     default: "default"
     description: "地块配置名称"
 
+  send_interval:
+    type: float
+    default: 1.0
+    description: "发送间隔（秒），数据未变化时按此频率重发"
+
   web_port:
     type: integer
     default: 8081
