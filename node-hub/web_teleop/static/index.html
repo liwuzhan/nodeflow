@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>NodeFlow Teleop</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #fff;
+            min-height: 100vh;
+            overflow: hidden;
+            touch-action: none;
+        }
+
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        h1 {
+            text-align: center;
+            font-size: 1.5rem;
+            margin-bottom: 10px;
+            color: #4fc3f7;
+        }
+
+        .status-bar {
+            background: rgba(255,255,255,0.1);
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 15px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        .status-item {
+            text-align: center;
+        }
+
+        .status-label {
+            font-size: 0.75rem;
+            color: #aaa;
+            margin-bottom: 5px;
+        }
+
+        .status-value {
+            font-size: 1.5rem;
+            font-weight: bold;
+            font-family: 'Courier New', monospace;
+        }
+
+        .status-value.linear { color: #4caf50; }
+        .status-value.angular { color: #ff9800; }
+
+        /* 虚拟手柄区域 */
+        .joystick-area {
+            flex: 1;
+            display: flex;
+            gap: 20px;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .joystick-container {
+            width: 180px;
+            height: 180px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 50%;
+            position: relative;
+            border: 2px solid rgba(255,255,255,0.2);
+        }
+
+        .joystick-label {
+            position: absolute;
+            top: -25px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 0.8rem;
+            color: #aaa;
+            white-space: nowrap;
+        }
+
+        .joystick-handle {
+            width: 70px;
+            height: 70px;
+            background: linear-gradient(145deg, #4fc3f7, #2196f3);
+            border-radius: 50%;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            cursor: grab;
+            box-shadow: 0 4px 15px rgba(33, 150, 243, 0.4);
+            transition: transform 0.05s ease-out;
+        }
+
+        .joystick-handle:active {
+            cursor: grabbing;
+            background: linear-gradient(145deg, #81d4fa, #42a5f5);
+        }
+
+        /* 控制按钮 */
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .btn {
+            flex: 1;
+            padding: 15px;
+            border: none;
+            border-radius: 10px;
+            font-size: 1rem;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s;
+            touch-action: manipulation;
+        }
+
+        .btn-stop {
+            background: linear-gradient(145deg, #f44336, #d32f2f);
+            color: white;
+        }
+
+        .btn-stop:active, .btn-stop.active {
+            background: linear-gradient(145deg, #ef5350, #e53935);
+            transform: scale(0.95);
+        }
+
+        .btn-reset {
+            background: rgba(255,255,255,0.1);
+            color: #aaa;
+        }
+
+        /* 键盘提示 */
+        .keyboard-hint {
+            text-align: center;
+            font-size: 0.75rem;
+            color: #666;
+            margin-top: 10px;
+        }
+
+        .key {
+            display: inline-block;
+            background: rgba(255,255,255,0.1);
+            padding: 2px 8px;
+            border-radius: 4px;
+            margin: 0 2px;
+            font-family: monospace;
+        }
+
+        /* 连接状态 */
+        .connection-status {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #4caf50;
+            box-shadow: 0 0 10px #4caf50;
+        }
+
+        .connection-status.disconnected {
+            background: #f44336;
+            box-shadow: 0 0 10px #f44336;
+        }
+
+        /* 速度条 */
+        .speed-bars {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .speed-bar-container {
+            flex: 1;
+            text-align: center;
+        }
+
+        .speed-bar {
+            height: 8px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 5px;
+        }
+
+        .speed-bar-fill {
+            height: 100%;
+            transition: width 0.1s ease-out;
+            border-radius: 4px;
+        }
+
+        .speed-bar-fill.linear {
+            background: linear-gradient(90deg, #4caf50, #8bc34a);
+        }
+
+        .speed-bar-fill.angular {
+            background: linear-gradient(90deg, #ff9800, #ffb74d);
+        }
+
+        /* 方向指示 */
+        .direction-indicator {
+            position: absolute;
+            bottom: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 2rem;
+            opacity: 0.3;
+        }
+
+        /* 模式切换按钮 */
+        .mode-toggle {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: rgba(255,255,255,0.1);
+            border-radius: 10px;
+            padding: 12px 15px;
+            margin-bottom: 15px;
+        }
+
+        .mode-label {
+            font-size: 0.9rem;
+            color: #fff;
+        }
+
+        .mode-status {
+            font-size: 0.8rem;
+            padding: 4px 10px;
+            border-radius: 12px;
+            background: #4caf50;
+        }
+
+        .mode-status.auto {
+            background: #2196f3;
+        }
+
+        .mode-status.manual {
+            background: #4caf50;
+        }
+
+        .toggle-switch {
+            position: relative;
+            width: 50px;
+            height: 26px;
+        }
+
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #555;
+            transition: 0.3s;
+            border-radius: 26px;
+        }
+
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 20px;
+            width: 20px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: 0.3s;
+            border-radius: 50%;
+        }
+
+        .toggle-switch input:checked + .toggle-slider {
+            background-color: #2196f3;
+        }
+
+        .toggle-switch input:checked + .toggle-slider:before {
+            transform: translateX(24px);
+        }
+
+        /* 禁用状态 */
+        .disabled-overlay {
+            opacity: 0.3;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="connection-status" id="connectionStatus"></div>
+
+    <div class="container">
+        <h1>🚗 NodeFlow Teleop</h1>
+
+        <div class="status-bar">
+            <div class="status-item">
+                <div class="status-label">线速度 (m/s)</div>
+                <div class="status-value linear" id="linearValue">0.00</div>
+            </div>
+            <div class="status-item">
+                <div class="status-label">角速度 (rad/s)</div>
+                <div class="status-value angular" id="angularValue">0.00</div>
+            </div>
+        </div>
+
+        <div class="speed-bars">
+            <div class="speed-bar-container">
+                <div class="speed-bar">
+                    <div class="speed-bar-fill linear" id="linearBar" style="width: 50%"></div>
+                </div>
+            </div>
+            <div class="speed-bar-container">
+                <div class="speed-bar">
+                    <div class="speed-bar-fill angular" id="angularBar" style="width: 50%"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 模式切换 -->
+        <div class="mode-toggle">
+            <div>
+                <div class="mode-label">控制模式</div>
+                <div class="mode-status manual" id="modeStatus">🎮 遥控模式</div>
+            </div>
+            <label class="toggle-switch">
+                <input type="checkbox" id="modeToggle">
+                <span class="toggle-slider"></span>
+            </label>
+        </div>
+
+        <div class="joystick-area" id="joystickArea">>
+            <div class="joystick-container" id="joystickLinear">
+                <span class="joystick-label">前进/后退</span>
+                <div class="joystick-handle" id="handleLinear"></div>
+            </div>
+            <div class="joystick-container" id="joystickAngular">
+                <span class="joystick-label">左转/右转</span>
+                <div class="joystick-handle" id="handleAngular"></div>
+            </div>
+        </div>
+
+        <div class="controls">
+            <button class="btn btn-stop" id="btnStop">🛑 紧急停止</button>
+            <button class="btn btn-reset" id="btnReset">↺ 重置</button>
+        </div>
+
+        <div class="keyboard-hint">
+            <span class="key">W</span><span class="key">S</span> 前进后退
+            <span class="key">A</span><span class="key">D</span> 左右转向
+            <span class="key">空格</span> 停止
+        </div>
+    </div>
+
+    <script>
+        // 配置（由服务器注入）
+        const CONFIG = {{CONFIG}};
+
+        // 状态
+        let state = {
+            linear: 0,
+            angular: 0
+        };
+
+        let feedback = {
+            linear: 0,
+            angular: 0
+        };
+
+        let passthroughEnabled = false;  // 透传模式状态
+
+        // API 基础地址
+        const API_BASE = '';
+
+        // 发送控制命令
+        async function sendControl() {
+            if (passthroughEnabled) return;  // 透传模式下不发送手动控制
+
+            try {
+                await fetch(API_BASE + '/api/control', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        linear: state.linear,
+                        angular: state.angular
+                    })
+                });
+                updateConnectionStatus(true);
+            } catch (e) {
+                updateConnectionStatus(false);
+            }
+        }
+
+        // 切换模式
+        async function setMode(passthrough) {
+            try {
+                const res = await fetch(API_BASE + '/api/mode', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ passthrough: passthrough })
+                });
+                const data = await res.json();
+                if (data.passthrough_enabled !== undefined) {
+                    passthroughEnabled = data.passthrough_enabled;
+                    updateModeDisplay();
+                }
+            } catch (e) {
+                console.error('Failed to switch mode:', e);
+            }
+        }
+
+        // 更新模式显示
+        function updateModeDisplay() {
+            const statusEl = document.getElementById('modeStatus');
+            const toggleEl = document.getElementById('modeToggle');
+            const joystickArea = document.getElementById('joystickArea');
+
+            toggleEl.checked = passthroughEnabled;
+
+            if (passthroughEnabled) {
+                statusEl.textContent = '🤖 自动模式';
+                statusEl.className = 'mode-status auto';
+                joystickArea.classList.add('disabled-overlay');
+            } else {
+                statusEl.textContent = '🎮 遥控模式';
+                statusEl.className = 'mode-status manual';
+                joystickArea.classList.remove('disabled-overlay');
+            }
+        }
+
+        // 更新连接状态
+        function updateConnectionStatus(connected) {
+            const el = document.getElementById('connectionStatus');
+            el.classList.toggle('disconnected', !connected);
+        }
+
+        // 更新显示
+        function updateDisplay() {
+            document.getElementById('linearValue').textContent = state.linear.toFixed(2);
+            document.getElementById('angularValue').textContent = state.angular.toFixed(2);
+
+            // 更新进度条 (从中心开始，0-100% -> 50-50%)
+            const linearPercent = 50 + (state.linear / CONFIG.maxLinearSpeed) * 50;
+            const angularPercent = 50 + (state.angular / CONFIG.maxAngularSpeed) * 50;
+            document.getElementById('linearBar').style.width = linearPercent.toFixed(1) + '%';
+            document.getElementById('angularBar').style.width = angularPercent.toFixed(1) + '%';
+
+            // 更新手柄位置
+            updateJoystickHandle('handleLinear', state.linear, CONFIG.maxLinearSpeed);
+            updateJoystickHandle('handleAngular', state.angular, CONFIG.maxAngularSpeed);
+        }
+
+        function updateJoystickHandle(handleId, value, max) {
+            const handle = document.getElementById(handleId);
+            const offset = (value / max) * 55; // 最大偏移55px
+            handle.style.transform = `translate(calc(-50% + ${offset}px), -50%)`;
+        }
+
+        // 手柄控制类
+        class Joystick {
+            constructor(containerId, handleId, onChange, axis) {
+                this.container = document.getElementById(containerId);
+                this.handle = document.getElementById(handleId);
+                this.onChange = onChange;
+                this.axis = axis;
+                this.active = false;
+                this.startPos = { x: 0, y: 0 };
+                this.currentValue = 0;
+
+                this.init();
+            }
+
+            init() {
+                // 触摸事件
+                this.handle.addEventListener('touchstart', (e) => this.onStart(e));
+                this.container.addEventListener('touchmove', (e) => this.onMove(e));
+                document.addEventListener('touchend', (e) => this.onEnd(e));
+
+                // 鼠标事件
+                this.handle.addEventListener('mousedown', (e) => this.onStart(e));
+                document.addEventListener('mousemove', (e) => this.onMove(e));
+                document.addEventListener('mouseup', (e) => this.onEnd(e));
+            }
+
+            onStart(e) {
+                e.preventDefault();
+                this.active = true;
+                const pos = e.touches ? e.touches[0] : e;
+                const rect = this.container.getBoundingClientRect();
+                this.startPos = {
+                    x: rect.left + rect.width / 2,
+                    y: rect.top + rect.height / 2
+                };
+            }
+
+            onMove(e) {
+                if (!this.active) return;
+                e.preventDefault();
+
+                const pos = e.touches ? e.touches[0] : e;
+                const rect = this.container.getBoundingClientRect();
+                const maxOffset = rect.width / 2 - 35; // 35是手柄半径
+
+                let delta;
+                if (this.axis === 'linear') {
+                    delta = this.startPos.y - pos.clientY; // 向上为正
+                } else {
+                    delta = pos.clientX - this.startPos.x; // 向右为正
+                }
+
+                // 限制范围
+                delta = Math.max(-maxOffset, Math.min(maxOffset, delta));
+
+                // 计算值 (-1 到 1)
+                this.currentValue = delta / maxOffset;
+                this.onChange(this.currentValue);
+            }
+
+            onEnd(e) {
+                if (this.active) {
+                    this.active = false;
+                    this.currentValue = 0;
+                    this.onChange(0);
+                }
+            }
+
+            setValue(value) {
+                this.currentValue = value;
+                updateJoystickHandle(this.handle.id, value,
+                    this.axis === 'linear' ? CONFIG.maxLinearSpeed : CONFIG.maxAngularSpeed);
+            }
+        }
+
+        // 初始化手柄
+        const linearJoystick = new Joystick('joystickLinear', 'handleLinear', (value) => {
+            state.linear = value * CONFIG.maxLinearSpeed;
+            updateDisplay();
+            sendControl();
+        }, 'linear');
+
+        const angularJoystick = new Joystick('joystickAngular', 'handleAngular', (value) => {
+            state.angular = value * CONFIG.maxAngularSpeed;
+            updateDisplay();
+            sendControl();
+        }, 'angular');
+
+        // 键盘控制
+        const keys = {};
+        const KEY_MAP = {
+            'w': 'forward', 'arrowup': 'forward',
+            's': 'backward', 'arrowdown': 'backward',
+            'a': 'left', 'arrowleft': 'left',
+            'd': 'right', 'arrowright': 'right',
+            ' ': 'stop'
+        };
+
+        document.addEventListener('keydown', (e) => {
+            if (keys[e.key.toLowerCase()]) return;
+            keys[e.key.toLowerCase()] = true;
+
+            const action = KEY_MAP[e.key.toLowerCase()];
+            if (action === 'stop') {
+                state.linear = 0;
+                state.angular = 0;
+                updateDisplay();
+                sendControl();
+            } else {
+                updateKeyboardControl();
+            }
+        });
+
+        document.addEventListener('keyup', (e) => {
+            keys[e.key.toLowerCase()] = false;
+            updateKeyboardControl();
+        });
+
+        function updateKeyboardControl() {
+            let linear = 0;
+            let angular = 0;
+
+            if (keys['w'] || keys['arrowup']) linear = 1;
+            if (keys['s'] || keys['arrowdown']) linear = -1;
+            if (keys['a'] || keys['arrowleft']) angular = 1;
+            if (keys['d'] || keys['arrowright']) angular = -1;
+
+            state.linear = linear * CONFIG.maxLinearSpeed;
+            state.angular = angular * CONFIG.maxAngularSpeed;
+            updateDisplay();
+            sendControl();
+        }
+
+        // 按钮
+        document.getElementById('btnStop').addEventListener('click', () => {
+            state.linear = 0;
+            state.angular = 0;
+            updateDisplay();
+            sendControl();
+        });
+
+        document.getElementById('btnReset').addEventListener('click', () => {
+            state.linear = 0;
+            state.angular = 0;
+            linearJoystick.setValue(0);
+            angularJoystick.setValue(0);
+            updateDisplay();
+            sendControl();
+        });
+
+        // 模式切换
+        document.getElementById('modeToggle').addEventListener('change', (e) => {
+            setMode(e.target.checked);
+        });
+
+        // 定期获取状态
+        setInterval(async () => {
+            try {
+                const res = await fetch(API_BASE + '/api/status');
+                const data = await res.json();
+                if (data.feedback) {
+                    feedback.linear = data.feedback.linear_velocity || 0;
+                    feedback.angular = data.feedback.angular_velocity || 0;
+                }
+                if (data.passthrough_enabled !== undefined && data.passthrough_enabled !== passthroughEnabled) {
+                    passthroughEnabled = data.passthrough_enabled;
+                    updateModeDisplay();
+                }
+                updateConnectionStatus(true);
+            } catch (e) {
+                updateConnectionStatus(false);
+            }
+        }, 200);
+
+        // 初始化显示
+        updateDisplay();
+
+        // 防止页面滚动（触摸设备）
+        document.body.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+        }, { passive: false });
+    </script>
+</body>
+</html>

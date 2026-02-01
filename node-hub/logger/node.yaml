@@ -1,6 +1,6 @@
 name: logger
-version: 0.1.0
-description: 日志记录节点 - 接收多输入并提供实时Web展示
+version: "1.0.0"
+description: "数据记录/回放节点 - 类似磁带，可记录和回放任意数据流"
 
 entrypoints:
   linux:
@@ -15,31 +15,91 @@ entrypoints:
 
 ports:
   inputs:
-    - name: input1
+    - name: input_0
       type: any
-      description: 第一个输入端口
-    - name: input2
+      description: "数据输入通道 0"
+    - name: input_1
       type: any
-      description: 第二个输入端口
-    - name: input3
+      description: "数据输入通道 1"
+    - name: input_2
       type: any
-      description: 第三个输入端口
-  outputs: []
+      description: "数据输入通道 2"
+    - name: input_3
+      type: any
+      description: "数据输入通道 3"
+    - name: input_4
+      type: any
+      description: "数据输入通道 4"
+    - name: input_5
+      type: any
+      description: "数据输入通道 5"
+    - name: input_6
+      type: any
+      description: "数据输入通道 6"
+    - name: input_7
+      type: any
+      description: "数据输入通道 7"
+    - name: input_8
+      type: any
+      description: "数据输入通道 8"
+    - name: input_9
+      type: any
+      description: "数据输入通道 9"
+
+  outputs:
+    - name: output_0
+      type: any
+      description: "数据输出通道 0"
+    - name: output_1
+      type: any
+      description: "数据输出通道 1"
+    - name: output_2
+      type: any
+      description: "数据输出通道 2"
+    - name: output_3
+      type: any
+      description: "数据输出通道 3"
+    - name: output_4
+      type: any
+      description: "数据输出通道 4"
+    - name: output_5
+      type: any
+      description: "数据输出通道 5"
+    - name: output_6
+      type: any
+      description: "数据输出通道 6"
+    - name: output_7
+      type: any
+      description: "数据输出通道 7"
+    - name: output_8
+      type: any
+      description: "数据输出通道 8"
+    - name: output_9
+      type: any
+      description: "数据输出通道 9"
 
 params:
-  web_port:
-    type: int
-    default: 8001
-    description: Web服务端口号
-  buffer_size:
-    type: int
-    default: 1000
-    description: 内存缓冲区大小（条数）
-  enable_file_log:
+  mode:
+    type: string
+    default: "record"
+    description: "运行模式: record(记录), playback(回放)"
+
+  record_name:
+    type: string
+    default: "recording"
+    description: "记录文件名（不含扩展名）"
+
+  playback_speed:
+    type: float
+    default: 1.0
+    description: "回放速度倍数（1.0=原速，2.0=2倍速）"
+
+  loop_playback:
     type: bool
     default: false
-    description: 是否启用文件日志输出
-  log_file_path:
-    type: string
-    default: "./logs/logger.jsonl"
-    description: 日志文件路径
+    description: "回放是否循环"
+
+  max_records:
+    type: integer
+    default: 10
+    description: "保留的最大记录文件数量"

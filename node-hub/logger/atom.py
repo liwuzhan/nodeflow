@@ -1,209 +1,221 @@
 #!/usr/bin/env python3
 """
-Logger Node - 原子层 (L4)
+Logger 节点 - L4层原子算法
 
-纯算法实现，无外部依赖，负责：
-- 日志条目数据结构
-- 日志缓冲区管理
-- 日志格式化
+纯函数实现，无SDK依赖
+负责数据记录和回放的底层逻辑
 """
 
 import json
-import time
-from typing import Any, Dict, List
-from collections import deque
+import pickle
+from typing import Dict, Any, List, Optional, Tuple
+from pathlib import Path
+from datetime import datetime
 
 
-class LogEntry:
-    """日志条目"""
+def generate_record_path(data_dir: str, record_name: str) -> str:
+    """
+    生成记录文件路径
 
-    def __init__(
-        self,
-        timestamp: float,
-        port: str,
-        data: Any,
-        level: str = "INFO",
-        seq: int = 0,
-        node_id: str = ""
-    ):
-        """
-        初始化日志条目
+    Args:
+        data_dir: 数据目录
+        record_name: 记录名称
 
-        参数：
-        - timestamp: 时间戳（Unix时间，秒）
-        - port: 端口名（input1/input2/input3）
-        - data: 数据内容
-        - level: 日志级别（INFO/WARNING/ERROR）
-        - seq: 序列号（可选）
-        - node_id: 节点ID（可选）
-        """
-        self.timestamp = timestamp
-        self.port = port
-        self.data = data
-        self.level = level
-        self.seq = seq
-        self.node_id = node_id
-
-    def to_dict(self) -> Dict[str, Any]:
-        """转换为字典"""
-        result = {
-            'timestamp': self.timestamp,
-            'port': self.port,
-            'data': self.data,
-            'level': self.level,
-        }
-        if self.seq > 0:
-            result['seq'] = self.seq
-        if self.node_id:
-            result['node_id'] = self.node_id
-        return result
+    Returns:
+        文件路径
+    """
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"{record_name}_{timestamp}.pkl"
+    return str(Path(data_dir) / filename)
 
 
-class LogBuffer:
-    """日志缓冲区（循环缓冲区）"""
+def save_record(filepath: str, frames: List[Dict[str, Any]]) -> bool:
+    """
+    保存记录到文件
 
-    def __init__(self, max_size: int = 1000):
-        """
-        初始化日志缓冲区
+    Args:
+        filepath: 文件路径
+        frames: 帧数据列表，每帧包含所有通道的数据
 
-        参数：
-        - max_size: 最大缓冲区大小
-        """
-        self.max_size = max_size
-        self.buffer: deque[LogEntry] = deque(maxlen=max_size)
-        self.total_count = 0  # 总接收日志数
-
-    def add_entry(self, entry_dict: Dict[str, Any]) -> LogEntry:
-        """
-        添加日志条目
-
-        参数：
-        - entry_dict: 日志条目字典
-
-        返回：
-        - LogEntry对象
-        """
-        log_entry = LogEntry(
-            timestamp=entry_dict.get('timestamp', time.time()),
-            port=entry_dict.get('port', 'unknown'),
-            data=entry_dict.get('data', {}),
-            level=entry_dict.get('level', 'INFO'),
-            seq=entry_dict.get('seq', 0),
-            node_id=entry_dict.get('node_id', '')
-        )
-
-        self.buffer.append(log_entry)
-        self.total_count += 1
-
-        return log_entry
-
-    def get_all(self) -> List[LogEntry]:
-        """
-        获取所有日志条目
-
-        返回：
-        - 日志条目列表（按时间从旧到新）
-        """
-        return list(self.buffer)
-
-    def get_recent(self, count: int) -> List[LogEntry]:
-        """
-        获取最近的 N 条日志
-
-        参数：
-        - count: 数量
-
-        返回：
-        - 日志条目列表（最新的在前）
-        """
-        if count >= len(self.buffer):
-            return list(reversed(self.buffer))
-
-        # 获取最后 count 个元素并反转
-        recent = list(self.buffer)[-count:]
-        return list(reversed(recent))
-
-    def clear(self) -> None:
-        """清空缓冲区"""
-        self.buffer.clear()
-        # 不重置 total_count，保留历史统计
-
-    def size(self) -> int:
-        """当前缓冲区大小"""
-        return len(self.buffer)
-
-    def get_stats(self) -> Dict[str, Any]:
-        """
-        获取缓冲区统计信息
-
-        返回：
-        - 统计信息字典
-        """
-        port_counts: Dict[str, int] = {}
-        level_counts: Dict[str, int] = {}
-
-        for entry in self.buffer:
-            # 统计端口
-            port_counts[entry.port] = port_counts.get(entry.port, 0) + 1
-            # 统计级别
-            level_counts[entry.level] = level_counts.get(entry.level, 0) + 1
-
-        return {
-            'current_size': len(self.buffer),
-            'max_size': self.max_size,
-            'total_count': self.total_count,
-            'port_counts': port_counts,
-            'level_counts': level_counts,
-        }
+    Returns:
+        True 如果保存成功
+    """
+    try:
+        Path(filepath).parent.mkdir(parents=True, exist_ok=True)
+        with open(filepath, 'wb') as f:
+            pickle.dump(frames, f)
+        return True
+    except Exception as e:
+        print(f"Error saving record: {e}")
+        return False
 
 
-class LogFormatter:
-    """日志格式化器"""
+def load_record(filepath: str) -> Optional[List[Dict[str, Any]]]:
+    """
+    从文件加载记录
 
-    @staticmethod
-    def format_for_json(log_entry: LogEntry) -> str:
-        """
-        格式化为JSON字符串（用于文件存储）
+    Args:
+        filepath: 文件路径
 
-        参数：
-        - log_entry: LogEntry对象
+    Returns:
+        帧数据列表，失败返回 None
+    """
+    try:
+        with open(filepath, 'rb') as f:
+            frames = pickle.load(f)
+        return frames
+    except Exception as e:
+        print(f"Error loading record: {e}")
+        return None
 
-        返回：
-        - JSON字符串（单行）
-        """
-        return json.dumps(log_entry.to_dict(), ensure_ascii=False)
 
-    @staticmethod
-    def format_for_html(log_entry: LogEntry) -> Dict[str, Any]:
-        """
-        格式化为HTML/WebSocket传输格式
+def get_old_records(records_dir: str, max_keep: int) -> List[str]:
+    """
+    获取需要删除的旧记录文件
 
-        参数：
-        - log_entry: LogEntry对象
+    Args:
+        records_dir: 记录目录
+        max_keep: 保留的最大文件数
 
-        返回：
-        - 格式化后的字典
-        """
-        return log_entry.to_dict()
+    Returns:
+        需要删除的文件路径列表
+    """
+    records_path = Path(records_dir)
+    if not records_path.exists():
+        return []
 
-    @staticmethod
-    def format_for_console(log_entry: LogEntry) -> str:
-        """
-        格式化为控制台输出格式
+    # 获取所有记录文件，按修改时间排序（新的在前）
+    files = sorted(
+        [f for f in records_path.glob("*.pkl") if f.is_file()],
+        key=lambda f: f.stat().st_mtime,
+        reverse=True
+    )
 
-        参数：
-        - log_entry: LogEntry对象
+    # 超出保留数量的文件需要删除
+    return [str(f) for f in files[max_keep:]]
 
-        返回：
-        - 格式化字符串
-        """
-        timestamp_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(log_entry.timestamp))
-        level_str = f"[{log_entry.level:7s}]"
-        port_str = f"[{log_entry.port:7s}]"
 
-        # 简化数据显示
-        data_str = str(log_entry.data)
-        if len(data_str) > 100:
-            data_str = data_str[:97] + "..."
+def list_records(records_dir: str) -> List[Dict[str, Any]]:
+    """
+    列出所有记录文件
 
-        return f"{timestamp_str} {level_str} {port_str} {data_str}"
+    Args:
+        records_dir: 记录目录
+
+    Returns:
+        记录文件信息列表
+    """
+    records_path = Path(records_dir)
+    if not records_path.exists():
+        return []
+
+    records = []
+    for filepath in records_path.glob("*.pkl"):
+        try:
+            stat = filepath.stat()
+            # 尝试读取第一帧获取元数据
+            frame_count = 0
+            start_time = None
+            end_time = None
+            try:
+                with open(filepath, 'rb') as f:
+                    frames = pickle.load(f)
+                    frame_count = len(frames)
+                    if frames:
+                        start_time = frames[0].get('timestamp')
+                        end_time = frames[-1].get('timestamp')
+            except:
+                pass
+
+            records.append({
+                'name': filepath.name,
+                'path': str(filepath),
+                'size': stat.st_size,
+                'modified': stat.st_mtime,
+                'modified_iso': datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                'frame_count': frame_count,
+                'start_time': start_time,
+                'end_time': end_time,
+                'duration': (end_time - start_time) if (start_time and end_time) else 0
+            })
+        except Exception:
+            pass
+
+    # 按修改时间倒序排列
+    records.sort(key=lambda x: x['modified'], reverse=True)
+    return records
+
+
+def create_frame(timestamp: float, channel_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    创建一帧数据
+
+    Args:
+        timestamp: 时间戳
+        channel_data: 各通道数据，键为 channel_0, channel_1, ...
+
+    Returns:
+        帧数据
+    """
+    frame = {
+        'timestamp': timestamp,
+        'datetime': datetime.fromtimestamp(timestamp).isoformat(),
+        'channels': {}
+    }
+
+    for channel_id, data in channel_data.items():
+        frame['channels'][channel_id] = data
+
+    return frame
+
+
+def calculate_playback_interval(frames: List[Dict[str, Any]], speed: float) -> float:
+    """
+    计算回放间隔
+
+    Args:
+        frames: 帧数据列表
+        speed: 回放速度倍数
+
+    Returns:
+        回放间隔（秒）
+    """
+    if len(frames) < 2:
+        return 0.05  # 默认 20Hz
+
+    # 计算平均帧间隔
+    total_duration = frames[-1]['timestamp'] - frames[0]['timestamp']
+    avg_interval = total_duration / (len(frames) - 1)
+
+    # 根据速度调整
+    return max(0.001, avg_interval / speed)
+
+
+def get_frame_at_index(frames: List[Dict[str, Any]], index: int) -> Optional[Dict[str, Any]]:
+    """
+    获取指定索引的帧
+
+    Args:
+        frames: 帧数据列表
+        index: 帧索引
+
+    Returns:
+        帧数据，索引无效返回 None
+    """
+    if 0 <= index < len(frames):
+        return frames[index]
+    return None
+
+
+def extract_channel_data(frame: Dict[str, Any], channel_id: str) -> Optional[Any]:
+    """
+    从帧中提取指定通道的数据
+
+    Args:
+        frame: 帧数据
+        channel_id: 通道ID（如 'channel_0'）
+
+    Returns:
+        通道数据，不存在返回 None
+    """
+    return frame.get('channels', {}).get(channel_id)
