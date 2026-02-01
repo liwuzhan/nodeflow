@@ -119,6 +119,16 @@ class RTKDriverNode:
 
     def loop(self):
         """主循环：读取并解析NMEA数据"""
+        # 检查连接状态，如果断开则尝试重连
+        if not self.device.is_connected():
+            self.logger.warning("Device disconnected, attempting to reconnect...")
+            if self.device.connect():
+                self.logger.info("✓ Device reconnected")
+            else:
+                # 连接失败，跳过本次循环
+                time.sleep(1.0)
+                return
+
         # 读取一行NMEA数据
         line = self.device.read_line(timeout=0.1)
 

@@ -129,7 +129,10 @@ class SerialInterface(DeviceInterface):
 
             return None
 
-        except (serial.SerialException, UnicodeDecodeError):
+        except (serial.SerialException, UnicodeDecodeError, OSError) as e:
+            # I/O error (errno 5) - USB disconnected, close connection
+            if hasattr(e, 'errno') and e.errno == 5:
+                self.disconnect()
             return None
 
     def write(self, data: str) -> bool:

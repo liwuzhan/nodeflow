@@ -8,7 +8,7 @@
 # 1. 将RTK设备通过USB连接到电脑
 
 # 2. 查找串口设备
-ls -l /dev/ttyUSB* /dev/ttyACM*
+ls -l /dev/ttyACM*
 
 # 应该看到类似这样的输出：
 # crw-rw---- 1 root dialout 188, 0 Jan 21 12:00 /dev/ttyUSB0
