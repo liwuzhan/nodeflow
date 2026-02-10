@@ -92,6 +92,11 @@ params:
     default: 0.8
     description: "PWM输出比例 (0-1)，实际输出范围 = center_ns ± (center_ns * scale)"
 
+  pwm_inverted_polarity:
+    type: bool
+    default: true
+    description: "PWM极性反转。true: duty_cycle为低电平时间（香橙派默认）；false: duty_cycle为高电平时间"
+
   # ========== 安全参数 ==========
   enable_safety_check:
     type: bool

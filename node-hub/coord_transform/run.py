@@ -172,7 +172,7 @@ class CoordTransformNode:
                     self.output_task_enu.send(task_data)
                     self._last_sent_task = task_data
 
-            time.sleep(0.01)  # 100Hz
+            time.sleep(0.005)  # 200Hz
 
 
 def main():

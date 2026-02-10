@@ -158,7 +158,7 @@ def main():
                         )
 
             # 4d. 休眠
-            time.sleep(0.02)  # 50Hz
+            time.sleep(0.005)  # 200Hz
 
 
 if __name__ == "__main__":

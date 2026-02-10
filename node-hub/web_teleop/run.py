@@ -288,8 +288,6 @@ class WebTeleopNode:
                     if feedback:
                         self.feedback_linear = feedback.get("linear_velocity", 0.0)
                         self.feedback_angular = feedback.get("angular_velocity", 0.0)
-                    self.feedback_linear = feedback.get("linear_velocity", 0.0)
-                    self.feedback_angular = feedback.get("angular_velocity", 0.0)
 
                 # 透传模式：转发自动控制的速度命令
                 if self.passthrough_enabled and self.auto_velocity_port:

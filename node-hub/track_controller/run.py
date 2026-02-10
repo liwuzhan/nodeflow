@@ -93,7 +93,7 @@ def main():
                 now
             )
             out.send(cmd)
-            time.sleep(0.02)
+            time.sleep(0.005)  # 200Hz
 
 
 if __name__ == "__main__":

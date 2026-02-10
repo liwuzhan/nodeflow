@@ -41,6 +41,7 @@ class PWMDriverNode:
         self.pwm_center_ns = int(sdk.get_param('pwm_center_ns', 1500000)) # 1.5ms
         self.pwm_max_ns = int(sdk.get_param('pwm_max_ns', 2000000))      # 2ms
         self.pwm_duty_scale = float(sdk.get_param('pwm_duty_scale', 0.8))
+        self.pwm_inverted_polarity = sdk.get_param('pwm_inverted_polarity', True)
 
         # 车辆参数
         self.wheel_base = float(sdk.get_param('wheel_base', 0.5))
@@ -93,7 +94,18 @@ class PWMDriverNode:
         self.sdk.logger.info(f"  Frequency: {self.pwm_frequency}Hz (period={self.pwm_period_ns}ns)")
         self.sdk.logger.info(f"  Pulse range: {self.pwm_min_ns/1e6}ms ~ {self.pwm_max_ns/1e6}ms")
         self.sdk.logger.info(f"  Center: {self.pwm_center_ns/1e6}ms")
+        self.sdk.logger.info(f"  Inverted polarity: {self.pwm_inverted_polarity}")
         self.sdk.logger.info(f"  Wheel base: {self.wheel_base}m")
+
+    def _pulse_to_duty_ns(self, pulse_ns: int) -> int:
+        """将期望的高电平脉宽转换为 sysfs duty_cycle 值
+
+        极性反转模式: duty_cycle = period - pulse (duty_cycle 指定低电平时间)
+        正常模式:     duty_cycle = pulse (duty_cycle 指定高电平时间)
+        """
+        if self.pwm_inverted_polarity:
+            return self.pwm_period_ns - pulse_ns
+        return pulse_ns
 
     def _init_pwm_hardware(self) -> None:
         """初始化PWM硬件（使用 Linux sysfs 接口）"""
@@ -123,8 +135,8 @@ class PWMDriverNode:
             # 配置右轮 PWM
             self._configure_pwm(self.right_pwm_path)
 
-            # 设置初始中位 (停止，极性反转)
-            center_duty = self.pwm_period_ns - self.pwm_center_ns
+            # 设置初始中位 (停止)
+            center_duty = self._pulse_to_duty_ns(self.pwm_center_ns)
             self._write_pwm_ns(center_duty, center_duty)
 
             self.gpio_available = True
@@ -140,8 +152,8 @@ class PWMDriverNode:
         with open(f"{pwm_path}/period", "w") as f:
             f.write(str(self.pwm_period_ns))
 
-        # 先设为中位（极性反转：duty_cycle = period - 1.5ms = 18.5ms）
-        center_duty = self.pwm_period_ns - self.pwm_center_ns
+        # 先设为中位
+        center_duty = self._pulse_to_duty_ns(self.pwm_center_ns)
         with open(f"{pwm_path}/duty_cycle", "w") as f:
             f.write(str(center_duty))
 
@@ -166,18 +178,15 @@ class PWMDriverNode:
             )
 
     def _speed_to_ns(self, speed: float) -> int:
-        """将轮速 (m/s) 转换为 PWM 脉宽 (ns)
+        """将轮速 (m/s) 转换为 sysfs duty_cycle 值 (ns)
 
-        PWM极性反转：duty_cycle 指定低电平时间，而非高电平时间
-        因此需要用 period - expected_pulse
-
-        映射关系：
-        - speed = 0 → 1.5ms 高电平 → duty_cycle = 20ms - 1.5ms = 18.5ms
-        - speed = max → 2ms 高电平 → duty_cycle = 20ms - 2ms = 18ms
-        - speed = -max → 1ms 高电平 → duty_cycle = 20ms - 1ms = 19ms
+        映射关系（高电平脉宽）：
+        - speed = 0 → 1.5ms
+        - speed = max → 1.5ms + output_delta
+        - speed = -max → 1.5ms - output_delta
         """
         if self.max_linear_speed == 0:
-            return self.pwm_period_ns - self.pwm_center_ns
+            return self._pulse_to_duty_ns(self.pwm_center_ns)
 
         # 规范化速度 (-1 到 1)
         ratio = speed / self.max_linear_speed
@@ -187,12 +196,12 @@ class PWMDriverNode:
         expected_ns = self.pwm_center_ns + int(ratio * self.pwm_output_delta)
         expected_ns = max(self.pwm_min_ns, min(self.pwm_max_ns, expected_ns))
 
-        # 极性反转：duty_cycle = period - 高电平时间
-        return self.pwm_period_ns - expected_ns
+        # 转换为 sysfs duty_cycle
+        return self._pulse_to_duty_ns(expected_ns)
 
     def _stop_motors(self) -> None:
-        """停止电机（输出中位PWM，极性反转）"""
-        center_duty = self.pwm_period_ns - self.pwm_center_ns
+        """停止电机（输出中位PWM）"""
+        center_duty = self._pulse_to_duty_ns(self.pwm_center_ns)
         self._write_pwm_ns(center_duty, center_duty)
         self.sdk.logger.info("Motors stopped (center PWM)")
 
@@ -278,8 +287,8 @@ class PWMDriverNode:
                                 f"Command timeout ({self.command_timeout}s), motors stopped"
                             )
 
-                # 控制循环频率（100Hz）
-                time.sleep(0.01)
+                # 控制循环频率（200Hz）
+                time.sleep(0.005)
 
         except KeyboardInterrupt:
             self.sdk.logger.info("PWM Driver shutting down (Ctrl+C)")

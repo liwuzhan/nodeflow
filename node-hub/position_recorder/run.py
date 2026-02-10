@@ -53,6 +53,7 @@ class PositionRecorderNode:
         self.current_rtk_data = None
         self.recording_points = []
         self.is_recording = False
+        self.auto_record_enabled = False
         self.record_start_time = None
         self.last_auto_record_time = 0
         self.record_count = 0
@@ -117,6 +118,9 @@ class PositionRecorderNode:
 
     def add_point(self) -> dict:
         """手动添加当前点"""
+        if not self.is_recording:
+            return {'success': False, 'error': '请先点击"开始记录"'}
+
         if not atom.validate_rtk_data(self.current_rtk_data):
             return {'success': False, 'error': '当前RTK数据无效'}
 
@@ -129,7 +133,7 @@ class PositionRecorderNode:
 
     def toggle_auto_record(self, enabled: bool) -> dict:
         """切换自动记录模式"""
-        # auto_record_enabled 在 Web 服务器中管理
+        self.auto_record_enabled = enabled
         self.sdk.logger.info(f"自动记录: {'启用' if enabled else '禁用'}")
         return {'success': True, 'auto_record_enabled': enabled}
 
@@ -216,7 +220,7 @@ class PositionRecorderNode:
                 self.current_rtk_data = rtk_data
 
                 # 自动记录模式
-                if self.is_recording:
+                if self.is_recording and self.auto_record_enabled:
                     current_time = time.time()
                     if current_time - self.last_auto_record_time >= self.auto_record_interval:
                         index = len(self.recording_points) + 1
