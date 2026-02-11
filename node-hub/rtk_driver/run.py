@@ -46,6 +46,12 @@ class RTKDriverNode:
         self.enable_raw_log = self.sdk.get_param("enable_raw_log", False)
         self.raw_log_path = self.sdk.get_param("raw_log_path", "/tmp/rtk_raw.log")
 
+        # 天线安装校准参数
+        self.antenna_offset_x = self.sdk.get_param("antenna_offset_x", 0.0)
+        self.antenna_offset_y = self.sdk.get_param("antenna_offset_y", 0.0)
+        self.heading_offset_deg = self.sdk.get_param("heading_offset_deg", 0.0)
+        self.heading_offset_rad = math.radians(self.heading_offset_deg)
+
         # 创建输出端口
         self.output_port = self.sdk.create_output_port("rtk_fix")
 
@@ -158,6 +164,9 @@ class RTKDriverNode:
         # 应用平滑滤波（如果启用）
         if self.enable_smoothing and 'lat' in data and 'lon' in data:
             data = self._apply_smoothing(data)
+
+        # 应用天线安装偏移补偿
+        data = self._apply_antenna_calibration(data)
 
         # 构造输出数据包
         output = self._build_output_packet(data)
@@ -295,6 +304,44 @@ class RTKDriverNode:
         data['lat'] = self.smoothed_lat
         data['lon'] = self.smoothed_lon
         data['alt'] = self.smoothed_alt
+
+        return data
+
+    def _apply_antenna_calibration(self, data: dict) -> dict:
+        """
+        应用天线安装偏移补偿
+
+        将天线位置/航向校正到车体中心：
+        1. heading 校正：减去航向安装偏移
+        2. 位置校正：根据校正后的 heading，将天线坐标平移到车体中心
+
+        Args:
+            data: 包含 lat/lon/heading 的数据字典
+
+        Returns:
+            校正后的数据
+        """
+        METERS_PER_DEG_LAT = 111320.0
+
+        # 航向校正
+        if self.heading_offset_rad != 0.0 and 'heading' in data:
+            data['heading'] = data['heading'] - self.heading_offset_rad
+
+        # 位置校正
+        if (self.antenna_offset_x != 0.0 or self.antenna_offset_y != 0.0) \
+                and 'lat' in data and 'lon' in data and 'heading' in data:
+            heading = data['heading']
+            lat_rad = math.radians(data['lat'])
+
+            # 车体坐标系(前x右y) → ENU坐标系(东x北y) 的旋转
+            dx_enu = self.antenna_offset_x * math.cos(heading) \
+                - self.antenna_offset_y * math.sin(heading)
+            dy_enu = self.antenna_offset_x * math.sin(heading) \
+                + self.antenna_offset_y * math.cos(heading)
+
+            # 天线偏移取反：天线在前方 → 车体中心在天线后方
+            data['lon'] = data['lon'] - dx_enu / (METERS_PER_DEG_LAT * math.cos(lat_rad))
+            data['lat'] = data['lat'] - dy_enu / METERS_PER_DEG_LAT
 
         return data
 

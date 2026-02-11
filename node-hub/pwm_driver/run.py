@@ -48,6 +48,12 @@ class PWMDriverNode:
         self.max_linear_speed = float(sdk.get_param('max_linear_speed', 2.0))
         self.max_angular_speed = float(sdk.get_param('max_angular_speed', 1.0))
 
+        # 电机校准参数
+        self.left_speed_scale = float(sdk.get_param('left_speed_scale', 1.0))
+        self.right_speed_scale = float(sdk.get_param('right_speed_scale', 1.0))
+        self.angular_velocity_bias = float(sdk.get_param('angular_velocity_bias', 0.0))
+        self.pwm_deadzone_ns = int(sdk.get_param('pwm_deadzone_ns', 0))
+
         # 安全参数
         self.enable_safety_check = sdk.get_param('enable_safety_check', True)
         self.emergency_stop = sdk.get_param('emergency_stop', False)
@@ -181,19 +187,26 @@ class PWMDriverNode:
         """将轮速 (m/s) 转换为 sysfs duty_cycle 值 (ns)
 
         映射关系（高电平脉宽）：
-        - speed = 0 → 1.5ms
-        - speed = max → 1.5ms + output_delta
-        - speed = -max → 1.5ms - output_delta
+        - speed = 0 → center_ns
+        - speed > 0 → center_ns + deadzone ~ center_ns + output_delta
+        - speed < 0 → center_ns - output_delta ~ center_ns - deadzone
         """
-        if self.max_linear_speed == 0:
+        if self.max_linear_speed == 0 or speed == 0.0:
             return self._pulse_to_duty_ns(self.pwm_center_ns)
 
         # 规范化速度 (-1 到 1)
         ratio = speed / self.max_linear_speed
         ratio = max(-1.0, min(1.0, ratio))
 
-        # 计算期望的高电平时间
-        expected_ns = self.pwm_center_ns + int(ratio * self.pwm_output_delta)
+        # 有效输出范围 = output_delta - deadzone
+        effective_range = self.pwm_output_delta - self.pwm_deadzone_ns
+        if effective_range <= 0:
+            effective_range = self.pwm_output_delta
+
+        # 计算期望的高电平时间（跳过死区）
+        sign = 1 if ratio > 0 else -1
+        expected_ns = self.pwm_center_ns + sign * self.pwm_deadzone_ns \
+            + int(ratio * effective_range)
         expected_ns = max(self.pwm_min_ns, min(self.pwm_max_ns, expected_ns))
 
         # 转换为 sysfs duty_cycle
@@ -231,6 +244,9 @@ class PWMDriverNode:
                     w_angular = velocity_data.get('angular_velocity', 0.0)
                     cmd_timestamp = velocity_data.get('timestamp', time.time())
 
+                    # 应用角速度偏置校准
+                    w_angular += self.angular_velocity_bias
+
                     # 安全检查：限制速度范围
                     if self.enable_safety_check:
                         v_linear = max(
@@ -246,6 +262,10 @@ class PWMDriverNode:
                     v_left, v_right = self.kinematics.velocity_to_wheel_speeds(
                         v_linear, w_angular
                     )
+
+                    # 应用左右轮速度缩放校准
+                    v_left *= self.left_speed_scale
+                    v_right *= self.right_speed_scale
 
                     # 轮速 → PWM 脉宽 (ns)
                     left_ns = self._speed_to_ns(v_left)

@@ -97,6 +97,27 @@ params:
     default: true
     description: "PWM极性反转。true: duty_cycle为低电平时间（香橙派默认）；false: duty_cycle为高电平时间"
 
+  # ========== 电机校准参数 ==========
+  left_speed_scale:
+    type: float
+    default: 1.0
+    description: "左轮速度缩放 (0.5~1.5)，补偿左右电机差异"
+
+  right_speed_scale:
+    type: float
+    default: 1.0
+    description: "右轮速度缩放 (0.5~1.5)，补偿左右电机差异"
+
+  angular_velocity_bias:
+    type: float
+    default: 0.0
+    description: "角速度偏置 (rad/s)，补偿直线行驶时的偏移。车辆右偏设正值"
+
+  pwm_deadzone_ns:
+    type: int
+    default: 0
+    description: "ESC死区宽度 (ns，单侧)。非零速度时PWM从 center±deadzone 开始输出，跳过死区"
+
   # ========== 安全参数 ==========
   enable_safety_check:
     type: bool

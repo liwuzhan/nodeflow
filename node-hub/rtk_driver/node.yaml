@@ -100,6 +100,22 @@ params:
     default: "dual_antenna"
     description: "航向来源（dual_antenna=双天线, velocity=速度推算, external=外部IMU）"
 
+  # 天线安装校准
+  antenna_offset_x:
+    type: float
+    default: 0.0
+    description: "定位天线到车体中心的前向偏移（米），正值=天线在车体前方"
+
+  antenna_offset_y:
+    type: float
+    default: 0.0
+    description: "定位天线到车体中心的右向偏移（米），正值=天线在车体右侧"
+
+  heading_offset_deg:
+    type: float
+    default: 0.0
+    description: "双天线航向偏移（度，北基准顺时针）。横装时设90或-90"
+
   # 调试选项
   enable_raw_log:
     type: bool
