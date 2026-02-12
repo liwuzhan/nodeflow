@@ -1,0 +1,72 @@
+# NodeFlow Web遥控 + PWM驱动
+#
+# 最简遥控场景：通过Web界面控制电机
+#
+# 数据流：
+#   Web遥控界面 (键盘/虚拟手柄)
+#     ↓ [velocity_cmd]
+#   [web_teleop] ──→ [pwm_driver]
+#     ↑ [pwm_status]          ↓
+#     └───── 状态反馈 ─────────┘
+#
+# 启动:
+#   python3 -m runtime.main examples/web_pwm_teleop.yaml
+#
+# Web界面:
+#   http://localhost:9873
+#   键盘 W/S 前进后退, A/D 左右转, 空格 停止
+
+graph_id: web_pwm_teleop
+graph_version: 1.0
+node_hub_path: ./node-hub
+
+nodes:
+  - id: web_teleop
+    package: web_teleop
+    description: "Web遥控界面"
+    params:
+      http_host: 0.0.0.0
+      http_port: 9873
+      max_linear_speed: 1.0
+      max_angular_speed: 4.0
+      continuous_output: true
+      output_rate: 10.0
+      command_timeout: 5.0
+
+  - id: pwm_driver
+    package: pwm_driver
+    description: "PWM电机驱动"
+    params:
+      # PWM硬件
+      pwm_frequency: 50.0
+      left_pwmchip: pwmchip0
+      left_pwm_channel: 0
+      right_pwmchip: pwmchip4
+      right_pwm_channel: 0
+
+      # RC脉宽
+      pwm_min_ns: 1000000
+      pwm_center_ns: 1500000
+      pwm_max_ns: 2000000
+      pwm_duty_scale: 1.0
+
+      # 车辆参数
+      wheel_base: 0.5
+      max_linear_speed: 1.0
+      max_angular_speed: 4.0           # 2 × max_linear / wheel_base，确保纯转向可拉满PWM
+
+      # 安全
+      enable_safety_check: true
+      emergency_stop: false
+      command_timeout: 0.5
+
+      # 调试 - 初次测试建议先开dry_run
+      enable_verbose_log: false
+      dry_run_mode: false
+
+edges:
+  # Web遥控 → PWM驱动
+  - from: web_teleop.velocity_cmd
+    to: pwm_driver.velocity_cmd
+    description: "速度命令（线速度 + 角速度）"
+

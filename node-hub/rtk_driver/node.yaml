@@ -75,8 +75,8 @@ params:
   # RTK质量控制
   min_rtk_quality:
     type: int
-    default: 4
-    description: "最低RTK质量要求（4=固定解, 5=浮点解）"
+    default: 3
+    description: "最低RTK质量要求（0=无效, 1=单点, 2=浮点解, 3=固定解）"
 
   min_satellites:
     type: int

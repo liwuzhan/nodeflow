@@ -322,20 +322,7 @@ class PWMDriverNode:
     def cleanup(self) -> None:
         """清理资源"""
         try:
-            # 停止电机
             self._stop_motors()
-
-            # 禁用 PWM 通道
-            if self.gpio_available:
-                try:
-                    with open(f"{self.left_pwm_path}/enable", "w") as f:
-                        f.write("0")
-                    with open(f"{self.right_pwm_path}/enable", "w") as f:
-                        f.write("0")
-                    self.sdk.logger.info("PWM channels disabled")
-                except Exception as e:
-                    self.sdk.logger.warning(f"Failed to disable PWM: {e}")
-
             self.sdk.logger.info("PWM Driver cleanup complete")
         except Exception as e:
             self.sdk.logger.error(f"Error during cleanup: {e}")

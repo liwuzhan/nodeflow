@@ -111,18 +111,15 @@ class NMEAParser:
             neu_ve = float(parts[19].split('*')[0]) if len(parts) > 19 else vel_east
             neu_vu = float(parts[20].split('*')[0]) if len(parts) > 20 else vel_up
 
-            # 转换航向到数学坐标系（北=90度 -> 东=0度，逆时针为正）
-            heading_math_deg = 90.0 - heading_deg
-            if heading_math_deg < 0:
-                heading_math_deg += 360.0
-            heading_rad = math.radians(heading_math_deg)
+            # 航向角保持地理坐标系（北=0°, CW正, [0,360)），不在此处转换
+            heading_geo_deg = heading_deg % 360.0
 
             return {
                 'timestamp': timestamp,
                 'lat': lat,
                 'lon': lon,
                 'alt': alt,
-                'heading': heading_rad,
+                'heading': heading_geo_deg,
                 'pitch': math.radians(pitch_deg),
                 'roll': math.radians(roll_deg),
                 'vel_east': vel_east,
@@ -260,20 +257,15 @@ class NMEAParser:
             speed_knots = float(parts[7]) if parts[7] else 0.0
             ground_speed = speed_knots * 0.514444
 
-            # 地面航向（度，北=0，顺时针）
+            # 地面航向（度，北=0，顺时针）— 保持地理坐标系
             heading_north_deg = float(parts[8]) if parts[8] else 0.0
-
-            # 转换到数学坐标系（东=0，逆时针）
-            heading_math_deg = 90.0 - heading_north_deg
-            if heading_math_deg < 0:
-                heading_math_deg += 360.0
-            ground_track_rad = math.radians(heading_math_deg)
+            ground_track_deg = heading_north_deg % 360.0
 
             # 优先使用双天线航向（由GPHDT/GPTHS设置），否则用地面航迹
             if self.last_heading is not None:
-                heading_rad = self.last_heading
+                heading_geo_deg = self.last_heading
             else:
-                heading_rad = ground_track_rad
+                heading_geo_deg = ground_track_deg
 
             # 提取 mode indicator（NMEA 4.1+，第12个字段）
             # A=自主, D=差分, R=RTK固定, F=RTK浮点, N=无效
@@ -284,7 +276,7 @@ class NMEAParser:
                 'timestamp': timestamp,
                 'lat': lat,
                 'lon': lon,
-                'heading': heading_rad,
+                'heading': heading_geo_deg,
                 'ground_speed': ground_speed,
                 'rtk_quality': rtk_quality,
                 'message_type': 'GPRMC'
@@ -312,7 +304,7 @@ class NMEAParser:
             if len(parts) < 3:
                 return None
 
-            # 航向（度，北=0）
+            # 航向（度，北=0）— 保持地理坐标系
             heading_north_deg = float(parts[1])
 
             # 状态
@@ -320,17 +312,13 @@ class NMEAParser:
             if status != 'A':
                 return None
 
-            # 转换到数学坐标系
-            heading_math_deg = 90.0 - heading_north_deg
-            if heading_math_deg < 0:
-                heading_math_deg += 360.0
-            heading_rad = math.radians(heading_math_deg)
+            heading_geo_deg = heading_north_deg % 360.0
 
-            # 保存航向
-            self.last_heading = heading_rad
+            # 保存航向（地理度数）
+            self.last_heading = heading_geo_deg
 
             return {
-                'heading': heading_rad,
+                'heading': heading_geo_deg,
                 'message_type': 'GPTHS'
             }
 
@@ -362,17 +350,13 @@ class NMEAParser:
 
             heading_north_deg = float(parts[1])
 
-            # 转换到数学坐标系
-            heading_math_deg = 90.0 - heading_north_deg
-            if heading_math_deg < 0:
-                heading_math_deg += 360.0
-            heading_rad = math.radians(heading_math_deg)
+            heading_geo_deg = heading_north_deg % 360.0
 
-            # 保存航向
-            self.last_heading = heading_rad
+            # 保存航向（地理度数）
+            self.last_heading = heading_geo_deg
 
             return {
-                'heading': heading_rad,
+                'heading': heading_geo_deg,
                 'message_type': 'GPHDT'
             }
 

@@ -65,7 +65,7 @@ nodes:
       use_network: false              # false=串口连接, true=网络连接
 
       # ========== 串口连接参数 ==========
-      serial_port: /dev/ttyUSB0       # RTK设备串口（Linux/Mac）
+      serial_port: /dev/ttyACM3       # RTK设备串口（Linux/Mac）
                                        # Windows示例: COM3
       serial_baudrate: 115200          # 波特率（常见：9600, 115200, 230400）
       serial_timeout: 1.0              # 读取超时（秒）
@@ -76,7 +76,7 @@ nodes:
       network_protocol: tcp            # 协议类型（tcp/udp）
 
       # ========== NMEA消息配置 ==========
-      nmea_message: KSXT               # NMEA消息类型
+      nmea_message: GPRMC              # NMEA消息类型
                                        # KSXT: 司南导航（含位置+航向）
                                        # GPGGA: 标准GPS定位
                                        # GPRMC: 推荐最小GPS数据
@@ -85,9 +85,9 @@ nodes:
       output_frequency: 20             # 输出频率（Hz）1-20Hz可选
 
       # ========== RTK质量要求 ==========
-      min_rtk_quality: 4               # 最小RTK质量要求
-                                       # 0=无效, 1=单点, 2=浮点解, 4=固定解
-                                       # 建议使用4（固定解）保证精度
+      min_rtk_quality: 3               # 最小RTK质量要求
+                                       # 0=无效, 1=单点, 2=浮点解, 3=固定解
+                                       # 建议使用3（固定解）保证精度
       min_satellites: 10               # 最小卫星数要求
 
       # ========== 数据平滑（可选）==========
@@ -142,11 +142,9 @@ nodes:
                                        # - 室内测试：0.5 m/s
                                        # - 正常行驶：1.0 m/s
                                        # - 高速场景：2.0 m/s
-      max_angular_speed: 1.0           # 最大角速度（rad/s）
-                                       # 建议值：
-                                       # - 缓慢转向：0.5 rad/s
-                                       # - 正常转向：1.0 rad/s
-                                       # - 快速转向：2.0 rad/s
+      max_angular_speed: 4.0           # 最大角速度（rad/s）
+                                       # = 2 × max_linear / wheel_base
+                                       # 确保履带车原地转向可拉满PWM
 
       # ========== 输出控制 ==========
       continuous_output: true          # 是否持续输出速度命令
@@ -173,21 +171,20 @@ nodes:
       pwm_frequency: 50.0              # PWM频率（Hz）RC标准50Hz
       left_pwmchip: pwmchip0           # 左轮PWM芯片
       left_pwm_channel: 0              # 左轮PWM通道
-      right_pwmchip: pwmchip1          # 右轮PWM芯片
+      right_pwmchip: pwmchip4          # 右轮PWM芯片（PWM14 = febf0020 = pwmchip4）
       right_pwm_channel: 0             # 右轮PWM通道
 
       # ========== RC PWM脉宽参数 ==========
       pwm_min_ns: 1000000              # 最小脉宽（1ms = 1000000ns）
       pwm_center_ns: 1500000           # 中位脉宽（1.5ms = 1500000ns，停止）
       pwm_max_ns: 2000000              # 最大脉宽（2ms = 2000000ns）
-      pwm_duty_scale: 0.8              # PWM输出缩放比例（0-1）
-                                       # 用于限制最大输出，建议从0.5开始测试
+      pwm_duty_scale: 1.0              # PWM输出缩放比例（0-1），1.0=全行程
 
       # ========== 车辆参数 ==========
       wheel_base: 0.5                  # 轮距（米）
                                        # 根据实际车辆测量
       max_linear_speed: 1.0            # 最大线速度（m/s）
-      max_angular_speed: 1.0           # 最大角速度（rad/s）
+      max_angular_speed: 4.0           # 最大角速度（rad/s）= 2 × max_linear / wheel_base
 
       # ========== 安全参数 ==========
       enable_safety_check: true        # 启用安全检查（速度限幅）

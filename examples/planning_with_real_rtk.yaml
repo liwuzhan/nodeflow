@@ -33,17 +33,17 @@ nodes:
     description: "真实高精度RTK-GPS传感器驱动"
     params:
       # 串口配置
-      serial_port: "/dev/ttyUSB0"       # 根据实际设备调整
+      serial_port: "/dev/ttyACM3"       # UM982 RTK
       serial_baudrate: 115200
       serial_timeout: 1.0
       use_network: false
 
       # NMEA消息配置
-      nmea_message: "KSXT"              # 根据实际设备调整
+      nmea_message: "GPRMC"              # 设备输出 GNRMC+GNGGA+GNTHS
       output_frequency: 20              # 20Hz匹配导航系统
 
       # RTK质量控制
-      min_rtk_quality: 4                # 要求固定解（真机作业）
+      min_rtk_quality: 3                # 3=FIXED（最高），4会过滤掉所有数据
       min_satellites: 10
 
       # 数据处理
@@ -127,19 +127,19 @@ nodes:
       pwm_frequency: 50.0
       left_pwmchip: pwmchip0
       left_pwm_channel: 0
-      right_pwmchip: pwmchip1
+      right_pwmchip: pwmchip4
       right_pwm_channel: 0
 
       # PWM脉宽范围（纳秒）
       pwm_min_ns: 1000000
       pwm_center_ns: 1500000
       pwm_max_ns: 2000000
-      pwm_duty_scale: 0.5               # 首次测试建议降低
+      pwm_duty_scale: 1.0               # 全行程
 
       # 车辆参数
       wheel_base: 0.5                   # 轮距（米）
       max_linear_speed: 2.0
-      max_angular_speed: 1.0
+      max_angular_speed: 4.0            # 2 × max_linear / wheel_base（按1.0算）
 
       # 安全配置
       enable_safety_check: true

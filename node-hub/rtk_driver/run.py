@@ -314,8 +314,10 @@ class RTKDriverNode:
         应用天线安装偏移补偿
 
         将天线位置/航向校正到车体中心：
-        1. heading 校正：减去航向安装偏移
+        1. heading 校正：减去航向安装偏移（度）
         2. 位置校正：根据校正后的 heading，将天线坐标平移到车体中心
+
+        注意：heading 为地理坐标系（北=0°, CW正, [0,360)）
 
         Args:
             data: 包含 lat/lon/heading 的数据字典
@@ -325,21 +327,22 @@ class RTKDriverNode:
         """
         METERS_PER_DEG_LAT = 111320.0
 
-        # 航向校正
-        if self.heading_offset_rad != 0.0 and 'heading' in data:
-            data['heading'] = data['heading'] - self.heading_offset_rad
+        # 航向校正（度数相减）
+        if self.heading_offset_deg != 0.0 and 'heading' in data:
+            data['heading'] = (data['heading'] - self.heading_offset_deg) % 360.0
 
         # 位置校正
         if (self.antenna_offset_x != 0.0 or self.antenna_offset_y != 0.0) \
                 and 'lat' in data and 'lon' in data and 'heading' in data:
-            heading = data['heading']
+            # 地理度数转数学弧度用于三角运算
+            heading_rad = math.radians(90.0 - data['heading'])
             lat_rad = math.radians(data['lat'])
 
             # 车体坐标系(前x右y) → ENU坐标系(东x北y) 的旋转
-            dx_enu = self.antenna_offset_x * math.cos(heading) \
-                - self.antenna_offset_y * math.sin(heading)
-            dy_enu = self.antenna_offset_x * math.sin(heading) \
-                + self.antenna_offset_y * math.cos(heading)
+            dx_enu = self.antenna_offset_x * math.cos(heading_rad) \
+                - self.antenna_offset_y * math.sin(heading_rad)
+            dy_enu = self.antenna_offset_x * math.sin(heading_rad) \
+                + self.antenna_offset_y * math.cos(heading_rad)
 
             # 天线偏移取反：天线在前方 → 车体中心在天线后方
             data['lon'] = data['lon'] - dx_enu / (METERS_PER_DEG_LAT * math.cos(lat_rad))

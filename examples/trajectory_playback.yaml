@@ -53,13 +53,13 @@ nodes:
     package: rtk_driver
     description: "从RTK GPS设备读取高精度定位数据"
     params:
-      serial_port: /dev/ttyUSB0
+      serial_port: /dev/ttyACM3
       serial_baudrate: 115200
       serial_timeout: 1.0
       use_network: false
-      nmea_message: KSXT
+      nmea_message: GPRMC
       output_frequency: 20
-      min_rtk_quality: 4
+      min_rtk_quality: 3               # 3=FIXED（最高），设4会过滤掉所有数据
       min_satellites: 10
       enable_smoothing: false
 
@@ -108,12 +108,12 @@ nodes:
     package: track_controller
     description: "履带控制，支持原地转向"
     params:
-      max_speed: 1.0                   # 回放时建议降低速度
+      max_speed: 0.5                   # 首次测试降低速度
       min_speed: 0.0
       heading_p_gain: 2.0
       max_angular_velocity: 1.0
       pivot_threshold_deg: 20.0
-      decel_start_distance: 3.0
+      decel_start_distance: 5.0        # 点间距大，提前减速
       final_stop_distance: 0.5
 
   # ┌─────────────────────────────────────────────────────────────────────┐
@@ -126,15 +126,15 @@ nodes:
       pwm_frequency: 50.0
       left_pwmchip: pwmchip0
       left_pwm_channel: 0
-      right_pwmchip: pwmchip1
+      right_pwmchip: pwmchip4
       right_pwm_channel: 0
       pwm_min_ns: 1000000
       pwm_center_ns: 1500000
       pwm_max_ns: 2000000
-      pwm_duty_scale: 0.8
+      pwm_duty_scale: 1.0
       wheel_base: 0.5
       max_linear_speed: 1.0
-      max_angular_speed: 1.0
+      max_angular_speed: 4.0           # 2 × max_linear / wheel_base
       enable_safety_check: true
       command_timeout: 0.5
       dry_run_mode: false              # 首次测试时建议设为true

@@ -46,8 +46,8 @@ params:
 
   right_pwmchip:
     type: str
-    default: "pwmchip1"
-    description: "右轮PWM芯片 (sysfs路径: /sys/class/pwm/{value})"
+    default: "pwmchip4"
+    description: "右轮PWM芯片 (sysfs路径: /sys/class/pwm/{value})，香橙派5 Ultra的PWM14对应pwmchip4"
 
   right_pwm_channel:
     type: int
