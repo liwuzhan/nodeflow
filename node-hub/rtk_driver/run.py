@@ -38,7 +38,7 @@ class RTKDriverNode:
         self.network_protocol = self.sdk.get_param("network_protocol", "tcp")
         self.nmea_message = self.sdk.get_param("nmea_message", "KSXT")
         self.output_frequency = self.sdk.get_param("output_frequency", 20)
-        self.min_rtk_quality = self.sdk.get_param("min_rtk_quality", 4)
+        self.min_rtk_quality = self.sdk.get_param("min_rtk_quality", 3)
         self.min_satellites = self.sdk.get_param("min_satellites", 10)
         self.enable_smoothing = self.sdk.get_param("enable_smoothing", False)
         self.smoothing_alpha = self.sdk.get_param("smoothing_alpha", 0.3)
@@ -208,20 +208,25 @@ class RTKDriverNode:
         """配置RTK设备输出"""
         self.logger.info("Configuring RTK device output...")
 
-        # 构造配置命令
+        # 构造配置命令（设备命令格式：<消息名> <频率Hz>）
         commands = []
 
-        # 停止所有输出
-        commands.append(f"UNLOG {self.nmea_message}")
+        # 注意: 不能发送 UNLOG/UNLOGALL，会停掉 GGA/RMC 触发看门狗重启
+        # 只添加或修改输出频率
 
         # 配置主要NMEA消息输出
-        commands.append(f"{self.nmea_message} {self.output_frequency}")
+        period = 1.0 / self.output_frequency  # 转换为周期（秒）
+        commands.append(f"{self.nmea_message} {period}")
 
         # 如果使用GPGGA+GPRMC组合，需要配置两个消息
-        if self.nmea_message == "GPGGA":
-            commands.append(f"GPRMC {self.output_frequency}")
-        elif self.nmea_message == "GPRMC":
-            commands.append(f"GPGGA {self.output_frequency}")
+        if self.nmea_message in ("GPGGA", "GNGGA"):
+            commands.append(f"GPRMC {period}")
+        elif self.nmea_message in ("GPRMC", "GNRMC"):
+            commands.append(f"GPGGA {period}")
+
+        # 双天线航向：额外配置 GPTHS 输出
+        if self.heading_source == "dual_antenna":
+            commands.append(f"GPTHS {period}")
 
         # 发送配置命令
         for cmd in commands:
@@ -230,9 +235,6 @@ class RTKDriverNode:
                 time.sleep(0.1)
             else:
                 self.logger.warning(f"Failed to send command: {cmd}")
-
-        # 保存配置（可选）
-        # self.device.write("SAVECONFIG")
 
         self.logger.info("Device configuration complete")
 
@@ -261,9 +263,9 @@ class RTKDriverNode:
                 self.logger.debug("RTK float solution (waiting for fixed)")
             return False
 
-        # 检查卫星数量
+        # 检查卫星数量（RMC不含卫星数，跳过）
         num_sats = data.get('num_satellites', 0)
-        if num_sats < self.min_satellites:
+        if num_sats > 0 and num_sats < self.min_satellites:
             self.logger.debug(f"Insufficient satellites: {num_sats}/{self.min_satellites}")
             return False
 

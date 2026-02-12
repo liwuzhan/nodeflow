@@ -267,10 +267,18 @@ class NMEAParser:
             heading_math_deg = 90.0 - heading_north_deg
             if heading_math_deg < 0:
                 heading_math_deg += 360.0
-            heading_rad = math.radians(heading_math_deg)
+            ground_track_rad = math.radians(heading_math_deg)
 
-            # 保存航向供GGA使用
-            self.last_heading = heading_rad
+            # 优先使用双天线航向（由GPHDT/GPTHS设置），否则用地面航迹
+            if self.last_heading is not None:
+                heading_rad = self.last_heading
+            else:
+                heading_rad = ground_track_rad
+
+            # 提取 mode indicator（NMEA 4.1+，第12个字段）
+            # A=自主, D=差分, R=RTK固定, F=RTK浮点, N=无效
+            mode = parts[12].split('*')[0] if len(parts) > 12 else 'A'
+            rtk_quality = self._map_rmc_mode(mode)
 
             return {
                 'timestamp': timestamp,
@@ -278,6 +286,7 @@ class NMEAParser:
                 'lon': lon,
                 'heading': heading_rad,
                 'ground_speed': ground_speed,
+                'rtk_quality': rtk_quality,
                 'message_type': 'GPRMC'
             }
 
@@ -295,7 +304,7 @@ class NMEAParser:
         - 航向（度，北=0，顺时针）
         - 状态: A=有效
         """
-        if not sentence.startswith('$GPTHS'):
+        if not (sentence.startswith('$GPTHS') or sentence.startswith('$GNTHS')):
             return None
 
         try:
@@ -328,6 +337,48 @@ class NMEAParser:
         except (ValueError, IndexError):
             return None
 
+    def parse_gphdt(self, sentence: str) -> Optional[Dict]:
+        """
+        解析 $GPHDT 消息（双天线真航向）
+
+        格式示例：
+        $GPHDT,27.8442,T*05
+
+        字段说明：
+        - 航向（度，北=0，顺时针）
+        - T: True heading（真北）
+        """
+        if not (sentence.startswith('$GPHDT') or sentence.startswith('$GNHDT')):
+            return None
+
+        try:
+            parts = sentence.split(',')
+            if len(parts) < 3:
+                return None
+
+            # 航向为空则无效
+            if not parts[1]:
+                return None
+
+            heading_north_deg = float(parts[1])
+
+            # 转换到数学坐标系
+            heading_math_deg = 90.0 - heading_north_deg
+            if heading_math_deg < 0:
+                heading_math_deg += 360.0
+            heading_rad = math.radians(heading_math_deg)
+
+            # 保存航向
+            self.last_heading = heading_rad
+
+            return {
+                'heading': heading_rad,
+                'message_type': 'GPHDT'
+            }
+
+        except (ValueError, IndexError):
+            return None
+
     def parse(self, sentence: str) -> Optional[Dict]:
         """
         自动识别并解析NMEA消息
@@ -355,8 +406,10 @@ class NMEAParser:
             return self.parse_gpgga(sentence)
         elif sentence.startswith('$GPRMC') or sentence.startswith('$GNRMC'):
             return self.parse_gprmc(sentence)
-        elif sentence.startswith('$GPTHS'):
+        elif sentence.startswith('$GPTHS') or sentence.startswith('$GNTHS'):
             return self.parse_gpths(sentence)
+        elif sentence.startswith('$GPHDT') or sentence.startswith('$GNHDT'):
+            return self.parse_gphdt(sentence)
         else:
             return None
 
@@ -440,6 +493,27 @@ class NMEAParser:
 
         except (ValueError, IndexError):
             return 0.0
+
+    @staticmethod
+    def _map_rmc_mode(mode: str) -> int:
+        """
+        将RMC mode indicator映射到统一的RTK质量（0/1/2/3）
+
+        Args:
+            mode: RMC mode字段（A/D/R/F/N等）
+
+        Returns:
+            0=无效, 1=单点, 2=浮点, 3=固定
+        """
+        mapping = {
+            'N': 0,  # 无效
+            'A': 1,  # 自主定位（单点）
+            'D': 1,  # 差分
+            'E': 1,  # 估算
+            'F': 2,  # RTK浮点解
+            'R': 3,  # RTK固定解
+        }
+        return mapping.get(mode, 0)
 
     @staticmethod
     def _map_gga_quality(gga_quality: int) -> int:
