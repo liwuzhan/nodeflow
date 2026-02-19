@@ -101,7 +101,10 @@ class LogEntry:
 class LogAggregator:
     """日志聚合器"""
 
-    def __init__(self, log_dir: str = "/tmp/nodeflow_logs"):
+    def __init__(self, log_dir: str = None):
+        if log_dir is None:
+            from runtime.utils.constants import LOGS_DIR
+            log_dir = LOGS_DIR
         self.log_dir = log_dir
 
     def read_log_files(self) -> Iterator[LogEntry]:
@@ -269,8 +272,8 @@ def main():
     # 日志选项
     parser.add_argument(
         '--log-dir',
-        default='/tmp/nodeflow_logs',
-        help='日志目录（默认 /tmp/nodeflow_logs）'
+        default=None,
+        help='日志目录（默认 /tmp/nodeflow/logs）'
     )
 
     # 过滤选项

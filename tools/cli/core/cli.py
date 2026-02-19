@@ -378,8 +378,8 @@ def create_parser() -> argparse.ArgumentParser:
     )
     logs_parser.add_argument(
         '--log-dir',
-        default='/tmp/nodeflow_logs',
-        help='日志目录（默认 /tmp/nodeflow_logs）'
+        default=None,
+        help='日志目录（默认 /tmp/nodeflow/logs）'
     )
     logs_parser.add_argument(
         '-n', '--node',

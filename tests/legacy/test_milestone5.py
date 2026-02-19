@@ -15,7 +15,6 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from sdk.param_parser import ParamParser
 from sdk.port import OutputPort, InputPort
-from sdk.latest_value_reader import LatestValueReader
 from sdk.nodeflow_sdk import NodeFlowSDK
 
 

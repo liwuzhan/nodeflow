@@ -158,7 +158,8 @@ class NodeFlowSDK:
             raise ValueError("NODE_ID environment variable not set")
 
         # 设置结构化日志（包括JSON文件 + 控制台输出）
-        log_dir = os.getenv('NODEFLOW_LOG_DIR', '/tmp/nodeflow_logs')
+        from runtime.utils.constants import LOGS_DIR
+        log_dir = os.getenv('NODEFLOW_LOG_DIR', LOGS_DIR)
         self.logger = StructuredLogger(
             node_id=self.node_id,
             log_level=log_level,

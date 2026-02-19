@@ -17,6 +17,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from runtime.utils.constants import LOGS_DIR
+
 
 class JSONFileHandler(logging.Handler):
     """
@@ -108,7 +110,7 @@ class StructuredLogger:
         self,
         node_id: str,
         log_level: str = "INFO",
-        log_dir: str = "/tmp/nodeflow_logs",
+        log_dir: str = LOGS_DIR,
         enable_json: bool = True,
         enable_console: bool = True
     ):
@@ -118,7 +120,7 @@ class StructuredLogger:
         参数:
         - node_id: 节点ID
         - log_level: 日志级别（DEBUG/INFO/WARNING/ERROR/CRITICAL）
-        - log_dir: 日志目录（默认 /tmp/nodeflow_logs）
+        - log_dir: 日志目录（默认 LOGS_DIR）
         - enable_json: 是否启用JSON文件输出
         - enable_console: 是否启用控制台输出
         """
@@ -255,12 +257,12 @@ def create_logger(
     参数:
     - node_id: 节点ID
     - log_level: 日志级别
-    - log_dir: 日志目录（可选，默认使用环境变量或 /tmp/nodeflow_logs）
+    - log_dir: 日志目录（可选，默认使用环境变量或 LOGS_DIR）
 
     返回:
     - StructuredLogger实例
     """
     if log_dir is None:
-        log_dir = os.getenv('NODEFLOW_LOG_DIR', '/tmp/nodeflow_logs')
+        log_dir = os.getenv('NODEFLOW_LOG_DIR', LOGS_DIR)
 
     return StructuredLogger(node_id=node_id, log_level=log_level, log_dir=log_dir)
