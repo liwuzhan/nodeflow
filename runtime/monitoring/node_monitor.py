@@ -37,6 +37,9 @@ class NodeMonitor:
         self.start_times: Dict[str, float] = {}
         self.stable_reset_seconds: float = 300.0
 
+        # 待重启队列：{node_id: scheduled_restart_time}
+        self._pending_restarts: Dict[str, float] = {}
+
     def start_monitoring(
         self,
         processes: Dict[str, subprocess.Popen],
@@ -79,6 +82,8 @@ class NodeMonitor:
         check_interval = 1.0  # 每秒检查一次
 
         while self.running:
+            now = time.time()
+
             # 检查所有进程
             crashed_nodes = []
 
@@ -92,19 +97,28 @@ class NodeMonitor:
                     started_at = self.start_times.get(node_id)
                     if started_at:
                         if self.retry_tracker.get_retry_count(node_id) > 0:
-                            if time.time() - started_at >= self.stable_reset_seconds:
+                            if now - started_at >= self.stable_reset_seconds:
                                 self.retry_tracker.reset(node_id)
 
             # 处理崩溃的节点
             for node_id, ret_code in crashed_nodes:
                 self._handle_node_crash(node_id, ret_code)
 
+            # 处理待重启队列中到时间的节点
+            for node_id in list(self._pending_restarts.keys()):
+                if now >= self._pending_restarts[node_id]:
+                    del self._pending_restarts[node_id]
+                    self._execute_restart(node_id)
+
             # 休眠
             time.sleep(check_interval)
 
     def _handle_node_crash(self, node_id: str, exit_code: int):
         """
-        处理节点崩溃
+        处理节点崩溃（非阻塞）
+
+        不再在监控线程中 sleep 等待退避时间，而是将重启计划加入待重启队列，
+        由监控循环在后续轮询中检查并执行。
 
         参数：
         - node_id: 节点ID
@@ -137,13 +151,28 @@ class NodeMonitor:
             )
             return
 
-        # 等待退避时间
+        # 计算重启时间并加入待重启队列（非阻塞）
         wait_time = self.retry_tracker.should_wait_before_retry(node_id)
+        scheduled_time = time.time() + wait_time
+        self._pending_restarts[node_id] = scheduled_time
         if wait_time > 0:
-            logger.info(f"Waiting {wait_time:.2f}s before restarting node '{node_id}'")
-            time.sleep(wait_time)
+            logger.info(
+                f"Scheduled restart for node '{node_id}' in {wait_time:.2f}s "
+                f"(attempt {self.retry_tracker.get_retry_count(node_id)})"
+            )
+        else:
+            logger.info(
+                f"Restart for node '{node_id}' scheduled immediately "
+                f"(attempt {self.retry_tracker.get_retry_count(node_id)})"
+            )
 
-        # 重启节点
+    def _execute_restart(self, node_id: str):
+        """
+        执行节点重启
+
+        参数：
+        - node_id: 节点ID
+        """
         if self.restart_callback:
             try:
                 logger.info(

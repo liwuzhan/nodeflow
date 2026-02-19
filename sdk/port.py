@@ -500,6 +500,19 @@ class InputPort:
             # 短暂睡眠后重试
             time.sleep(0.01)
 
+    def is_connected(self) -> bool:
+        """检查是否已连接（buffer 和 socket 均就绪）"""
+        return self.buffer is not None and self.socket is not None
+
+    def get_connection_state(self) -> str:
+        """获取连接状态"""
+        if self.buffer is not None and self.socket is not None:
+            return "connected"
+        elif self.socket is not None:
+            return "connecting"  # socket 连了但 buffer 还没好
+        else:
+            return "disconnected"
+
     def close(self):
         """
         关闭端口

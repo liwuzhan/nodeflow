@@ -466,15 +466,6 @@ class NodeFlowRuntime:
                             data = shutdown_buf.read()
                             if data and data.get("shutdown"):
                                 logger.info("External shutdown request received, initiating graceful shutdown...")
-                                try:
-                                    from shutil import rmtree
-                                    from pathlib import Path
-                                    buf_dir = Path(BUFFERS_DIR)
-                                    if buf_dir.exists():
-                                        rmtree(buf_dir)
-                                        logger.info(f"Cleaned shared buffers at {buf_dir}")
-                                except Exception as e:
-                                    logger.warning(f"Failed to clean buffers: {e}")
                                 self.running = False
                                 break
                         except Exception:

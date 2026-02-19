@@ -102,8 +102,10 @@ class ParentProcessWatchdog:
                     )
 
                     # 父进程已死，节点应该退出
-                    # 使用os._exit()而不是sys.exit()，因为sys.exit()可能被try-except捕获
-                    # os._exit()会立即终止进程，不调用cleanup handlers
+                    # 先触发 atexit 清理回调（包括 SDK 的 __exit__ 和资源释放）
+                    # 再用 os._exit() 终止进程
+                    import atexit
+                    atexit._run_exitfuncs()
                     os._exit(1)
 
                 # 如果ppid发生变化但不是1，记录警告

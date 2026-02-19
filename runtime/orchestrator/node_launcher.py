@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import signal
+import time
 from pathlib import Path
 from typing import Dict, Optional, TextIO, Tuple
 import threading
@@ -147,6 +148,7 @@ class NodeLauncher:
                     if not line:
                         if process.poll() is not None:
                             break
+                        time.sleep(0.05)  # 避免忙等
                         continue
                     level_func(line.rstrip("\n"))
 
