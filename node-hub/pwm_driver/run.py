@@ -33,7 +33,7 @@ class PWMDriverNode:
         self.pwm_frequency = float(sdk.get_param('pwm_frequency', 50.0))
         self.left_pwmchip = sdk.get_param('left_pwmchip', 'pwmchip0')
         self.left_pwm_channel = int(sdk.get_param('left_pwm_channel', 0))
-        self.right_pwmchip = sdk.get_param('right_pwmchip', 'pwmchip1')
+        self.right_pwmchip = sdk.get_param('right_pwmchip', 'pwmchip4')
         self.right_pwm_channel = int(sdk.get_param('right_pwm_channel', 0))
 
         # RC PWM 脉宽参数 (纳秒)
@@ -44,6 +44,7 @@ class PWMDriverNode:
         self.pwm_inverted_polarity = sdk.get_param('pwm_inverted_polarity', True)
 
         # 车辆参数
+        self.drive_mode = sdk.get_param('drive_mode', 'differential')
         self.wheel_base = float(sdk.get_param('wheel_base', 0.5))
         self.max_linear_speed = float(sdk.get_param('max_linear_speed', 2.0))
         self.max_angular_speed = float(sdk.get_param('max_angular_speed', 1.0))
@@ -95,6 +96,7 @@ class PWMDriverNode:
 
         # 日志配置
         self.sdk.logger.info("PWM Driver initialized (sysfs mode)")
+        self.sdk.logger.info(f"  Drive mode: {self.drive_mode}")
         self.sdk.logger.info(f"  Left: {self.left_pwm_path}")
         self.sdk.logger.info(f"  Right: {self.right_pwm_path}")
         self.sdk.logger.info(f"  Frequency: {self.pwm_frequency}Hz (period={self.pwm_period_ns}ns)")
@@ -183,19 +185,26 @@ class PWMDriverNode:
                 f"L={left_ns}ns, R={right_ns}ns"
             )
 
-    def _speed_to_ns(self, speed: float) -> int:
-        """将轮速 (m/s) 转换为 sysfs duty_cycle 值 (ns)
+    def _speed_to_ns(self, speed: float, max_speed: float = None) -> int:
+        """将速度转换为 sysfs duty_cycle 值 (ns)
 
         映射关系（高电平脉宽）：
         - speed = 0 → center_ns
         - speed > 0 → center_ns + deadzone ~ center_ns + output_delta
         - speed < 0 → center_ns - output_delta ~ center_ns - deadzone
+
+        Args:
+            speed: 速度值 (m/s 或 rad/s)
+            max_speed: 归一化基准速度，默认使用 max_linear_speed
         """
-        if self.max_linear_speed == 0 or speed == 0.0:
+        if max_speed is None:
+            max_speed = self.max_linear_speed
+
+        if max_speed == 0 or speed == 0.0:
             return self._pulse_to_duty_ns(self.pwm_center_ns)
 
         # 规范化速度 (-1 到 1)
-        ratio = speed / self.max_linear_speed
+        ratio = speed / max_speed
         ratio = max(-1.0, min(1.0, ratio))
 
         # 有效输出范围 = output_delta - deadzone
@@ -244,55 +253,96 @@ class PWMDriverNode:
                     w_angular = velocity_data.get('angular_velocity', 0.0)
                     cmd_timestamp = velocity_data.get('timestamp', time.time())
 
-                    # 应用角速度偏置校准
-                    w_angular += self.angular_velocity_bias
+                    if self.drive_mode == 'direct':
+                        # ---- direct 模式：通道1=油门，通道2=转向 ----
+                        # 安全检查：限制速度范围
+                        if self.enable_safety_check:
+                            v_linear = max(
+                                -self.max_linear_speed,
+                                min(self.max_linear_speed, v_linear)
+                            )
+                            w_angular = max(
+                                -self.max_angular_speed,
+                                min(self.max_angular_speed, w_angular)
+                            )
 
-                    # 安全检查：限制速度范围
-                    if self.enable_safety_check:
-                        v_linear = max(
-                            -self.max_linear_speed,
-                            min(self.max_linear_speed, v_linear)
+                        # 直接映射：线速度→通道1, 角速度→通道2
+                        ch1_ns = self._speed_to_ns(v_linear, self.max_linear_speed)
+                        ch2_ns = self._speed_to_ns(w_angular, self.max_angular_speed)
+
+                        # 输出PWM到硬件
+                        self._write_pwm_ns(ch1_ns, ch2_ns)
+
+                        # 详细日志
+                        if self.enable_verbose_log:
+                            self.sdk.logger.debug(
+                                f"[direct] v={v_linear:.2f}m/s, w={w_angular:.2f}rad/s | "
+                                f"PWM: CH1={ch1_ns}ns, CH2={ch2_ns}ns"
+                            )
+
+                        # 发布PWM状态
+                        pwm_status = {
+                            'timestamp': time.time(),
+                            'left_duty_ns': ch1_ns,
+                            'right_duty_ns': ch2_ns,
+                            'linear_velocity': v_linear,
+                            'angular_velocity': w_angular,
+                            'left_wheel_speed': v_linear,
+                            'right_wheel_speed': w_angular,
+                            'command_age': time.time() - cmd_timestamp
+                        }
+                    else:
+                        # ---- differential 模式（默认）----
+                        # 应用角速度偏置校准
+                        w_angular += self.angular_velocity_bias
+
+                        # 安全检查：限制速度范围
+                        if self.enable_safety_check:
+                            v_linear = max(
+                                -self.max_linear_speed,
+                                min(self.max_linear_speed, v_linear)
+                            )
+                            w_angular = max(
+                                -self.max_angular_speed,
+                                min(self.max_angular_speed, w_angular)
+                            )
+
+                        # 运动学计算：速度 → 轮速
+                        v_left, v_right = self.kinematics.velocity_to_wheel_speeds(
+                            v_linear, w_angular
                         )
-                        w_angular = max(
-                            -self.max_angular_speed,
-                            min(self.max_angular_speed, w_angular)
-                        )
 
-                    # 运动学计算：速度 → 轮速
-                    v_left, v_right = self.kinematics.velocity_to_wheel_speeds(
-                        v_linear, w_angular
-                    )
+                        # 应用左右轮速度缩放校准
+                        v_left *= self.left_speed_scale
+                        v_right *= self.right_speed_scale
 
-                    # 应用左右轮速度缩放校准
-                    v_left *= self.left_speed_scale
-                    v_right *= self.right_speed_scale
+                        # 轮速 → PWM 脉宽 (ns)
+                        left_ns = self._speed_to_ns(v_left)
+                        right_ns = self._speed_to_ns(v_right)
 
-                    # 轮速 → PWM 脉宽 (ns)
-                    left_ns = self._speed_to_ns(v_left)
-                    right_ns = self._speed_to_ns(v_right)
+                        # 输出PWM到硬件
+                        self._write_pwm_ns(left_ns, right_ns)
 
-                    # 输出PWM到硬件
-                    self._write_pwm_ns(left_ns, right_ns)
+                        # 详细日志
+                        if self.enable_verbose_log:
+                            self.sdk.logger.debug(
+                                f"v={v_linear:.2f}m/s, w={w_angular:.2f}rad/s | "
+                                f"v_L={v_left:.2f}, v_R={v_right:.2f} | "
+                                f"PWM: L={left_ns}ns, R={right_ns}ns"
+                            )
 
-                    # 详细日志
-                    if self.enable_verbose_log:
-                        self.sdk.logger.debug(
-                            f"v={v_linear:.2f}m/s, w={w_angular:.2f}rad/s | "
-                            f"v_L={v_left:.2f}, v_R={v_right:.2f} | "
-                            f"PWM: L={left_ns}ns, R={right_ns}ns"
-                        )
+                        # 发布PWM状态
+                        pwm_status = {
+                            'timestamp': time.time(),
+                            'left_duty_ns': left_ns,
+                            'right_duty_ns': right_ns,
+                            'linear_velocity': v_linear,
+                            'angular_velocity': w_angular,
+                            'left_wheel_speed': v_left,
+                            'right_wheel_speed': v_right,
+                            'command_age': time.time() - cmd_timestamp
+                        }
 
-                    # 发布PWM状态
-                    pwm_status = {
-                        'timestamp': time.time(),
-                        'left_duty_ns': left_ns,
-                        'right_duty_ns': right_ns,
-                        'linear_velocity': v_linear,
-                        'angular_velocity': w_angular,
-                        'left_wheel_speed': v_left,
-                        'right_wheel_speed': v_right,
-                        'command_age': time.time() - cmd_timestamp
-                    }
                     self.pwm_status_port.send(pwm_status)
 
                 else:

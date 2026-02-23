@@ -71,6 +71,11 @@ params:
     description: "最大高电平时间 (ns)，默认2ms - 正向满油"
 
   # ========== 车辆参数 ==========
+  drive_mode:
+    type: str
+    default: "differential"
+    description: "驱动模式: differential=差速(左右轮独立PWM), direct=直驱(通道1油门/通道2转向)"
+
   wheel_base:
     type: float
     default: 0.5
