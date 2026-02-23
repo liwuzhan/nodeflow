@@ -178,7 +178,7 @@ sudo apt install minicom
 minicom -D /dev/ttyUSB0 -b 115200
 
 # 发送配置命令（根据设备型号）
-KSXT 20           # 启用KSXT消息，20Hz
+KSXT 0.05         # 启用KSXT消息，20Hz（参数是周期秒，不是频率）
 SAVECONFIG        # 保存配置
 
 # 退出minicom: Ctrl+A, X

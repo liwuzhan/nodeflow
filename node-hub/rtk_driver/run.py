@@ -208,7 +208,7 @@ class RTKDriverNode:
         """配置RTK设备输出"""
         self.logger.info("Configuring RTK device output...")
 
-        # 构造配置命令（设备命令格式：<消息名> <频率Hz>）
+        # 构造配置命令（UM982命令格式：<消息名> <周期秒>，如 GPRMC 0.05 = 20Hz）
         commands = []
 
         # 注意: 不能发送 UNLOG/UNLOGALL，会停掉 GGA/RMC 触发看门狗重启
