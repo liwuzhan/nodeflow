@@ -126,8 +126,66 @@ def start_runtime(config_path, background=False, log_level="INFO", clean_buffers
         }
 
 
+def _process_alive(pid):
+    """检查进程是否存活（即使是 root 进程也能检查）"""
+    try:
+        os.kill(pid, 0)
+        return True
+    except PermissionError:
+        # 进程存在但没有权限发信号（root 进程）
+        return True
+    except ProcessLookupError:
+        return False
+
+
+def _wait_for_exit(pid, timeout_secs):
+    """等待进程退出，返回是否已退出"""
+    deadline = time.time() + timeout_secs
+    while time.time() < deadline:
+        if not _process_alive(pid):
+            return True
+        time.sleep(0.5)
+    return not _process_alive(pid)
+
+
+def _reset_pwm_to_center():
+    """
+    强杀后的安全措施：直接写 sysfs 把所有活跃 PWM 通道设回中位。
+    即使进程被 SIGKILL，PWM 硬件仍在输出，必须手动重置。
+    """
+    pwm_base = Path("/sys/class/pwm")
+    if not pwm_base.exists():
+        return
+
+    reset_count = 0
+    for chip_dir in sorted(pwm_base.iterdir()):
+        pwm0_dir = chip_dir / "pwm0"
+        if not pwm0_dir.is_dir():
+            continue
+
+        enable_path = pwm0_dir / "enable"
+        period_path = pwm0_dir / "period"
+        duty_path = pwm0_dir / "duty_cycle"
+
+        try:
+            if not enable_path.exists():
+                continue
+            enabled = enable_path.read_text().strip()
+            if enabled != "1":
+                continue
+
+            period = int(period_path.read_text().strip())
+            center_duty = period // 2
+            duty_path.write_text(str(center_duty))
+            reset_count += 1
+        except (OSError, ValueError):
+            continue
+
+    return reset_count
+
+
 def stop_runtime():
-    """停止运行时框架"""
+    """停止运行时框架（三级策略：共享缓冲区 → sudo kill → sudo kill -9 + PWM 重置）"""
     pid = get_runtime_pid()
 
     if pid is None:
@@ -136,36 +194,66 @@ def stop_runtime():
             "message": "Runtime is not running"
         }
 
+    if not _process_alive(pid):
+        return {
+            "status": "not_running",
+            "message": "Runtime process not found (stale PID file)"
+        }
+
+    # === 第一级：通过共享缓冲区请求优雅关闭 ===
     try:
-        # 发送 SIGTERM 信号
-        os.kill(pid, 15)
+        from sdk.shared_buffer_lite import SharedBufferLite
+        buf = SharedBufferLite("control.shutdown_request", create=False)
+        buf.write({"shutdown": True, "reason": "CLI stop command", "timestamp": time.time()})
+    except Exception:
+        # 缓冲区不存在（运行时可能未创建），跳过
+        pass
 
-        # 等待进程退出
-        for i in range(10):
-            time.sleep(0.5)
-            if not is_runtime_running():
-                return {
-                    "status": "success",
-                    "message": "Runtime stopped successfully"
-                }
-
-        # 如果没有退出，强制杀死
-        try:
-            os.kill(pid, 9)
-            time.sleep(0.5)
-        except:
-            pass
-
+    # 等待最多 10 秒让进程优雅退出
+    if _wait_for_exit(pid, 10):
         return {
             "status": "success",
-            "message": "Runtime force-killed"
+            "message": "Runtime stopped gracefully"
         }
 
-    except (OSError, ProcessLookupError) as e:
+    # === 第二级：sudo kill -SIGTERM ===
+    try:
+        subprocess.run(["sudo", "kill", "-15", str(pid)],
+                       capture_output=True, timeout=5)
+    except Exception:
+        pass
+
+    if _wait_for_exit(pid, 5):
         return {
-            "status": "error",
-            "message": f"Failed to stop runtime: {e}"
+            "status": "success",
+            "message": "Runtime stopped (via sudo SIGTERM)"
         }
+
+    # === 第三级：sudo kill -9 强杀 + PWM 安全重置 ===
+    try:
+        subprocess.run(["sudo", "kill", "-9", str(pid)],
+                       capture_output=True, timeout=5)
+    except Exception:
+        pass
+
+    time.sleep(0.5)
+
+    # 强杀后 PWM 不会回中位，手动重置
+    pwm_reset = _reset_pwm_to_center()
+
+    if not _process_alive(pid):
+        msg = "Runtime force-killed"
+        if pwm_reset:
+            msg += f" (PWM reset to center on {pwm_reset} channel(s))"
+        return {
+            "status": "success",
+            "message": msg
+        }
+
+    return {
+        "status": "error",
+        "message": f"Failed to stop runtime (PID {pid} still alive)"
+    }
 
 
 def get_runtime_status():
