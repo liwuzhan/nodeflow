@@ -39,6 +39,15 @@ ports:
       buffer_size: 1048576  # 1MB
       conflate: true        # 覆盖模式
 
+    - name: bezier_path
+      type: planning.bezier_path
+      description: |
+        贝塞尔平滑路径（ENU坐标）
+        - segments: 贝塞尔段列表，每段4个控制点
+        - total_length: 估算总弧长（米）
+      buffer_size: 3097152  # 3MB
+      conflate: true        # 覆盖模式
+
 params:
   trajectory_file:
     type: string
@@ -74,3 +83,16 @@ params:
     description: |
       路径发布间隔（秒）
       建议 0.1s（10Hz），与其他规划节点一致
+
+  enable_bezier:
+    type: bool
+    default: true
+    description: |
+      是否生成贝塞尔平滑路径
+      启用后会额外输出 bezier_path 端口
+
+  corner_radius:
+    type: float
+    default: 1.0
+    description: |
+      圆角半径（米），越大弯道越平滑，但偏离原始航点越远

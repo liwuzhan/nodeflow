@@ -42,13 +42,19 @@ class TrajectoryLoaderNode:
         self.ref_lon = sdk.get_param('ref_lon', None)
         self.ref_lat = sdk.get_param('ref_lat', None)
         self.publish_interval = float(sdk.get_param('publish_interval', 0.1))
+        self.enable_bezier = sdk.get_param('enable_bezier', True)
+        self.corner_radius = float(sdk.get_param('corner_radius', 1.0))
 
         # 创建输出端口
         self.output_global_path = sdk.create_output_port('global_path')
         self.output_task_enu = sdk.create_output_port('task_enu')
+        self.output_bezier_path = None
+        if self.enable_bezier:
+            self.output_bezier_path = sdk.create_output_port('bezier_path')
 
         # 状态
         self.loaded_path = None
+        self.bezier_path_msg = None
         self.task_enu_msg = None
         self.task_id = str(uuid.uuid4())[:8]
 
@@ -61,6 +67,10 @@ class TrajectoryLoaderNode:
         else:
             sdk.logger.info(f"  参考点: (自动从轨迹首点获取)")
         sdk.logger.info(f"  发布间隔: {self.publish_interval}s")
+        if self.enable_bezier:
+            sdk.logger.info(f"  贝塞尔平滑: 启用 (圆角半径={self.corner_radius}m)")
+        else:
+            sdk.logger.info(f"  贝塞尔平滑: 禁用")
         sdk.logger.info("=" * 60)
 
     def load(self) -> bool:
@@ -116,6 +126,18 @@ class TrajectoryLoaderNode:
         self.loaded_path = atom.build_global_path(enu_path, self.task_id)
         self.task_enu_msg = atom.build_task_enu(ref_lon, ref_lat, self.task_id)
 
+        # 6. 构建贝塞尔平滑路径（可选）
+        if self.enable_bezier:
+            self.bezier_path_msg = atom.build_bezier_path(
+                enu_path, self.task_id, self.corner_radius
+            )
+            n_seg = len(self.bezier_path_msg['segments'])
+            total_len = self.bezier_path_msg['total_length']
+            self.sdk.logger.info(
+                f"贝塞尔路径: {n_seg} 段, 总长 {total_len:.2f}m "
+                f"(圆角半径={self.corner_radius}m)"
+            )
+
         return True
 
     def run(self):
@@ -137,6 +159,11 @@ class TrajectoryLoaderNode:
                 # 发送 global_path（ENU路径）
                 self.loaded_path['timestamp'] = time.time()
                 self.output_global_path.send(self.loaded_path)
+
+                # 发送 bezier_path（贝塞尔平滑路径）
+                if self.output_bezier_path and self.bezier_path_msg:
+                    self.bezier_path_msg['timestamp'] = time.time()
+                    self.output_bezier_path.send(self.bezier_path_msg)
 
                 publish_count += 1
 

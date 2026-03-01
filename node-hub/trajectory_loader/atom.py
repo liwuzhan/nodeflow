@@ -263,3 +263,176 @@ def build_task_enu(
         'vehicle': {},
         'timestamp': time.time(),
     }
+
+
+# ============================================================================
+# 贝塞尔曲线平滑路径
+# ============================================================================
+
+def _normalize(vx: float, vy: float) -> Tuple[float, float]:
+    """归一化二维向量，零向量返回 (0, 0)"""
+    d = math.sqrt(vx * vx + vy * vy)
+    if d < 1e-12:
+        return 0.0, 0.0
+    return vx / d, vy / d
+
+
+def _lerp(p0: Tuple[float, float], p1: Tuple[float, float], t: float) -> Tuple[float, float]:
+    """线性插值"""
+    return (p0[0] + t * (p1[0] - p0[0]),
+            p0[1] + t * (p1[1] - p0[1]))
+
+
+def _dist(a: Tuple[float, float], b: Tuple[float, float]) -> float:
+    """两点欧氏距离"""
+    dx = b[0] - a[0]
+    dy = b[1] - a[1]
+    return math.sqrt(dx * dx + dy * dy)
+
+
+def _make_line_segment(p0: Tuple[float, float], p1: Tuple[float, float]) -> Dict[str, Any]:
+    """
+    构造退化贝塞尔段（直线），控制点在 1/3 和 2/3 处
+    """
+    return {
+        'p0': list(p0),
+        'p1': list(_lerp(p0, p1, 1.0 / 3.0)),
+        'p2': list(_lerp(p0, p1, 2.0 / 3.0)),
+        'p3': list(p1),
+    }
+
+
+def waypoints_to_bezier(
+    path: List[Tuple[float, float]],
+    corner_radius: float
+) -> List[Dict[str, Any]]:
+    """
+    将折线路径转换为贝塞尔曲线段序列（圆角平滑）
+
+    对每个中间航点生成圆角段，直线部分用退化贝塞尔表示。
+
+    Args:
+        path: 航点列表 [(x, y), ...]
+        corner_radius: 期望圆角半径（米）
+
+    Returns:
+        贝塞尔段列表，每段 {'p0', 'p1', 'p2', 'p3'}（四个控制点）
+    """
+    n = len(path)
+    if n < 2:
+        return []
+    if n == 2:
+        return [_make_line_segment(path[0], path[1])]
+
+    # 对每个中间航点计算切入/切出点
+    cut_in = []   # 第 i 个中间航点的切入点 (i=1..n-2)
+    cut_out = []  # 第 i 个中间航点的切出点
+    corners = []  # 圆角贝塞尔段
+
+    for i in range(1, n - 1):
+        prev, curr, nxt = path[i - 1], path[i], path[i + 1]
+
+        edge_prev = _dist(prev, curr)
+        edge_next = _dist(curr, nxt)
+        if edge_prev < 1e-9 or edge_next < 1e-9:
+            # 退化（重叠点），不做圆角
+            cut_in.append(curr)
+            cut_out.append(curr)
+            corners.append(None)
+            continue
+
+        # 实际圆角半径：不超过相邻边长度的一半
+        r = min(corner_radius, edge_prev / 2.0, edge_next / 2.0)
+
+        # 从当前点向前/后偏移 r 得到切入/切出点
+        d_prev = _normalize(prev[0] - curr[0], prev[1] - curr[1])
+        d_next = _normalize(nxt[0] - curr[0], nxt[1] - curr[1])
+
+        q = (curr[0] + r * d_prev[0], curr[1] + r * d_prev[1])  # 切入
+        rr = (curr[0] + r * d_next[0], curr[1] + r * d_next[1])  # 切出
+
+        cut_in.append(q)
+        cut_out.append(rr)
+
+        # 圆角贝塞尔段：P0=Q, P1=Q+2/3*(Wi-Q), P2=R+2/3*(Wi-R), P3=R
+        seg = {
+            'p0': list(q),
+            'p1': [q[0] + 2.0 / 3.0 * (curr[0] - q[0]),
+                   q[1] + 2.0 / 3.0 * (curr[1] - q[1])],
+            'p2': [rr[0] + 2.0 / 3.0 * (curr[0] - rr[0]),
+                   rr[1] + 2.0 / 3.0 * (curr[1] - rr[1])],
+            'p3': list(rr),
+        }
+        corners.append(seg)
+
+    # 组装最终段序列
+    segments = []
+
+    # 首段：W0 → 第一个切入点
+    segments.append(_make_line_segment(path[0], cut_in[0]))
+
+    for i in range(len(corners)):
+        # 圆角段
+        if corners[i] is not None:
+            segments.append(corners[i])
+
+        # 直线段：当前切出点 → 下一个切入点（或终点）
+        if i < len(corners) - 1:
+            segments.append(_make_line_segment(cut_out[i], cut_in[i + 1]))
+        else:
+            # 末段：最后切出点 → Wn
+            segments.append(_make_line_segment(cut_out[i], path[-1]))
+
+    return segments
+
+
+def _bezier_point_from_seg(seg: Dict[str, Any], t: float) -> Tuple[float, float]:
+    """在单段贝塞尔上求点（用于弧长估算）"""
+    u = 1.0 - t
+    p0, p1, p2, p3 = seg['p0'], seg['p1'], seg['p2'], seg['p3']
+    x = u*u*u*p0[0] + 3*u*u*t*p1[0] + 3*u*t*t*p2[0] + t*t*t*p3[0]
+    y = u*u*u*p0[1] + 3*u*u*t*p1[1] + 3*u*t*t*p2[1] + t*t*t*p3[1]
+    return x, y
+
+
+def _estimate_segment_length(seg: Dict[str, Any], steps: int = 16) -> float:
+    """用线段近似估算单段贝塞尔弧长"""
+    length = 0.0
+    prev = _bezier_point_from_seg(seg, 0.0)
+    for i in range(1, steps + 1):
+        t = i / steps
+        cur = _bezier_point_from_seg(seg, t)
+        length += _dist(prev, cur)
+        prev = cur
+    return length
+
+
+def build_bezier_path(
+    enu_path: List[Tuple[float, float]],
+    task_id: str,
+    corner_radius: float = 1.0
+) -> Dict[str, Any]:
+    """
+    从 ENU 路径构建贝塞尔平滑路径消息
+
+    Args:
+        enu_path: ENU 路径点列表 [(x, y), ...]
+        task_id: 任务ID
+        corner_radius: 圆角半径（米）
+
+    Returns:
+        贝塞尔路径消息字典
+    """
+    segments = waypoints_to_bezier(enu_path, corner_radius)
+
+    total_length = sum(_estimate_segment_length(s) for s in segments)
+
+    return {
+        'task_id': task_id,
+        'timestamp': time.time(),
+        'segments': segments,
+        'total_length': total_length,
+        'num_waypoints': len(enu_path),
+        'corner_radius': corner_radius,
+        'status': 'success' if segments else 'failed',
+    }
