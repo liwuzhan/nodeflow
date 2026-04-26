@@ -49,6 +49,7 @@ def load_trajectory_csv(filepath: str) -> List[Dict[str, Any]]:
 
     Returns:
         轨迹点列表，每个点包含 lat, lon, alt, heading, timestamp
+        可选字段: zone (work/transit)
     """
     points = []
     with open(filepath, 'r', encoding='utf-8') as f:
@@ -61,6 +62,10 @@ def load_trajectory_csv(filepath: str) -> List[Dict[str, Any]]:
                 'heading': float(row.get('heading', 0)),
                 'timestamp': float(row.get('timestamp', 0)),
             }
+            # 可选 zone 字段
+            zone = row.get('zone', '').strip()
+            if zone:
+                point['zone'] = zone
             points.append(point)
     return points
 
@@ -88,6 +93,9 @@ def load_trajectory_json(filepath: str) -> List[Dict[str, Any]]:
             'heading': float(p.get('heading', 0)),
             'timestamp': float(p.get('timestamp', 0)),
         }
+        zone = str(p.get('zone', '')).strip()
+        if zone:
+            point['zone'] = zone
         points.append(point)
     return points
 
@@ -179,7 +187,7 @@ def convert_to_enu_path(
     points: List[Dict[str, Any]],
     ref_lon: float,
     ref_lat: float
-) -> List[Tuple[float, float]]:
+) -> Tuple[List[Tuple[float, float]], List[str]]:
     """
     将 WGS84 轨迹点批量转换为 ENU 路径
 
@@ -189,13 +197,15 @@ def convert_to_enu_path(
         ref_lat: 参考点纬度
 
     Returns:
-        ENU 路径点列表 [(x, y), ...]
+        (ENU 路径点列表 [(x, y), ...], zone 列表 [str, ...])
     """
     enu_path = []
+    zones = []
     for p in points:
         x, y = wgs84_to_enu(p['lon'], p['lat'], ref_lon, ref_lat)
         enu_path.append((x, y))
-    return enu_path
+        zones.append(p.get('zone', ''))
+    return enu_path, zones
 
 
 def compute_path_length(enu_path: List[Tuple[float, float]]) -> float:
@@ -218,7 +228,8 @@ def compute_path_length(enu_path: List[Tuple[float, float]]) -> float:
 
 def build_global_path(
     enu_path: List[Tuple[float, float]],
-    task_id: str
+    task_id: str,
+    path_zones: Optional[List[str]] = None
 ) -> Dict[str, Any]:
     """
     构建与 global_coverage 兼容的 global_path 消息
@@ -226,17 +237,21 @@ def build_global_path(
     Args:
         enu_path: ENU 路径点列表
         task_id: 任务ID
+        path_zones: 每个路径点的 zone 标注 (可选)
 
     Returns:
         global_path 消息字典
     """
-    return {
+    msg = {
         'task_id': task_id,
         'timestamp': time.time(),
         'path': enu_path,
         'status': 'success' if enu_path else 'failed',
         'message': f'Loaded {len(enu_path)} points' if enu_path else 'Empty path',
     }
+    if path_zones:
+        msg['path_zones'] = path_zones
+    return msg
 
 
 def build_task_enu(

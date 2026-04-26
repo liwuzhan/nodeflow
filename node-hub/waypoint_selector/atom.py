@@ -40,6 +40,7 @@ class SelectorState:
     task_id: Optional[str] = None
     first_unconsumed_idx: int = 0  # 第一个未消费点的索引
     in_view_indices: List[int] = field(default_factory=list)  # 当前视野内的点索引
+    path_zones: List[str] = field(default_factory=list)  # 每个路径点的 zone 标注
 
 
 class WaypointSelector:
@@ -145,6 +146,7 @@ class WaypointSelector:
         self.state.task_id = task_id
         self.state.first_unconsumed_idx = 0
         self.state.in_view_indices = []
+        self.state.path_zones = path_data.get("path_zones", [])
 
         if not self.state.path:
             return None
@@ -368,6 +370,13 @@ class WaypointSelector:
         # 都不足，返回原始宽度的结果
         return in_view_normal
 
+    def _get_zone_for_index(self, idx: int) -> str:
+        """获取路径点的 zone 标注"""
+        zones = self.state.path_zones
+        if idx < len(zones):
+            return zones[idx] or ""
+        return ""
+
     def _select_lookahead_point(
         self, vx: float, vy: float
     ) -> Dict[str, Any]:
@@ -386,17 +395,17 @@ class WaypointSelector:
         # 情况3: 所有点都已消费
         if first_unconsumed >= len(path):
             final_x, final_y = path[-1]
-            dist_to_final = self.euclidean_distance(vx, vy, final_x, final_y)
 
             return {
                 "x": final_x,
                 "y": final_y,
-                "final": dist_to_final < self.config.goal_tolerance,
+                "final": True,
                 "index": len(path) - 1,
                 "total": len(path),
                 "consumed": first_unconsumed,
                 "in_view_count": 0,
-                "mode": "finished"
+                "mode": "finished",
+                "zone": self._get_zone_for_index(len(path) - 1),
             }
 
         # 情况1: 有视野点
@@ -412,7 +421,8 @@ class WaypointSelector:
                 "total": len(path),
                 "consumed": first_unconsumed,
                 "in_view_count": len(in_view),
-                "mode": "tracking"
+                "mode": "tracking",
+                "zone": self._get_zone_for_index(last_in_view_idx),
             }
 
         # 情况2: 无视野点，输出第一个未消费点
@@ -426,7 +436,8 @@ class WaypointSelector:
             "total": len(path),
             "consumed": first_unconsumed,
             "in_view_count": 0,
-            "mode": "approach"
+            "mode": "approach",
+            "zone": self._get_zone_for_index(first_unconsumed),
         }
 
     def get_debug_info(self, vx: float, vy: float, theta: float) -> Dict[str, Any]:

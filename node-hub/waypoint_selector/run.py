@@ -54,6 +54,7 @@ class NextPoint(BaseModel):
     consumed: int = 0
     in_view_count: int = 0
     mode: str = "unknown"
+    zone: str = ""  # "work" / "transit" / "" (auto)
 
 # --- End Schema Definitions ---
 

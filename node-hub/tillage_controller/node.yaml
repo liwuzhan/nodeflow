@@ -1,0 +1,88 @@
+name: tillage_controller
+version: "1.0.0"
+description: "旋耕控制器 - PTO离合器 + 三点悬挂状态机"
+
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+  darwin:
+    kind: python
+    cmd: ["python3", "run.py"]
+  windows:
+    kind: python
+    cmd: ["python", "run.py"]
+
+ports:
+  inputs:
+    - name: pose_enu
+      type: localization.pose_enu
+      description: "车辆姿态 (x, y, theta)，用于 zone 自动检测和安全互锁"
+    - name: next_point
+      type: planning.waypoint
+      description: "当前航点，携带 zone 提示 (work/transit)"
+    - name: task_enu
+      type: planning.task_enu
+      description: "地块边界，用于 zone 自动检测 (点-in-多边形)"
+  outputs:
+    - name: tillage_cmd
+      type: implement.tillage_cmd
+      description: "旋耕控制指令 (PTO 启停 + 悬挂高度)"
+    - name: tillage_status
+      type: implement.tillage_status
+      description: "旋耕状态反馈 (状态 + 高度 + PTO RPM)"
+
+params:
+  # ========== 悬挂控制 ==========
+  hitch_lower_time_s:
+    type: float
+    default: 1.5
+    description: "悬挂下降时间 (秒)"
+
+  hitch_raise_time_s:
+    type: float
+    default: 1.5
+    description: "悬挂提升时间 (秒)"
+
+  hitch_working_height:
+    type: float
+    default: 1.0
+    description: "作业时悬挂高度 (0.0=完全升起, 1.0=完全降下)"
+
+  # ========== 地头/区域参数 ==========
+  headland_width_m:
+    type: float
+    default: 3.0
+    description: "地头转弯区宽度 (米)，zone=auto 时用于边界缓冲区"
+
+  auto_zone_detect:
+    type: bool
+    default: true
+    description: "是否自动根据 RTK 位置 + 地块边界判断 zone (点-in-多边形)"
+
+  # ========== PTO 控制 ==========
+  pto_engage_delay_s:
+    type: float
+    default: 0.5
+    description: "PTO 接合延迟 (秒)，悬挂降到位后等待"
+
+  # ========== 安全 ==========
+  emergency_stop:
+    type: bool
+    default: false
+    description: "紧急停止标志 (true 时立即断 PTO + 升悬挂)"
+
+  # ========== 调试 ==========
+  enable_verbose_log:
+    type: bool
+    default: false
+    description: "启用详细日志"
+
+dependencies: []
+
+tags:
+  - implement
+  - tillage
+  - pto
+  - hitch
+  - agricultural

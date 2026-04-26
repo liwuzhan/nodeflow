@@ -111,8 +111,14 @@ class TrajectoryLoaderNode:
             self.sdk.logger.info(f"使用指定参考点: lon={ref_lon:.8f}, lat={ref_lat:.8f}")
 
         # 4. 坐标转换 WGS84 → ENU
-        enu_path = atom.convert_to_enu_path(points, ref_lon, ref_lat)
+        enu_path, path_zones = atom.convert_to_enu_path(points, ref_lon, ref_lat)
         self.sdk.logger.info(f"坐标转换完成: {len(enu_path)} 个ENU路径点")
+
+        has_zones = any(z for z in path_zones)
+        if has_zones:
+            work_pts = sum(1 for z in path_zones if z == 'work')
+            transit_pts = sum(1 for z in path_zones if z == 'transit')
+            self.sdk.logger.info(f"  Zone标注: work={work_pts}, transit={transit_pts}")
 
         if enu_path:
             x0, y0 = enu_path[0]
@@ -123,7 +129,7 @@ class TrajectoryLoaderNode:
             self.sdk.logger.info(f"  路径总长: {path_length:.2f} 米")
 
         # 5. 构建输出消息
-        self.loaded_path = atom.build_global_path(enu_path, self.task_id)
+        self.loaded_path = atom.build_global_path(enu_path, self.task_id, path_zones)
         self.task_enu_msg = atom.build_task_enu(ref_lon, ref_lat, self.task_id)
 
         # 6. 构建贝塞尔平滑路径（可选）

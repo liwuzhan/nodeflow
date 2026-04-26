@@ -26,6 +26,7 @@ CLI 入口: `python3 -m tools.cli.core.cli`
 # 启动
 python3 -m tools.cli.core.cli runtime start <config> -b
 python3 -m tools.cli.core.cli runtime start examples/planning_simulation.yaml --background
+python3 -m tools.cli.core.cli runtime start examples/tillage_operation.yaml --background
 
 # 状态
 python3 -m tools.cli.core.cli runtime status
@@ -84,6 +85,7 @@ python3 -m tools.cli.core.cli node list
 # 查看节点详情
 python3 -m tools.cli.core.cli node info <package_name>
 python3 -m tools.cli.core.cli node info waypoint_selector
+python3 -m tools.cli.core.cli node info tillage_controller
 ```
 
 ### monitor - 实时监控
@@ -123,6 +125,23 @@ python3 -m tools.cli.core.cli simulator refresh
 ### 场景3：查看历史错误
 ```bash
 python3 -m tools.cli.core.cli logs -l ERROR --detailed -c 100
+```
+
+### 场景4：旋耕作业监控
+```bash
+# 启动旋耕作业场景
+python3 -m tools.cli.core.cli runtime start examples/tillage_operation.yaml -b
+
+# 监控旋耕状态转换
+python3 -m tools.cli.core.cli logs -n tillage_controller -f
+# 预期看到: TRANSPORT → LOWERING → WORKING → RAISING → TRANSPORT
+
+# 查看机具控制指令缓冲区
+python3 -m tools.cli.core.cli buffer inspect tillage_controller.tillage_cmd
+python3 -m tools.cli.core.cli buffer inspect tillage_controller.tillage_status
+
+# 健康检查
+python3 -m tools.cli.core.cli health check tillage_controller --samples 10
 ```
 
 ## 调用运行时框架
