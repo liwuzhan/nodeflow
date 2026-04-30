@@ -22,6 +22,7 @@ class TaskAgent:
         self._reporter: StatusReporter | None = None
         self._running = False
         self._heartbeat_timer: threading.Timer | None = None
+        self._running_timers: dict[str, threading.Timer] = {}  # task_id → RUNNING delay timer
 
         self._client = mqtt.Client(
             client_id=self._config.client_id,
@@ -110,12 +111,8 @@ class TaskAgent:
             try:
                 ok = self._executor.execute(task)
                 if ok:
-                    # 延迟 2s 上报 RUNNING，等 daemon 完成 0.5s 轮询 + 启动
-                    threading.Timer(2.0, lambda: self._reporter.send_status(
-                        task.task_id, TaskState.RUNNING
-                    )).start()
+                    self._schedule_running_report(task.task_id)
                 else:
-                    # buffer 未就绪，转到工作线程重试
                     threading.Thread(
                         target=self._retry_execute,
                         args=(task,),
@@ -127,15 +124,36 @@ class TaskAgent:
                 self._reporter.send_status(task_id, TaskState.FAILED,
                                            error_detail=str(e))
 
+    def _schedule_running_report(self, task_id: str):
+        """延迟 2s 上报 RUNNING，带状态守卫防止覆盖已失败/取消的任务"""
+        def _report_if_still_ok():
+            self._running_timers.pop(task_id, None)
+            task = self._store.get(task_id)
+            if task and task.state == TaskState.RUNNING:
+                self._reporter.send_status(task_id, TaskState.RUNNING)
+
+        timer = threading.Timer(2.0, _report_if_still_ok)
+        self._running_timers[task_id] = timer
+        timer.start()
+
+    def _cancel_running_timer(self, task_id: str):
+        timer = self._running_timers.pop(task_id, None)
+        if timer:
+            timer.cancel()
+
     def _retry_execute(self, task: Task):
         """工作线程中重试 execute，避免阻塞 MQTT 回调线程"""
         deadline = time.time() + 10
         while time.time() < deadline:
             time.sleep(0.5)
+            # 检查是否已被取消
+            t = self._store.get(task.task_id)
+            if t and t.state in (TaskState.CANCELLED, TaskState.FAILED):
+                return
             try:
                 ok = self._executor.execute(task)
                 if ok:
-                    self._reporter.send_status(task.task_id, TaskState.RUNNING)
+                    self._schedule_running_report(task.task_id)
                     return
             except Exception:
                 pass
@@ -150,7 +168,11 @@ class TaskAgent:
             logger.warning(f"Cancel for unknown task {task_id}, ignored")
             return
         logger.info(f"Cancelling task {task_id}")
-        self._executor.mark_failed(task_id, "cancelled by operator")
+        # 1. 停止 RUNNING 延迟定时器（防止覆盖取消状态）
+        self._cancel_running_timer(task_id)
+        # 2. 写 stop_dataflow 到 control buffer 让 daemon 停止数据流
+        self._executor.cancel(task_id)
+        # 3. 上报 CANCELLED（云端和边侧状态一致）
         self._reporter.send_status(task_id, TaskState.CANCELLED)
 
     def _start_heartbeat(self):

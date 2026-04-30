@@ -223,9 +223,12 @@ class MQTTClient:
         if not all(et.state == "completed" for et in step_tasks):
             return
 
-        step.status = "completed"
-        db.commit()
-        logger.info(f"Step {step.seq_index} completed, advancing job {edge_task.job_id}")
-
+        # 先下发下一步，成功后再标记当前 step 完成
+        # 顺序: dispatch 失败时不写 completed，下一轮 task_status 事件会重试
+        logger.info(f"Step {step.seq_index} all tasks completed, dispatching next step for job {edge_task.job_id}")
         dispatcher = Dispatcher(self)
         dispatcher.dispatch_next_step(db, edge_task.job_id)
+
+        step.status = "completed"
+        db.commit()
+        logger.info(f"Step {step.seq_index} marked completed")
