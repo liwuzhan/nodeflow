@@ -17,7 +17,7 @@ NodeFlow 端到端集成测试工具
     S5  重复去重       同 task_id 二次下发, 验证拒绝 ACK
     S6  自动发现       未注册机器心跳→确认注册
     S7  状态流转       验证完整状态链
-    S8  心跳监控       机器 online/offline 检测
+    S8  心跳中断       停止agent → 验证心跳中断被感知
 """
 
 import argparse
@@ -409,17 +409,21 @@ def _s5(ctx: dict) -> bool:
     ok &= _check(r1.returncode == 0, f"第一次下发: MQTT publish OK (rc={r1.returncode})")
     ok &= _check(r2.returncode == 0, f"第二次下发: MQTT publish OK (rc={r2.returncode})")
 
-    # 验证边侧创建了 task (第一次) 且拒绝重复 (第二次)
+    # 验证边侧拒绝重复：agent 日志中必须出现 "duplicate" + "reject ACK"
     time.sleep(2)
-    tasks = _get(f"/jobs")  # check cloud side — task should exist
-    print(f"    {_dim('注: 边侧拒绝ACK需从agent日志验证 (log/agent.log)')}")
     agent_log = PID_DIR / "agent.log"
     if agent_log.exists():
-        dup_line = [l for l in agent_log.read_text().split("\n") if "duplicate" in l.lower() and task_id[:8] in l]
-        if dup_line:
-            ok &= _check(True, f"agent 检测到重复: {dup_line[-1][:100]}")
-        else:
-            ok &= _check(True, f"agent 日志中搜索 duplicate + {task_id[:8]} (需手动确认)")
+        content = agent_log.read_text()
+        dup_lines = [l for l in content.split("\n") if "duplicate" in l.lower() and task_id[:8] in l]
+        reject_lines = [l for l in dup_lines if "reject" in l.lower()]
+        ok &= _check(len(dup_lines) > 0,
+                     f"agent 检测到重复 task_id (duplicate 日志: {len(dup_lines)}条)")
+        ok &= _check(len(reject_lines) > 0,
+                     f"agent 发送了 reject ACK (reject 日志: {len(reject_lines)}条)")
+        if not dup_lines:
+            print(f"    {_fail('agent 日志未发现 duplicate 记录 — 去重修复无效!')}")
+    else:
+        ok &= _check(False, f"agent 日志文件不存在: {agent_log}")
     return ok
 
 
@@ -492,16 +496,19 @@ def _s7(ctx: dict) -> bool:
         ok &= _check(curr_ord >= prev_ord,
                      f"状态单调: {seen_states[i-1]} → {seen_states[i]}")
 
-    ok &= _check(len(seen_states) >= 1, f"至少采集到1个task状态")
+    # 验证: task 状态链至少包含 2 个不同状态 (排除了只采到1个的假通过)
+    ok &= _check(len(seen_states) >= 2, f"task状态链≥2: {' → '.join(seen_states)}")
+    # 验证: job 状态单调推进且有 draft
     ok &= _check("draft" in job_states, f"job经历draft")
+    ok &= _check(len(job_states) >= 2, f"job状态链≥2: {' → '.join(job_states)}")
     return ok
 
 
 # ── S8: 心跳监控 ────────────────────────────────────────────────────────────
 
-@scenario("S8", "心跳监控", "停止agent后验证心跳超时→机器变offline", requires=["cloud", "agent"])
+@scenario("S8", "心跳中断", "停止agent后验证心跳中断检测 (offline状态需300s超时, 单独测)", requires=["cloud", "agent"])
 def _s8(ctx: dict) -> bool:
-    print(f"  {_hdr('S8: 心跳监控 — offline 检测')}")
+    print(f"  {_hdr('S8: 心跳中断 — 验证心跳停止被感知')}")
     ok = True
 
     # 确认 agent 在发心跳
