@@ -88,12 +88,29 @@ def _is_running(name: str) -> bool:
         return False
 
 
+def _verify_pid(pid: int, expected_name: str) -> bool:
+    """验证 PID 对应的进程命令行是否匹配预期"""
+    try:
+        result = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            capture_output=True, text=True, timeout=3,
+        )
+        cmdline = result.stdout.strip()
+        return expected_name in cmdline or "nodeflow" in cmdline.lower()
+    except Exception:
+        return False
+
+
 def _stop(name: str):
     pidfile = PID_DIR / f"{name}.pid"
     if not pidfile.exists():
         return
     try:
         pid = int(pidfile.read_text().strip())
+        if not _verify_pid(pid, name):
+            print(f"  ⚠ PID {pid} 不是 {name} 进程，跳过")
+            pidfile.unlink(missing_ok=True)
+            return
         os.kill(pid, signal.SIGTERM)
         time.sleep(0.5)
         try:

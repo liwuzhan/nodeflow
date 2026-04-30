@@ -34,7 +34,7 @@ class TaskStore:
         tmp = str(path) + ".tmp"
         data = [t.to_dict() for t in self._tasks.values()]
         with open(tmp, "w") as f:
-            json.dump(data, f, indent=2)
+            json.dump(data, f, separators=(",", ":"))
         os.replace(tmp, str(path))
 
     def get_all(self) -> List[Task]:
