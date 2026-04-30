@@ -19,9 +19,10 @@ router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 
 def _build_job_id() -> str:
-    import datetime
+    import datetime, uuid
     now = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    return f"job-{now}"
+    short = str(uuid.uuid4())[:6]
+    return f"job-{now}-{short}"
 
 
 def _job_to_response(job: Job) -> JobResponse:
