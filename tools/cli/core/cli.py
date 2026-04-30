@@ -365,6 +365,79 @@ def create_parser() -> argparse.ArgumentParser:
         help='以 JSON 格式输出'
     )
 
+    # ========== task 命令 ==========
+    task_parser = subparsers.add_parser(
+        'task',
+        help='任务下发与生命周期管理',
+        description='下发任务、查看状态、取消执行'
+    )
+    task_subparsers = task_parser.add_subparsers(
+        dest='task_subcommand',
+        help='任务子命令',
+        metavar='TASK_COMMAND'
+    )
+
+    task_run_parser = task_subparsers.add_parser(
+        'run',
+        help='执行本地任务文件',
+        description='读取任务 YAML 文件，将参数注入运行时并启动数据流'
+    )
+    task_run_parser.add_argument(
+        'task_file',
+        help='任务 YAML 文件路径'
+    )
+    task_run_parser.add_argument(
+        '--json',
+        action='store_true',
+        help='以 JSON 格式输出'
+    )
+
+    task_list_parser = task_subparsers.add_parser(
+        'list',
+        help='列出所有任务',
+        description='显示任务列表及状态'
+    )
+    task_list_parser.add_argument(
+        '--json',
+        action='store_true',
+        help='以 JSON 格式输出'
+    )
+    task_list_parser.add_argument(
+        '--verbose', '-v',
+        action='store_true',
+        help='显示详细信息'
+    )
+
+    task_show_parser = task_subparsers.add_parser(
+        'show',
+        help='查看任务详情',
+        description='显示指定任务的完整信息'
+    )
+    task_show_parser.add_argument(
+        'task_id',
+        help='任务 ID'
+    )
+    task_show_parser.add_argument(
+        '--json',
+        action='store_true',
+        help='以 JSON 格式输出'
+    )
+
+    task_cancel_parser = task_subparsers.add_parser(
+        'cancel',
+        help='取消任务',
+        description='取消正在执行或等待中的任务'
+    )
+    task_cancel_parser.add_argument(
+        'task_id',
+        help='任务 ID'
+    )
+    task_cancel_parser.add_argument(
+        '--json',
+        action='store_true',
+        help='以 JSON 格式输出'
+    )
+
     # ========== logs 命令 ==========
     logs_parser = subparsers.add_parser(
         'logs',
@@ -462,6 +535,10 @@ def main():
         elif args.command == 'logs':
             from tools.cli.commands.logs_cmd import main as handle_logs_command
             handle_logs_command()
+        elif args.command == 'task':
+            from tools.cli.commands.task_cmd import handle_task_command
+            exit_code = handle_task_command(args)
+            sys.exit(exit_code)
         else:
             print(f"Error: Unknown command '{args.command}'", file=sys.stderr)
             sys.exit(1)

@@ -301,6 +301,20 @@ class NodeFlowRuntime:
             logger.error(f"Framework initialization failed: {e}", exc_info=True)
             return 1
 
+    def _apply_node_params(self, node_params: dict):
+        """
+        将任务参数覆盖到节点实例配置上
+
+        node_params 格式: { "node_id": { "param_key": "value", ... } }
+        参数会被合并到 NodeInstance.params，后续 _build_command 自动序列化
+        """
+        for node_id, params in node_params.items():
+            if node_id in self.nodes_dict:
+                self.nodes_dict[node_id].params.update(params)
+                logger.info(f"Task params injected into node '{node_id}': {params}")
+            else:
+                logger.warning(f"Task params target unknown node '{node_id}', skipped")
+
     def start_dataflow(self):
         """
         启动数据流周期
@@ -642,6 +656,12 @@ class NodeFlowRuntime:
                         logger.info(f"Received command: {command}")
 
                         if command == "start_dataflow":
+                            node_params = cmd_pkt.get("node_params", {})
+                            task_id = cmd_pkt.get("task_id", "")
+                            if node_params:
+                                self._apply_node_params(node_params)
+                            if task_id:
+                                logger.info(f"Task {task_id} params applied")
                             if not self.dataflow_running:
                                 try:
                                     self.start_dataflow()

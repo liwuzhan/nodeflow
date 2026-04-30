@@ -84,6 +84,8 @@ node/
 │   ├── config/           # 配置解析
 │   ├── graph/            # 图拓扑分析
 │   ├── orchestrator/     # 节点编排与生命周期
+│   ├── monitoring/       # 进程监控与自动重启
+│   ├── task/             # 任务下发与执行
 │   └── utils/            # 工具函数
 │
 ├── sdk/                  # 节点开发 SDK
@@ -250,6 +252,83 @@ outputs:
 
 ---
 
+## 📡 任务下发与云端对接
+
+NodeFlow 提供完整的任务下发与生命周期管理系统，支持**离线单机**和**云端对接**两种模式。
+
+### 核心概念
+
+**任务 = 预设 YAML + 参数覆盖**。无需为每个任务编写新的配置文件，只需选择预设配置并覆盖节点参数即可。
+
+### 离线模式（单机）
+
+```bash
+# 1. 启动 daemon，加载预设配置
+nodeflow runtime start examples/tillage_operation.yaml --daemon
+
+# 2. 下发任务（YAML 定义地块+参数覆盖）
+nodeflow task run examples/tillage_task.yaml
+
+# 3. 查看任务列表
+nodeflow task list
+nodeflow task show <task_id>
+
+# 4. 取消任务
+nodeflow task cancel <task_id>
+```
+
+**任务 YAML 示例** (`examples/tillage_task.yaml`):
+```yaml
+task_id: "local-tillage-001"
+preset_yaml: "tillage_operation"
+operation_type: "tillage"
+node_params:
+  parcel_planner:
+    parcel_name: "demo_field"
+  trajectory_loader:
+    trajectory_file: ""
+```
+
+### 云端对接
+
+端侧通过 **MQTT + HTTP** 与云端通信:
+
+| 方向 | 协议 | 用途 |
+|------|------|------|
+| 云端→端侧 | MQTT QoS 1 | 任务下发、取消 |
+| 端侧→云端 | MQTT QoS 0 | 状态上报、心跳（30s 间隔） |
+| 端侧→云端 | MQTT QoS 1 | 任务接收确认（ACK） |
+| 端侧→云端 | HTTP GET | 大文件下载（地块/路径，可达 10MB） |
+
+### CLI 命令
+
+| 命令 | 用途 |
+|------|------|
+| `nodeflow task run <file>` | 执行本地任务文件 |
+| `nodeflow task list` | 列出所有任务及状态 |
+| `nodeflow task show <id>` | 查看任务详情 |
+| `nodeflow task cancel <id>` | 取消执行中/等待中的任务 |
+
+### 系统架构
+
+```
+┌── 云端 ──────────────────────────────────────────┐
+│  Job Manager → Splitter → Dispatch → HTTP Server  │
+└────────────────┬─────────────────────────────────┘
+                 │ MQTT + HTTP
+┌── 端侧 ───────┼─────────────────────────────────┐
+│  Task Agent   │ (MQTT Sub + HTTP Client)          │
+│  TaskExecutor → Runtime Daemon (参数注入)         │
+│  TaskStore    (JSON 持久化, 状态恢复)             │
+└──────────────────────────────────────────────────┘
+```
+
+**详细文档**:
+- 📖 [云端集成对接文档](docs/CLOUD_INTEGRATION.md) — MQTT 协议、HTTP API、消息格式规范
+- 📖 [Daemon 模式指南](docs/DAEMON_MODE_GUIDE.md) — 守护进程运行模式
+
+---
+
 ## 🧠 MCP 服务（AI 辅助调试）
 
 NodeFlow 集成了 **Model Context Protocol (MCP)** 服务，支持通过 AI（如 Claude Desktop）进行智能运维和故障诊断。
@@ -365,6 +444,7 @@ python -m pytest test/ -v
 
 | 文档 | 描述 |
 |------|------|
+| [云端集成对接文档](docs/CLOUD_INTEGRATION.md) | MQTT 协议、HTTP API、消息格式规范 ⭐ |
 | [结构化日志系统](docs/STRUCTURED_LOGGING_GUIDE.md) | JSON 日志 + CLI 聚合工具 |
 | [父进程监控机制](docs/PARENT_PROCESS_WATCHDOG.md) | 僵尸进程自动清理 |
 | [ENU 坐标系统一](docs/old/ENU_DECOUPLED_V2_FINAL_SUMMARY.md) | 坐标系架构重构总结 |
