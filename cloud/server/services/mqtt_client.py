@@ -167,6 +167,10 @@ class MQTTClient:
 
                 db.commit()
 
+                # 步骤自动推进: 当前 step 所有 task 完成后下发下一步
+                if t.state == "completed" and t.step_id:
+                    self._try_advance_step(db, t)
+
                 if self._sse:
                     self._sse.publish("task_status", {
                         "edge_task_id": task_id,
@@ -201,3 +205,27 @@ class MQTTClient:
                     })
         finally:
             db.close()
+
+    def _try_advance_step(self, db, edge_task):
+        """一个 step 的所有 task 完成后，自动下发下一步"""
+        from cloud.server.models.job import JobStep
+        from cloud.server.services.dispatcher import Dispatcher
+
+        # 幂等守卫: step 已完成则跳过
+        step = db.query(JobStep).filter(JobStep.id == edge_task.step_id).first()
+        if not step or step.status == "completed":
+            return
+
+        # 检查同 step 所有 task 是否都 completed
+        step_tasks = db.query(EdgeTask).filter(
+            EdgeTask.step_id == edge_task.step_id
+        ).all()
+        if not all(et.state == "completed" for et in step_tasks):
+            return
+
+        step.status = "completed"
+        db.commit()
+        logger.info(f"Step {step.seq_index} completed, advancing job {edge_task.job_id}")
+
+        dispatcher = Dispatcher(self)
+        dispatcher.dispatch_next_step(db, edge_task.job_id)

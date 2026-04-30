@@ -49,10 +49,9 @@ class TaskAgent:
 
     def _on_connect(self, client, userdata, flags, reason_code, properties=None):
         if reason_code == 0:
-            topic = f"nodeflow/{self._config.machine_id}/task/#"
             client.subscribe([(f"nodeflow/{self._config.machine_id}/task/dispatch", 1),
                               (f"nodeflow/{self._config.machine_id}/task/cancel", 1)])
-            logger.info(f"Subscribed to {topic}")
+            logger.info(f"Subscribed to nodeflow/{self._config.machine_id}/task/#")
         else:
             logger.error(f"MQTT connect failed: reason_code={reason_code}")
 
@@ -79,8 +78,11 @@ class TaskAgent:
         dispatch_id = payload.get("dispatch_id", "")
         machine_id = payload.get("machine_id", self._config.machine_id)
 
+        # 去重: 已存在的 task 发送拒绝 ACK
         if self._store.exists(task_id):
-            logger.info(f"Task {task_id} already received, ignoring duplicate")
+            logger.info(f"Task {task_id} duplicate, sending reject ACK")
+            self._reporter.send_ack(task_id, dispatch_id, accepted=False,
+                                    reject_reason="duplicate_task_id")
             return
 
         task = Task(
@@ -104,13 +106,51 @@ class TaskAgent:
             logger.info(f"Auto-accepting task {task_id}")
             self._reporter.send_status(task_id, TaskState.DOWNLOADING)
             self._reporter.send_status(task_id, TaskState.READY)
-            self._executor.execute(task)
-            self._reporter.send_status(task_id, TaskState.RUNNING)
+
+            try:
+                ok = self._executor.execute(task)
+                if ok:
+                    # 延迟 2s 上报 RUNNING，等 daemon 完成 0.5s 轮询 + 启动
+                    threading.Timer(2.0, lambda: self._reporter.send_status(
+                        task.task_id, TaskState.RUNNING
+                    )).start()
+                else:
+                    # buffer 未就绪，转到工作线程重试
+                    threading.Thread(
+                        target=self._retry_execute,
+                        args=(task,),
+                        daemon=True,
+                    ).start()
+            except Exception as e:
+                logger.error(f"Task {task_id} dispatch failed: {e}")
+                self._executor.mark_failed(task_id, str(e))
+                self._reporter.send_status(task_id, TaskState.FAILED,
+                                           error_detail=str(e))
+
+    def _retry_execute(self, task: Task):
+        """工作线程中重试 execute，避免阻塞 MQTT 回调线程"""
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            time.sleep(0.5)
+            try:
+                ok = self._executor.execute(task)
+                if ok:
+                    self._reporter.send_status(task.task_id, TaskState.RUNNING)
+                    return
+            except Exception:
+                pass
+        logger.error(f"Task {task.task_id} failed: control buffer unavailable after retries")
+        self._executor.mark_failed(task.task_id, "Control buffer unavailable")
+        self._reporter.send_status(task.task_id, TaskState.FAILED,
+                                   error_detail="Control buffer unavailable")
 
     def _handle_cancel(self, payload: dict):
         task_id = payload["task_id"]
+        if not self._store.exists(task_id):
+            logger.warning(f"Cancel for unknown task {task_id}, ignored")
+            return
         logger.info(f"Cancelling task {task_id}")
-        self._executor.cancel(task_id)
+        self._executor.mark_failed(task_id, "cancelled by operator")
         self._reporter.send_status(task_id, TaskState.CANCELLED)
 
     def _start_heartbeat(self):

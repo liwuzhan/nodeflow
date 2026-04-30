@@ -6,9 +6,14 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     ...options,
   })
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }))
-    throw new Error(err.detail || 'Request failed')
+    let detail = res.statusText || `HTTP ${res.status}`
+    try {
+      const err = await res.json()
+      detail = err.detail || detail
+    } catch (_) { /* non-JSON error body */ }
+    throw new Error(detail)
   }
+  if (res.status === 204) return undefined as T
   const body = await res.json()
   return body.data ?? body
 }
@@ -26,5 +31,5 @@ export async function put<T>(path: string, data: unknown): Promise<T> {
 }
 
 export async function del(path: string): Promise<void> {
-  await fetch(`${BASE}${path}`, { method: 'DELETE' })
+  return request<void>(path, { method: 'DELETE' })
 }

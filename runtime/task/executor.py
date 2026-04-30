@@ -1,4 +1,3 @@
-import json
 import time
 import threading
 from typing import Optional
@@ -23,12 +22,18 @@ class TaskExecutor:
     def current_task_id(self) -> Optional[str]:
         return self._current_task_id
 
-    def execute(self, task: Task):
+    def execute(self, task: Task) -> bool:
+        """返回 True 表示 buffer 写入成功，False 表示 buffer 尚不存在需重试"""
         logger.info(f"Executing task {task.task_id} (preset={task.preset_yaml})")
         self._current_task_id = task.task_id
         self.store.update_state(task.task_id, TaskState.READY)
 
-        control_buf = SharedBufferLite("runtime.control", create=False)
+        try:
+            control_buf = SharedBufferLite("runtime.control", create=False)
+        except FileNotFoundError:
+            logger.warning(f"Control buffer not ready for task {task.task_id}")
+            return False
+
         payload = {
             "command": "start_dataflow",
             "task_id": task.task_id,
@@ -40,16 +45,20 @@ class TaskExecutor:
 
         self.store.update_state(task.task_id, TaskState.RUNNING)
         self._start_monitor(task)
+        return True
 
     def cancel(self, task_id: str):
         logger.info(f"Cancelling task {task_id}")
         self._stop_monitor()
-        control_buf = SharedBufferLite("runtime.control", create=False)
-        control_buf.write({
-            "command": "stop_dataflow",
-            "task_id": task_id,
-            "timestamp": time.time(),
-        })
+        try:
+            control_buf = SharedBufferLite("runtime.control", create=False)
+            control_buf.write({
+                "command": "stop_dataflow",
+                "task_id": task_id,
+                "timestamp": time.time(),
+            })
+        except FileNotFoundError:
+            logger.warning(f"Cannot cancel {task_id}: control buffer not found")
         self.store.update_state(task_id, TaskState.CANCELLED)
         if self._current_task_id == task_id:
             self._current_task_id = None
@@ -73,11 +82,8 @@ class TaskExecutor:
         while not self._monitor_stop.wait(interval):
             try:
                 progress = self._compute_progress(task)
-                logger.info(
-                    f"Task {task.task_id} progress: {progress.progress_pct:.0f}% "
-                    f"node={progress.current_node} "
-                    f"healthy={progress.nodes_healthy}/{progress.nodes_total}"
-                )
+                logger.info(f"Task {task.task_id}: state={progress.state.value} "
+                            f"node={progress.current_node}")
             except Exception as e:
                 logger.error(f"Progress monitor error: {e}")
 
@@ -86,23 +92,25 @@ class TaskExecutor:
             task_id=task.task_id,
             machine_id=self.machine_id,
             state=task.state,
+            progress_pct=0.0,
+            current_node="unknown",
         )
         try:
-            buf = SharedBufferLite("runtime.control", create=False, size=4096)
+            buf = SharedBufferLite("runtime.control", create=False)
             seq = buf.get_sequence()
-            progress.current_node = f"seq:{seq}"
+            if seq > 0:
+                progress.current_node = "dispatched"
         except Exception:
-            progress.current_node = "unknown"
+            pass
         return progress
 
     def mark_completed(self, task_id: str):
         self._stop_monitor()
+        self._current_task_id = None
         self.store.update_state(task_id, TaskState.COMPLETED)
-        if self._current_task_id == task_id:
-            self._current_task_id = None
 
     def mark_failed(self, task_id: str, error: str):
+        """统一失败收敛：清理执行器状态 + 标记任务失败"""
         self._stop_monitor()
+        self._current_task_id = None
         self.store.update_state(task_id, TaskState.FAILED, error_message=error)
-        if self._current_task_id == task_id:
-            self._current_task_id = None

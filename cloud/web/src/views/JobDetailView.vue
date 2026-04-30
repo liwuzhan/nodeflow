@@ -74,27 +74,28 @@ const jobStore = useJobStore()
 const job = ref<JobDetail | null>(null)
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
+function startPolling() {
+  stopPolling()
+  pollTimer = setInterval(async () => {
+    job.value = await jobStore.fetchJobDetail(route.params.id as string)
+  }, 5000)
+}
+
+function stopPolling() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
+}
+
 onMounted(async () => {
   job.value = await jobStore.fetchJobDetail(route.params.id as string)
-  if (job.value?.status === 'running') {
-    pollTimer = setInterval(async () => {
-      job.value = await jobStore.fetchJobDetail(route.params.id as string)
-    }, 5000)
-  }
+  if (job.value?.status === 'running') startPolling()
 })
 
-onUnmounted(() => {
-  if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
-})
+onUnmounted(() => stopPolling())
 
 async function handleDispatch() {
   await jobStore.dispatch(route.params.id as string)
   job.value = await jobStore.fetchJobDetail(route.params.id as string)
-  if (job.value?.status === 'running') {
-    pollTimer = setInterval(async () => {
-      job.value = await jobStore.fetchJobDetail(route.params.id as string)
-    }, 5000)
-  }
+  startPolling()
 }
 
 async function handleCancel() {

@@ -36,7 +36,7 @@ def list_machines(db: Session = Depends(get_db)):
 def create_machine(body: MachineCreate, db: Session = Depends(get_db)):
     existing = db.query(Machine).filter(Machine.id == body.id).first()
     if existing:
-        raise HTTPException(400, f"Machine '{body.id}' already registered")
+        raise HTTPException(409, f"Machine '{body.id}' already registered")
     m = Machine(**body.model_dump())
     db.add(m)
     db.commit()

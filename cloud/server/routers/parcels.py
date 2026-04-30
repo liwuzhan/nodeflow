@@ -23,7 +23,7 @@ def list_parcels(db: Session = Depends(get_db)):
 def create_parcel(body: ParcelCreate, db: Session = Depends(get_db)):
     existing = db.query(Parcel).filter(Parcel.name == body.name).first()
     if existing:
-        raise HTTPException(400, f"Parcel '{body.name}' already exists")
+        raise HTTPException(409, f"Parcel '{body.name}' already exists")
     parcel = Parcel(
         name=body.name,
         geojson=body.geojson,
