@@ -1,5 +1,12 @@
 <template>
   <div class="farm-map-view">
+    <div class="ops-summary">
+      <div class="ops-stat"><span class="ops-val">{{ activeJobs }}</span><span class="ops-label">运行中</span></div>
+      <div class="ops-stat"><span class="ops-val">{{ busyCount }}</span><span class="ops-label">忙碌</span></div>
+      <div class="ops-stat"><span class="ops-val">{{ onlineCount }}</span><span class="ops-label">在线</span></div>
+      <div class="ops-stat alert"><span class="ops-val">{{ offlineCount }}</span><span class="ops-label">离线</span></div>
+    </div>
+    <div class="map-content">
     <div class="map-area">
       <FarmMap ref="farmMapRef">
         <ParcelLayer />
@@ -41,15 +48,18 @@
         新建作业
       </el-button>
     </div>
+    </div><!-- map-content -->
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { Edit, Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { storeToRefs } from 'pinia'
 import { useParcelStore } from '@/stores/parcelStore'
+import { useMachineStore } from '@/stores/machineStore'
+import { useJobStore } from '@/stores/jobStore'
 import { formatArea } from '@/utils/formatters'
 import FarmMap from '@/components/map/FarmMap.vue'
 import ParcelLayer from '@/components/map/ParcelLayer.vue'
@@ -59,7 +69,11 @@ import MachineMarker from '@/components/map/MachineMarker.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 
 const parcelStore = useParcelStore()
+const machineStore = useMachineStore()
+const jobStore = useJobStore()
 const { parcels, selectedParcelId } = storeToRefs(parcelStore)
+const { onlineCount, busyCount, offlineCount } = storeToRefs(machineStore)
+const activeJobs = computed(() => jobStore.activeJobs.length)
 const { selectParcel } = parcelStore
 
 const drawing = ref(false)
@@ -77,7 +91,13 @@ async function handleParcelCreated(geojson: unknown) {
 </script>
 
 <style scoped>
-.farm-map-view { display: flex; gap: 16px; height: calc(100vh - 116px); }
+.farm-map-view { display: flex; flex-direction: column; gap: 12px; height: calc(100vh - 116px); }
+.ops-summary { display: flex; gap: 16px; padding: 8px 16px; background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+.ops-stat { display: flex; flex-direction: column; align-items: center; min-width: 64px; }
+.ops-val { font-size: 22px; font-weight: 700; color: #303133; }
+.ops-label { font-size: 11px; color: #909399; margin-top: 2px; }
+.ops-stat.alert .ops-val { color: #f56c6c; }
+.map-content { display: flex; gap: 16px; flex: 1; min-height: 0; }
 .map-area { flex: 1; position: relative; }
 .map-toolbar {
   position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 1000;
