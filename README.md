@@ -5,7 +5,7 @@
 [![Code Style](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![Type Checked](https://img.shields.io/badge/type%20checked-mypy-informational)](http://mypy-lang.org/)
 
-配置驱动的节点编排框架，专为低速车辆边缘计算场景设计。通过声明式 YAML 配置实现节点间数据流编排，支持 AI 辅助的调试和运维能力（MCP 服务）。
+配置驱动的节点编排框架，面向农业机器人自主作业场景。支持**云端任务下发 → 边侧接收 → 自动执行 → 状态上报**的完整闭环，以及多机协同、地块分割、作业编排等农场管理能力。
 
 ---
 
@@ -19,7 +19,10 @@
 - 📊 **拓扑分析**: 自动检测循环依赖、端口类型匹配和启动顺序优化
 - 🛡️ **安全加固**: 路径边界验证、参数类型检查、异常隔离机制
 - 📜 **数据契约**: 基于 Pydantic 的 Schema 定义，支持离线合规性检查（Health Check）
-- 🧪 **完善测试**: 单元测试、集成测试、Mock 节点覆盖
+- ☁️ **云端管理**: 农场地图、地块管理、作业编排、MQTT 下发、SSE 实时推送
+- 📡 **任务下发**: 云端 → MQTT → 边侧 Agent → Runtime Daemon 全链路
+- 🤖 **多机协同**: 地块自动分割、多机分配、步骤依赖链 (旋耕→播种)
+- 🧪 **完善测试**: 单元测试 (5/5)、E2E 集成测试 (8/8 场景)、TypeScript 零错误
 
 ---
 
@@ -108,17 +111,31 @@ node/
 ├── web-editor/           # Web 可视化编辑器
 │   └── docs/             # 编辑器文档
 │
+├── cloud/                # 云端农场管理平台
+│   ├── server/           # FastAPI 后端 (25 API 端点)
+│   │   ├── models/       # SQLAlchemy ORM (6 张表)
+│   │   ├── routers/      # 地块/机器/作业/任务/文件/SSE
+│   │   └── services/     # MQTT/分割/下发引擎/心跳监控
+│   ├── web/              # Vue 3 前端 (6 页面, Leaflet 地图)
+│   │   ├── views/        # 地图/机器/作业/设置
+│   │   └── components/   # 地图图层/作业向导/时间线
+│   └── docs/             # 开发手册 + 对接协议 + 前端指南
+│
 ├── tools/cli/            # 命令行工具
-│   └── commands/         # CLI 命令
+│   └── commands/         # CLI 命令 + task 子命令
 │
 ├── tests/                # 测试套件
 │   ├── unit/             # 单元测试
-│   └── integration/      # 集成测试
+│   ├── integration/      # 集成测试
+│   └── e2e_cli.py        # E2E 集成测试工具 (8 场景)
 │
 ├── docs/                 # 文档
 │   ├── old/              # 历史文档归档
 │   ├── 评审报告/          # AI 评审报告
-│   └── CHANGELOG.md      # 更新日志
+│   ├── BUG_REPORT.md     # Bug 审查报告 (37 项)
+│   ├── BUG_FIX_PLAN.md   # 修复方案 (14 FIX)
+│   ├── BUG_FIX_REPORT.md # 修复报告
+│   └── FIELD_TEST_PLAN.md # 实机测试计划
 │
 ├── mcp_server.py         # MCP 服务 (AI 辅助调试)
 ├── runtime_manager.py    # 运行时进程管理
@@ -323,9 +340,34 @@ node_params:
 └──────────────────────────────────────────────────┘
 ```
 
+### 集成测试
+
+```bash
+# 一键启动所有服务
+python3 tests/e2e_cli.py start
+
+# 运行全部 8 个场景
+python3 tests/e2e_cli.py test --all
+
+# 单场景调试
+python3 tests/e2e_cli.py test -s S4
+
+# 实时监控
+python3 tests/e2e_cli.py watch
+
+# 停止/清理
+python3 tests/e2e_cli.py stop
+python3 tests/e2e_cli.py clean
+```
+
+**8 个 E2E 场景**: S1 单机下发 / S2 多步编排 / S3 多机分割 / S4 任务取消 / S5 重复去重 / S6 自动发现 / S7 状态流转 / S8 心跳中断
+
 **详细文档**:
-- 📖 [云端集成对接文档](docs/CLOUD_INTEGRATION.md) — MQTT 协议、HTTP API、消息格式规范
+- 📖 [云端集成对接文档](cloud/docs/CLOUD_INTEGRATION.md) — MQTT 协议、HTTP API、消息格式规范
+- 📖 [云端开发手册](cloud/docs/DEVELOPMENT.md) — 架构、数据模型、API、启动指南
+- 📖 [前端页面与使用逻辑](cloud/docs/FRONTEND_GUIDE.md) — 6 页面、组件树、数据流
 - 📖 [Daemon 模式指南](docs/DAEMON_MODE_GUIDE.md) — 守护进程运行模式
+- 📖 [实机测试计划](docs/FIELD_TEST_PLAN.md) — 安全规程、测试场景、标定流程
 
 ---
 
@@ -438,16 +480,20 @@ python -m pytest test/ -v
 | [SDK 快速入门](sdk/doc/SDK_GETTING_STARTED.md) | 10 分钟上手 NodeFlow SDK |
 | [SDK API 参考](sdk/doc/SDK_API_REFERENCE.md) | 完整的 SDK API 文档 |
 | [SDK 最佳实践](sdk/doc/SDK_BEST_PRACTICES.md) | 架构设计、性能优化 |
+| [前端页面与使用逻辑](cloud/docs/FRONTEND_GUIDE.md) | 6 页面、组件树、交互流程 |
 | [节点开发规范](node-hub/doc/节点开发规范.md) | 节点开发标准和最佳实践 |
 
 ### 功能文档
 
 | 文档 | 描述 |
 |------|------|
-| [云端集成对接文档](docs/CLOUD_INTEGRATION.md) | MQTT 协议、HTTP API、消息格式规范 ⭐ |
+| [云端集成对接文档](cloud/docs/CLOUD_INTEGRATION.md) | MQTT 协议、HTTP API、消息格式规范 ⭐ |
+| [云端开发手册](cloud/docs/DEVELOPMENT.md) | 架构、数据模型、API、启动 ⭐ |
+| [实机测试计划](docs/FIELD_TEST_PLAN.md) | 安全规程、测试场景、标定流程 |
+| [Bug 审查报告](docs/BUG_REPORT.md) | 37 项 Bug、GPT 交叉验证 |
+| [Bug 修复报告](docs/BUG_FIX_REPORT.md) | 14 FIX、E2E 验证结果 |
 | [结构化日志系统](docs/STRUCTURED_LOGGING_GUIDE.md) | JSON 日志 + CLI 聚合工具 |
 | [父进程监控机制](docs/PARENT_PROCESS_WATCHDOG.md) | 僵尸进程自动清理 |
-| [ENU 坐标系统一](docs/old/ENU_DECOUPLED_V2_FINAL_SUMMARY.md) | 坐标系架构重构总结 |
 
 ### 历史文档
 
@@ -593,6 +639,16 @@ nodes:
 ---
 
 ## 🔄 最近更新
+
+### 2026-05 — 云端农场管理平台 + 任务下发 (v0.3.0)
+
+- ☁️ **云端后端** (`cloud/server/`): FastAPI, 25 端点, SQLAlchemy 6 表, MQTT 集成, 地块分割, 下发引擎
+- 🖥️ **云端前端** (`cloud/web/`): Vue 3 + Leaflet 卫星地图, 6 页面, SSE 实时推送
+- 📡 **端侧 TaskAgent** (`runtime/task/`): MQTT 订阅 → control buffer → daemon 参数注入
+- 🤖 **多机协同**: 地块自动分割、多机分配、步骤依赖链 (旋耕→播种)
+- 🔍 **自动发现**: MQTT 心跳 → 自动创建 → 人工确认注册
+- 🧪 **E2E 测试**: 8/8 场景 100% 通过
+- 🐛 **Bug 修复**: 14 FIX (取消链路/RUNNING 定时器/步骤推进/SSE 线程安全/SQLite WAL)
 
 ### 2026-01-02
 - 🧹 **项目整理**: 归档历史文档、清理测试文件、更新目录结构
