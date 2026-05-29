@@ -1,0 +1,48 @@
+name: path_progress
+version: "0.1.0"
+description: "路径进度节点：将实时位姿投影到 operation_plan 的路径和段语义上"
+
+metadata:
+  coordinate_system: ENU
+  heading_convention: mathematical
+
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+  darwin:
+    kind: python
+    cmd: ["python3", "run.py"]
+  windows:
+    kind: python
+    cmd: ["python", "run.py"]
+
+ports:
+  inputs:
+    - name: operation_plan
+      type: planning.operation_plan
+      description: "带段语义的规划结果"
+    - name: pose_enu
+      type: localization.pose_enu
+      description: "车辆 ENU 姿态"
+  outputs:
+    - name: progress_state
+      type: planning.path_progress
+      description: |
+        路径进度状态：
+        - segment_id/type/zone
+        - path_index/station
+        - distance_to_segment_end_m
+        - cross_track_error_m/heading_error_deg
+        - motion/implement 意图
+
+params:
+  search_window:
+    type: integer
+    default: 120
+    description: "从上次路径索引开始向前搜索的路径段数"
+
+  publish_interval:
+    type: number
+    default: 0.02
+    description: "输出间隔秒数"

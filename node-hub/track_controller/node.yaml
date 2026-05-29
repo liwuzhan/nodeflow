@@ -28,6 +28,9 @@ ports:
         前瞻目标点
         - x/y: ENU坐标（米）
         - final: 是否为终点
+    - name: path_progress
+      type: planning.path_progress
+      description: "可选：当前路径段和误差信息，用于段限速和横向误差保护"
   outputs:
     - name: velocity_cmd
       type: control.velocity
@@ -103,3 +106,11 @@ params:
     type: float
     default: 0.35
     description: "尖锐掉头速度因子"
+  cross_track_slowdown_error_m:
+    type: float
+    default: 0.5
+    description: "横向误差超过该值时开始额外降速"
+  cross_track_stop_error_m:
+    type: float
+    default: 1.5
+    description: "横向误差超过该值时线速度降为0"

@@ -6,11 +6,19 @@ waypoint_selector 的 L4 原子层单元测试
 
 import sys
 from pathlib import Path
+import importlib.util
 
 # 添加父目录到路径
-sys.path.insert(0, str(Path(__file__).parent.parent))
+node_dir = Path(__file__).parent.parent
+sys.path.insert(0, str(node_dir))
 
-from atom import WaypointSelector, ViewConfig
+spec = importlib.util.spec_from_file_location("waypoint_selector_atom", node_dir / "atom.py")
+waypoint_atom = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(waypoint_atom)
+
+WaypointSelector = waypoint_atom.WaypointSelector
+ViewConfig = waypoint_atom.ViewConfig
 import math
 
 

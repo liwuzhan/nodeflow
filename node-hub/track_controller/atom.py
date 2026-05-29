@@ -31,7 +31,10 @@ def compute_velocity_cmd(
     turn_slowdown_angle_deg: float = 45.0,
     sharp_turn_angle_deg: float = 120.0,
     turn_speed_factor: float = 0.65,
-    sharp_turn_speed_factor: float = 0.35
+    sharp_turn_speed_factor: float = 0.35,
+    path_progress: dict | None = None,
+    cross_track_slowdown_error_m: float = 0.5,
+    cross_track_stop_error_m: float = 1.5
 ) -> dict:
     """
     计算速度控制命令（ENU坐标系）
@@ -59,6 +62,14 @@ def compute_velocity_cmd(
     mode = npkt.get("mode", "tracking")
     in_view_count = npkt.get("in_view_count", npkt.get("in_view"))
     upcoming_turn_angle_deg = float(npkt.get("upcoming_turn_angle_deg", 0.0) or 0.0)
+    segment_speed_limit = None
+    cross_track_error_m = None
+    if path_progress:
+        motion = path_progress.get("motion", {}) or {}
+        segment_speed_limit = motion.get("speed_limit_mps")
+        cte = path_progress.get("cross_track_error_m")
+        if cte is not None:
+            cross_track_error_m = abs(float(cte))
 
     # 1. 计算到目标点的距离（欧几里得距离）
     dist = math.sqrt((nx - cx)**2 + (ny - cy)**2)
@@ -133,7 +144,20 @@ def compute_velocity_cmd(
     elif upcoming_turn_angle_deg >= turn_slowdown_angle_deg:
         turn_factor = turn_speed_factor
 
-    speed_factor = min(view_factor, mode_factor, turn_factor)
+    cte_factor = 1.0
+    if cross_track_error_m is not None:
+        if cross_track_error_m >= cross_track_stop_error_m:
+            cte_factor = 0.0
+        elif cross_track_error_m >= cross_track_slowdown_error_m:
+            span = max(1e-6, cross_track_stop_error_m - cross_track_slowdown_error_m)
+            ratio = (cross_track_error_m - cross_track_slowdown_error_m) / span
+            cte_factor = max(0.3, 1.0 - 0.7 * ratio)
+
+    speed_limit_factor = 1.0
+    if segment_speed_limit is not None and max_speed > 0:
+        speed_limit_factor = max(0.0, min(1.0, float(segment_speed_limit) / max_speed))
+
+    speed_factor = min(view_factor, mode_factor, turn_factor, cte_factor, speed_limit_factor)
     if v > 0.0:
         v *= speed_factor
         if v < min_speed:
@@ -158,7 +182,13 @@ def compute_velocity_cmd(
         "view_factor": view_factor,
         "mode_factor": mode_factor,
         "turn_factor": turn_factor,
+        "cte_factor": cte_factor,
+        "speed_limit_factor": speed_limit_factor,
     }
+    if segment_speed_limit is not None:
+        result["segment_speed_limit_mps"] = float(segment_speed_limit)
+    if cross_track_error_m is not None:
+        result["cross_track_error_m"] = cross_track_error_m
     if status:
         result["status"] = status
     return result

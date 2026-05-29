@@ -18,6 +18,9 @@ ports:
     - name: global_path
       type: planning.path
       description: "全局路径 (ENU 坐标)"
+    - name: operation_plan
+      type: planning.operation_plan
+      description: "可选：带段语义的作业计划；连接后优先于 global_path"
     - name: pose_enu
       type: localization.pose_enu
       description: "车辆姿态 (x, y, theta) - 必须包含航向"

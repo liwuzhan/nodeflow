@@ -71,6 +71,10 @@ nodes:
     description: "根据地块和车辆配置生成全覆盖路径"
     params:
       path_point_spacing: 0.5  # 路径点间距 (米)
+      turn_angle_threshold_deg: 45.0
+      turn_zone_radius_m: 4.0
+      work_speed_limit_mps: 1.2
+      turn_speed_limit_mps: 0.5
 
   # ┌─────────────────────────────────────────────────────────────────────┐
   # │ 纯追踪速度控制器                                                     │
@@ -114,6 +118,13 @@ nodes:
       # 前方路径预判（给控制器提供掉头/急弯信号）
       turn_preview_distance: 8.0
 
+  - id: path_progress
+    package: path_progress
+    description: "将实时位姿投影到 operation_plan，输出当前段和误差"
+    params:
+      search_window: 120
+      publish_interval: 0.02
+
   - id: track_controller
     package: track_controller
     description: "履带控制，支持原地转向"
@@ -139,6 +150,8 @@ nodes:
       turn_speed_factor: 0.65
       sharp_turn_angle_deg: 120.0
       sharp_turn_speed_factor: 0.35
+      cross_track_slowdown_error_m: 0.5
+      cross_track_stop_error_m: 1.5
 
   # ┌─────────────────────────────────────────────────────────────────────┐
   # │ 仿真器输入 (接收控制命令)                                            │
@@ -222,13 +235,22 @@ edges:
   # │ 控制流程 (全部使用ENU坐标)
   # └─────────────────────────────────────────────────────────────────────┘
 
-  # 规划路径 (ENU) → 前瞻点选择
+  # 规划路径/作业计划 (ENU) → 前瞻点选择 + 路径进度
   - from: global_coverage.global_path
     to: waypoint_selector.global_path
     description: "规划路径 (ENU坐标)"
+  - from: global_coverage.operation_plan
+    to: waypoint_selector.operation_plan
+    description: "作业计划 → 前瞻点选择"
+  - from: global_coverage.operation_plan
+    to: path_progress.operation_plan
+    description: "作业计划 → 路径进度"
   - from: coord_transform.pose_enu
     to: waypoint_selector.pose_enu
     description: "ENU姿态 → 前瞻点选择"
+  - from: coord_transform.pose_enu
+    to: path_progress.pose_enu
+    description: "ENU姿态 → 路径进度"
 
   # 前瞻点 + ENU姿态 → 轨迹控制
   - from: waypoint_selector.next_point
@@ -237,6 +259,9 @@ edges:
   - from: coord_transform.pose_enu
     to: track_controller.pose_enu
     description: "ENU姿态 → 轨迹控制"
+  - from: path_progress.progress_state
+    to: track_controller.path_progress
+    description: "路径进度 → 段限速/误差保护"
 
   # 速度指令 → 仿真器输入
   # 这个边确保sim_input依赖velocity_controller，sim_input会在velocity_controller之后启动
@@ -257,11 +282,18 @@ edges:
   - from: global_coverage.global_path
     to: trajectory_viz.global_path
     description: "规划的全局路径 (ENU坐标)"
+  - from: global_coverage.operation_plan
+    to: trajectory_viz.operation_plan
+    description: "作业计划与段语义 → 可视化"
 
   # ENU姿态 → 可视化
   - from: coord_transform.pose_enu
     to: trajectory_viz.pose_enu
     description: "实际轨迹 (ENU坐标)"
+
+  - from: path_progress.progress_state
+    to: trajectory_viz.path_progress
+    description: "路径进度 → 可视化"
 
   # 前瞻点与速度指令 → 可视化复盘
   - from: waypoint_selector.next_point

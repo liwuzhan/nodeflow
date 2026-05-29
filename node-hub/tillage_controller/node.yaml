@@ -24,6 +24,9 @@ ports:
     - name: task_enu
       type: planning.task_enu
       description: "地块边界，用于 zone 自动检测 (点-in-多边形)"
+    - name: path_progress
+      type: planning.path_progress
+      description: "可选：路径进度与机具意图，优先于 next_point zone 和边界自动检测"
   outputs:
     - name: tillage_cmd
       type: implement.tillage_cmd

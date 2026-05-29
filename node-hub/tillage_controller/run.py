@@ -54,6 +54,17 @@ class TaskENU(BaseModel):
     ref_lat: float
     timestamp: float
 
+class PathProgress(BaseModel):
+    segment_id: str = ""
+    segment_type: str = ""
+    zone: str = ""
+    path_index: int = 0
+    distance_to_segment_end_m: float = 0.0
+    cross_track_error_m: float = 0.0
+    heading_error_deg: float = 0.0
+    motion: dict = {}
+    implement: dict = {}
+
 class TillageCmd(BaseModel):
     pto_on: bool
     hitch_height: float
@@ -113,6 +124,7 @@ def main():
         in_pose = sdk.create_input_port("pose_enu")
         in_next_point = sdk.create_input_port("next_point")
         in_task = sdk.create_input_port("task_enu")
+        in_progress = sdk.create_input_port("path_progress")
         out_cmd = sdk.create_output_port("tillage_cmd", schema=TillageCmd)
         out_status = sdk.create_output_port("tillage_status", schema=TillageStatus)
 
@@ -120,6 +132,7 @@ def main():
         last_pose = None
         last_next_point = None
         last_task = None
+        last_progress = None
         last_state = None  # 用于检测状态变化
 
         # 4. 主循环 (L3 职责: 数据搬运)
@@ -130,6 +143,7 @@ def main():
             pose = in_pose.recv_latest()
             next_point = in_next_point.recv_latest()
             task = in_task.recv_latest()
+            progress = in_progress.recv_latest()
 
             if pose:
                 last_pose = pose
@@ -140,6 +154,8 @@ def main():
                 sdk.logger.info(
                     f"[地块] 边界顶点数: {len(task.get('parcel', {}).get('outer', []))}"
                 )
+            if progress:
+                last_progress = progress
 
             # 4b. 调用 L4 原子层
             cmd = controller.update(
@@ -147,6 +163,7 @@ def main():
                 next_point=last_next_point,
                 task_enu=last_task,
                 emergency_stop=emergency_stop,
+                path_progress=last_progress,
             )
 
             # 4c. 发送输出

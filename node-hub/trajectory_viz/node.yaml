@@ -21,6 +21,9 @@ ports:
     - name: global_path
       type: planning.path
       description: "规划器输出的全局路径（ENU坐标）"
+    - name: operation_plan
+      type: planning.operation_plan
+      description: "可选：带段语义的作业计划，用于路径和覆盖复盘"
     - name: pose_enu
       type: localization.pose_enu
       description: "ENU坐标系姿态，用于记录实际轨迹 (x, y, theta)"

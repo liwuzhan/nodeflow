@@ -39,6 +39,17 @@ class NextPoint(BaseModel):
     upcoming_turn_angle_deg: Optional[float] = None
     upcoming_turn_distance: Optional[float] = None
 
+class PathProgress(BaseModel):
+    segment_id: Optional[str] = None
+    segment_type: Optional[str] = None
+    zone: Optional[str] = None
+    path_index: Optional[int] = None
+    distance_to_segment_end_m: Optional[float] = None
+    cross_track_error_m: Optional[float] = None
+    heading_error_deg: Optional[float] = None
+    motion: Optional[dict] = None
+    implement: Optional[dict] = None
+
 class VelocityCmd(BaseModel):
     linear_velocity: float
     angular_velocity: float
@@ -49,6 +60,10 @@ class VelocityCmd(BaseModel):
     view_factor: Optional[float] = None
     mode_factor: Optional[float] = None
     turn_factor: Optional[float] = None
+    cte_factor: Optional[float] = None
+    speed_limit_factor: Optional[float] = None
+    segment_speed_limit_mps: Optional[float] = None
+    cross_track_error_m: Optional[float] = None
 
 # --- End Schema Definitions ---
 
@@ -74,6 +89,8 @@ def main():
         sharp_turn_angle_deg = float(sdk.params.get("sharp_turn_angle_deg", 120.0))
         turn_speed_factor = float(sdk.params.get("turn_speed_factor", 0.65))
         sharp_turn_speed_factor = float(sdk.params.get("sharp_turn_speed_factor", 0.35))
+        cross_track_slowdown_error_m = float(sdk.params.get("cross_track_slowdown_error_m", 0.5))
+        cross_track_stop_error_m = float(sdk.params.get("cross_track_stop_error_m", 1.5))
 
         sdk.logger.info(f"参数: max_speed={max_speed}, kp={kp}, max_w={max_w}, pivot_th={pivot_th}°")
         sdk.logger.info(
@@ -93,22 +110,27 @@ def main():
         # 使用ENU坐标
         in_pose = sdk.create_input_port("pose_enu")
         in_np = sdk.create_input_port("next_point")
+        in_progress = sdk.create_input_port("path_progress")
         out = sdk.create_output_port("velocity_cmd", schema=VelocityCmd)
 
         # 本地缓存
         last_pose = None
         last_np = None
+        last_progress = None
 
         while True:
             # 尝试读取新数据
             pose = in_pose.recv_latest()
             npkt = in_np.recv_latest()
+            progress = in_progress.recv_latest()
 
             # 更新本地缓存
             if pose:
                 last_pose = pose
             if npkt:
                 last_np = npkt
+            if progress:
+                last_progress = progress
 
             # 计算控制命令
             now = time.time()
@@ -133,7 +155,10 @@ def main():
                 turn_slowdown_angle_deg,
                 sharp_turn_angle_deg,
                 turn_speed_factor,
-                sharp_turn_speed_factor
+                sharp_turn_speed_factor,
+                last_progress,
+                cross_track_slowdown_error_m,
+                cross_track_stop_error_m
             )
             out.send(cmd)
             time.sleep(0.005)  # 200Hz

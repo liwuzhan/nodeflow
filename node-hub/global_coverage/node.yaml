@@ -33,9 +33,38 @@ ports:
         - task_id: 任务ID
       buffer_size: 3097152  # 3MB - 足以存储典型路径（几百个路径点）
       conflate: true  # 覆盖模式 - 只保留最新规划结果
+    - name: operation_plan
+      type: planning.operation_plan
+      description: |
+        带作业语义的规划结果（兼容 global_path）
+        - path: ENU路径点列表 [(x,y),...] (米)
+        - path_zones: 每个路径点的 work/transit 标注
+        - segments: 作业段/掉头段语义、速度上限、机具意图
+      buffer_size: 3097152
+      conflate: true
 
 params:
   path_point_spacing:
     type: number
     default: 0.5
     description: "路径点间距 (米)，用于密化路径以便控制器跟踪"
+
+  turn_angle_threshold_deg:
+    type: number
+    default: 45.0
+    description: "几何转角超过该角度时标记为地头/掉头段"
+
+  turn_zone_radius_m:
+    type: number
+    default: 4.0
+    description: "转角点前后标记为 transit/headland_turn 的路径距离"
+
+  work_speed_limit_mps:
+    type: number
+    default: 1.2
+    description: "作业段默认速度上限"
+
+  turn_speed_limit_mps:
+    type: number
+    default: 0.5
+    description: "地头/掉头段默认速度上限"

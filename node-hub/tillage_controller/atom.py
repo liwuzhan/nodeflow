@@ -156,7 +156,8 @@ class TillageController:
         self,
         pose: Optional[Dict[str, Any]],
         next_point: Optional[Dict[str, Any]],
-        task_enu: Optional[Dict[str, Any]]
+        task_enu: Optional[Dict[str, Any]],
+        path_progress: Optional[Dict[str, Any]] = None
     ) -> str:
         """
         判定当前所在 zone
@@ -169,6 +170,17 @@ class TillageController:
         返回:
             "work" 或 "transit"
         """
+        # 优先级0: 路径进度节点的段语义
+        if path_progress:
+            progress_zone = path_progress.get("zone")
+            if progress_zone in ("work", "transit"):
+                return progress_zone
+            segment_type = path_progress.get("segment_type")
+            if segment_type == "work":
+                return "work"
+            if segment_type:
+                return "transit"
+
         # 优先级1: 航点显式标注
         if next_point:
             zone_hint = next_point.get("zone")
@@ -209,7 +221,8 @@ class TillageController:
         pose: Optional[Dict[str, Any]] = None,
         next_point: Optional[Dict[str, Any]] = None,
         task_enu: Optional[Dict[str, Any]] = None,
-        emergency_stop: bool = False
+        emergency_stop: bool = False,
+        path_progress: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         主更新函数 — 每帧调用一次
@@ -241,13 +254,22 @@ class TillageController:
             return self._make_cmd(now)
 
         # === Zone 判定 ===
-        current_zone = self.detect_zone(pose, next_point, task_enu)
+        current_zone = self.detect_zone(pose, next_point, task_enu, path_progress)
         is_final = bool(next_point.get("final", False)) if next_point else False
-        has_data = pose is not None or next_point is not None
+        has_data = pose is not None or next_point is not None or path_progress is not None
+
+        implement_intent = path_progress.get("implement", {}) if path_progress else {}
+        intent_pto = implement_intent.get("pto")
+        intent_hitch = implement_intent.get("hitch")
 
         # 需要在 headland 升起机具的条件
         should_raise = (current_zone == "transit") or is_final
         should_lower = (current_zone == "work") and not is_final and has_data
+        if intent_pto == "off" or intent_hitch == "up":
+            should_raise = True
+            should_lower = False
+        elif intent_pto == "on" or intent_hitch == "down":
+            should_lower = not is_final and has_data
 
         # === 状态机驱动 ===
         state = self.state.state

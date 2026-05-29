@@ -71,6 +71,7 @@ def main():
         # 3. 创建端口
         task_port = sdk.create_input_port('task_enu')
         path_port = sdk.create_input_port('global_path')
+        plan_port = sdk.create_input_port('operation_plan')
         pose_port = sdk.create_input_port('pose_enu')
         next_point_port = sdk.create_input_port('next_point')
         velocity_port = sdk.create_input_port('velocity_cmd')
@@ -80,7 +81,7 @@ def main():
         output_port = sdk.create_output_port('web_url', schema=TrajectoryWebURL)
 
         print(
-            "端口已创建: task_enu, global_path, pose_enu, next_point, "
+            "端口已创建: task_enu, global_path, operation_plan, pose_enu, next_point, "
             "velocity_cmd, tillage_cmd, tillage_status, path_progress -> web_url"
         )
         print()
@@ -128,6 +129,7 @@ def main():
 
                 # 5b. 接收数据 (非阻塞，Latest-Value语义)
                 task_data = task_port.recv_latest()
+                plan_data = plan_port.recv_latest()
                 path_data = path_port.recv_latest()
                 pose_data = pose_port.recv_latest()
                 next_point_data = next_point_port.recv_latest()
@@ -167,7 +169,20 @@ def main():
                         except (TypeError, ValueError):
                             implement_width_m = 0.0
 
-                # 5d. 处理 global_path (规划路径)
+                # operation_plan 优先，兼容旧 global_path。
+                if plan_data:
+                    plan_path = plan_data.get("path", [])
+                    if isinstance(plan_path, dict):
+                        plan_path = plan_path.get("points", [])
+                    path_data = {
+                        "task_id": plan_data.get("task_id"),
+                        "timestamp": plan_data.get("timestamp"),
+                        "path": plan_path,
+                        "path_zones": plan_data.get("path_zones", []),
+                        "segments": plan_data.get("segments", []),
+                    }
+
+                # 5d. 处理 global_path / operation_plan (规划路径)
                 if path_data:
                     path = path_data.get("path")
                     segments = path_data.get("segments", []) or []

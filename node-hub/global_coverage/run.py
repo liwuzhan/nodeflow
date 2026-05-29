@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from sdk.nodeflow_sdk import NodeFlowSDK
 from utils.planner import GlobalCoveragePlanner
 from utils.models import VehicleConfig, ParcelData
+from utils.operation_plan import build_operation_plan
 
 # --- Schema Definitions ---
 
@@ -48,6 +49,16 @@ class GlobalPath(BaseModel):
     path: List[Tuple[float, float]]
     status: str
     message: str
+
+class OperationPlan(BaseModel):
+    task_id: str
+    timestamp: float
+    frame: str
+    path: List[Tuple[float, float]]
+    path_zones: List[str]
+    segments: List[Dict[str, Any]]
+    status: str
+    summary: Dict[str, Any]
 
 # --- End Schema Definitions ---
 
@@ -110,7 +121,16 @@ def main():
 
             # 读取参数
             path_point_spacing = float(sdk.params.get('path_point_spacing', 0.5))
+            turn_angle_threshold_deg = float(sdk.params.get('turn_angle_threshold_deg', 45.0))
+            turn_zone_radius_m = float(sdk.params.get('turn_zone_radius_m', 4.0))
+            work_speed_limit_mps = float(sdk.params.get('work_speed_limit_mps', 1.2))
+            turn_speed_limit_mps = float(sdk.params.get('turn_speed_limit_mps', 0.5))
             sdk.logger.info(f"路径点间距: {path_point_spacing}m")
+            sdk.logger.info(
+                f"作业语义: 转角阈值={turn_angle_threshold_deg}°, "
+                f"掉头半径={turn_zone_radius_m}m, "
+                f"作业限速={work_speed_limit_mps}m/s, 掉头限速={turn_speed_limit_mps}m/s"
+            )
 
             # 初始化规划器（输出ENU坐标），传递logger用于详细日志
             planner = GlobalCoveragePlanner(output_enu=True, logger=sdk.logger)
@@ -118,6 +138,7 @@ def main():
             # 创建端口
             input_port = sdk.create_input_port('task_enu')
             output_port = sdk.create_output_port('global_path', schema=GlobalPath)
+            operation_plan_port = sdk.create_output_port('operation_plan', schema=OperationPlan)
 
             last_task_id = None
             task_count = 0
@@ -188,10 +209,23 @@ def main():
                                     save_path_to_txt(planner.last_keypoints, task_id, txt_dir, sdk.logger)
 
                                 # 发送结果
+                                timestamp = time.time()
+                                operation_plan = build_operation_plan(
+                                    task_id=task_id,
+                                    path=path_points,
+                                    vehicle=vehicle,
+                                    timestamp=timestamp,
+                                    turn_angle_threshold_deg=turn_angle_threshold_deg,
+                                    turn_zone_radius_m=turn_zone_radius_m,
+                                    work_speed_mps=work_speed_limit_mps,
+                                    turn_speed_mps=turn_speed_limit_mps,
+                                )
                                 result = {
                                     'task_id': task_id,
-                                    'timestamp': time.time(),
+                                    'timestamp': timestamp,
                                     'path': path_points,
+                                    'path_zones': operation_plan.get('path_zones', []),
+                                    'segments': operation_plan.get('segments', []),
                                     'status': 'success' if path_points else 'failed',
                                     'message': 'Path found' if path_points else 'No path found'
                                 }
@@ -203,7 +237,11 @@ def main():
 
                                 while True:
                                     # 持续发送当前路径
+                                    now = time.time()
+                                    result['timestamp'] = now
+                                    operation_plan['timestamp'] = now
                                     output_port.send(result)
+                                    operation_plan_port.send(operation_plan)
                                     send_count += 1
 
                                     # 定期日志
@@ -229,10 +267,23 @@ def main():
                                     'task_id': task_id,
                                     'timestamp': time.time(),
                                     'path': [],
+                                    'path_zones': [],
+                                    'segments': [],
                                     'status': 'error',
                                     'message': str(e)
                                 }
                                 output_port.send(error_result)
+                                operation_plan_port.send({
+                                    'task_id': task_id,
+                                    'timestamp': time.time(),
+                                    'frame': 'ENU',
+                                    'path': [],
+                                    'path_zones': [],
+                                    'segments': [],
+                                    'status': 'error',
+                                    'summary': {'path_points': 0, 'segment_count': 0},
+                                    'message': str(e),
+                                })
                     
                     # 避免空转占用CPU，但保持一定的响应速度
                     time.sleep(0.1)

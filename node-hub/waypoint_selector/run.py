@@ -38,6 +38,14 @@ class GlobalPath(BaseModel):
     status: str
     message: str
 
+class OperationPlan(BaseModel):
+    task_id: str
+    timestamp: float
+    path: list
+    path_zones: list = []
+    segments: list = []
+    status: str = "success"
+
 class PoseENU(BaseModel):
     x: float
     y: float
@@ -113,6 +121,7 @@ def main():
 
         # 3. 创建端口
         in_path = sdk.create_input_port("global_path")
+        in_plan = sdk.create_input_port("operation_plan")
         in_pose = sdk.create_input_port("pose_enu")
         out_np = sdk.create_output_port("next_point", schema=NextPoint)
 
@@ -122,12 +131,28 @@ def main():
         # 4. 主循环 (L3 职责: 数据搬运)
         while True:
             # 4a. 接收输入 (非阻塞)
+            plan_pkt = in_plan.recv_latest()
             path_pkt = in_path.recv_latest()
             pose = in_pose.recv_latest()
 
             # 更新位置缓存
             if pose:
                 last_pose = pose
+
+            # operation_plan 优先，兼容旧 global_path。
+            if plan_pkt:
+                plan_path = plan_pkt.get("path", [])
+                if isinstance(plan_path, dict):
+                    plan_path = plan_path.get("points", [])
+                path_pkt = {
+                    "task_id": plan_pkt.get("task_id"),
+                    "timestamp": plan_pkt.get("timestamp"),
+                    "path": plan_path,
+                    "path_zones": plan_pkt.get("path_zones", []),
+                    "segments": plan_pkt.get("segments", []),
+                    "status": plan_pkt.get("status", "success"),
+                    "message": "Loaded from operation_plan",
+                }
 
             # 接收新路径时，调用 L4 原子设置路径
             if path_pkt:
