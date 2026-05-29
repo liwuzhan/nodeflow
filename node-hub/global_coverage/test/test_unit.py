@@ -13,6 +13,7 @@ sys.path.insert(0, str(node_dir))
 
 import pytest
 from utils.models import VehicleConfig, ParcelData
+from utils.planner import smooth_polyline_corners
 
 
 class TestVehicleConfig:
@@ -254,6 +255,22 @@ class TestPlanningScenarios:
         # 验证数据格式正确
         assert len(parcel.outer) == 4
         assert vehicle.effective_row_spacing > 0
+
+    def test_smooth_polyline_corners_rounds_sharp_turn(self):
+        path = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)]
+
+        smoothed = smooth_polyline_corners(
+            path,
+            corner_radius_m=2.0,
+            spacing_m=0.5,
+            min_turn_angle_deg=35.0,
+        )
+
+        assert smoothed[0] == path[0]
+        assert smoothed[-1] == path[-1]
+        assert (10.0, 0.0) not in smoothed
+        assert len(smoothed) > len(path)
+        assert any(x < 10.0 and y > 0.0 for x, y in smoothed)
 
     def test_complex_parcel_with_multiple_holes(self):
         """测试复杂地块与多个孔洞"""

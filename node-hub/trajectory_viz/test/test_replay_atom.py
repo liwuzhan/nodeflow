@@ -64,6 +64,23 @@ def test_make_replay_sample_collects_control_and_implement_state():
     assert sample["hitch_height"] == 0.4
 
 
+def test_make_replay_sample_uses_operation_plan_intent_without_tillage_node():
+    sample = make_replay_sample(
+        pose={"x": 1.0, "y": 2.0, "theta": 0.5},
+        path_progress={
+            "segment_id": "row_001",
+            "segment_type": "work",
+            "zone": "work",
+            "implement": {"pto": "on", "hitch": "down"},
+        },
+        now=100.0,
+    )
+
+    assert sample["tillage_state"] == "intent_working"
+    assert sample["pto_on"] is True
+    assert sample["hitch_height"] == 1.0
+
+
 def test_detect_replay_events_on_state_changes():
     previous = {
         "timestamp": 10.0,

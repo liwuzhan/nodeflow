@@ -68,3 +68,18 @@ params:
     type: number
     default: 0.5
     description: "地头/掉头段默认速度上限"
+
+  smooth_turns:
+    type: bool
+    default: false
+    description: "是否在输出路径前对急转角做几何圆角平滑"
+
+  turn_smoothing_radius_m:
+    type: number
+    default: null
+    description: "掉头圆角半径；为空时根据最小转弯半径或机具幅宽自动估计"
+
+  turn_smoothing_min_angle_deg:
+    type: number
+    default: 35.0
+    description: "转角超过该角度才执行圆角平滑"

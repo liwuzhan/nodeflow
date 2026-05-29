@@ -319,12 +319,34 @@ def make_replay_sample(
     The sample intentionally keeps only fields useful for visual replay and
     debugging. It does not mutate inputs and can be unit-tested without SDK.
     """
+    has_tillage_packet = bool(tillage_status or tillage_cmd)
     pose = pose or {}
     velocity_cmd = velocity_cmd or {}
     next_point = next_point or {}
     tillage_cmd = tillage_cmd or {}
     tillage_status = tillage_status or {}
     path_progress = path_progress or {}
+
+    implement_intent = path_progress.get("implement", {}) or {}
+    intent_pto = implement_intent.get("pto")
+    intent_hitch = implement_intent.get("hitch")
+    intent_working = (path_progress.get("zone") == "work") or (path_progress.get("segment_type") == "work")
+
+    if not has_tillage_packet and (intent_pto or intent_hitch or path_progress):
+        if intent_pto == "on" or intent_hitch == "down" or intent_working:
+            tillage_status = {
+                "state": "intent_working",
+                "pto_on": True,
+                "hitch_height": 1.0,
+                "pto_rpm": 540.0 if intent_pto == "on" else None,
+            }
+        else:
+            tillage_status = {
+                "state": "intent_transport",
+                "pto_on": False,
+                "hitch_height": 0.0,
+                "pto_rpm": 0.0,
+            }
 
     sample = {
         "timestamp": now,

@@ -62,6 +62,18 @@ class OperationPlan(BaseModel):
 
 # --- End Schema Definitions ---
 
+
+def _as_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "1", "yes", "on")
+    return default
+
 def save_path_to_txt(path_points: List[Tuple[float, float]], task_id: str, txt_dir: Path, logger) -> None:
     """
     保存关键转折点到txt文件，最多保存5个文件
@@ -125,11 +137,21 @@ def main():
             turn_zone_radius_m = float(sdk.params.get('turn_zone_radius_m', 4.0))
             work_speed_limit_mps = float(sdk.params.get('work_speed_limit_mps', 1.2))
             turn_speed_limit_mps = float(sdk.params.get('turn_speed_limit_mps', 0.5))
+            smooth_turns = _as_bool(sdk.params.get('smooth_turns', False))
+            turn_smoothing_radius_m = sdk.params.get('turn_smoothing_radius_m', None)
+            if turn_smoothing_radius_m is not None:
+                turn_smoothing_radius_m = float(turn_smoothing_radius_m)
+            turn_smoothing_min_angle_deg = float(sdk.params.get('turn_smoothing_min_angle_deg', 35.0))
             sdk.logger.info(f"路径点间距: {path_point_spacing}m")
             sdk.logger.info(
                 f"作业语义: 转角阈值={turn_angle_threshold_deg}°, "
                 f"掉头半径={turn_zone_radius_m}m, "
                 f"作业限速={work_speed_limit_mps}m/s, 掉头限速={turn_speed_limit_mps}m/s"
+            )
+            sdk.logger.info(
+                f"掉头圆角: {'启用' if smooth_turns else '关闭'}, "
+                f"半径={turn_smoothing_radius_m if turn_smoothing_radius_m is not None else 'auto'}m, "
+                f"最小角={turn_smoothing_min_angle_deg}°"
             )
 
             # 初始化规划器（输出ENU坐标），传递logger用于详细日志
@@ -199,7 +221,14 @@ def main():
                                 start_time = time.time()
 
                                 # 执行规划（使用配置的点间距）
-                                path_points = planner.plan(parcel, vehicle, path_point_spacing)
+                                path_points = planner.plan(
+                                    parcel,
+                                    vehicle,
+                                    path_point_spacing,
+                                    smooth_turns=smooth_turns,
+                                    turn_smoothing_radius_m=turn_smoothing_radius_m,
+                                    turn_smoothing_min_angle_deg=turn_smoothing_min_angle_deg,
+                                )
 
                                 duration = time.time() - start_time
                                 sdk.logger.info(f"✓ 规划执行完成 - 耗时={duration*1000:.1f}ms, 生成{len(path_points)}个路径点")

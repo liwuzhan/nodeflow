@@ -6,6 +6,7 @@ sys.path.insert(0, str(node_dir))
 
 from utils.models import VehicleConfig
 from utils.operation_plan import build_operation_plan, classify_path_zones
+from utils.planner import smooth_polyline_corners
 
 
 def test_classify_path_zones_marks_sharp_turn_as_transit():
@@ -52,3 +53,21 @@ def test_build_operation_plan_contains_segments_and_intent():
     assert work_segment["implement"]["hitch"] == "down"
     assert turn_segment["implement"]["pto"] == "off"
     assert turn_segment["implement"]["hitch"] == "up"
+
+
+def test_classify_path_zones_marks_smoothed_turn_as_transit():
+    path = smooth_polyline_corners(
+        [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)],
+        corner_radius_m=2.0,
+        spacing_m=0.5,
+        min_turn_angle_deg=35.0,
+    )
+
+    zones = classify_path_zones(
+        path,
+        turn_angle_threshold_deg=45.0,
+        turn_zone_radius_m=2.0,
+    )
+
+    assert len(zones) == len(path)
+    assert "transit" in zones[3:-3]

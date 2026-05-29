@@ -64,6 +64,96 @@ def densify_path(coords: List[Tuple[float, float]], spacing: float) -> List[Tupl
 
     return result
 
+
+def _dist(a: Tuple[float, float], b: Tuple[float, float]) -> float:
+    return math.hypot(b[0] - a[0], b[1] - a[1])
+
+
+def _unit(vx: float, vy: float) -> Tuple[float, float]:
+    length = math.hypot(vx, vy)
+    if length <= 1e-12:
+        return 0.0, 0.0
+    return vx / length, vy / length
+
+
+def _bezier_point(
+    p0: Tuple[float, float],
+    p1: Tuple[float, float],
+    p2: Tuple[float, float],
+    p3: Tuple[float, float],
+    t: float,
+) -> Tuple[float, float]:
+    u = 1.0 - t
+    return (
+        u * u * u * p0[0] + 3 * u * u * t * p1[0] + 3 * u * t * t * p2[0] + t * t * t * p3[0],
+        u * u * u * p0[1] + 3 * u * u * t * p1[1] + 3 * u * t * t * p2[1] + t * t * t * p3[1],
+    )
+
+
+def smooth_polyline_corners(
+    coords: List[Tuple[float, float]],
+    corner_radius_m: float,
+    spacing_m: float,
+    min_turn_angle_deg: float = 35.0,
+) -> List[Tuple[float, float]]:
+    """
+    Replace sharp polyline corners with short cubic Bezier fillets.
+
+    This is a geometric tracking aid, not a full headland planner. It keeps the
+    original segment order and rounds only meaningful direction changes.
+    """
+    if len(coords) < 3 or corner_radius_m <= 0:
+        return coords
+
+    min_turn = math.radians(min_turn_angle_deg)
+    result: List[Tuple[float, float]] = [coords[0]]
+    sample_spacing = max(0.1, spacing_m if spacing_m > 0 else corner_radius_m / 4.0)
+
+    for i in range(1, len(coords) - 1):
+        prev = coords[i - 1]
+        curr = coords[i]
+        nxt = coords[i + 1]
+        len_prev = _dist(prev, curr)
+        len_next = _dist(curr, nxt)
+        if len_prev <= 1e-6 or len_next <= 1e-6:
+            if result[-1] != curr:
+                result.append(curr)
+            continue
+
+        in_dir = _unit(curr[0] - prev[0], curr[1] - prev[1])
+        out_dir = _unit(nxt[0] - curr[0], nxt[1] - curr[1])
+        turn = abs(math.atan2(
+            in_dir[0] * out_dir[1] - in_dir[1] * out_dir[0],
+            in_dir[0] * out_dir[0] + in_dir[1] * out_dir[1],
+        ))
+        if turn < min_turn:
+            if result[-1] != curr:
+                result.append(curr)
+            continue
+
+        cut = min(corner_radius_m, len_prev * 0.45, len_next * 0.45)
+        if cut <= 1e-6:
+            if result[-1] != curr:
+                result.append(curr)
+            continue
+
+        p0 = (curr[0] - in_dir[0] * cut, curr[1] - in_dir[1] * cut)
+        p3 = (curr[0] + out_dir[0] * cut, curr[1] + out_dir[1] * cut)
+        p1 = (p0[0] + in_dir[0] * cut * 0.5523, p0[1] + in_dir[1] * cut * 0.5523)
+        p2 = (p3[0] - out_dir[0] * cut * 0.5523, p3[1] - out_dir[1] * cut * 0.5523)
+
+        if _dist(result[-1], p0) > 1e-6:
+            result.append(p0)
+
+        approx_len = max(cut, turn * cut)
+        steps = max(2, int(math.ceil(approx_len / sample_spacing)))
+        for step in range(1, steps + 1):
+            result.append(_bezier_point(p0, p1, p2, p3, step / steps))
+
+    if _dist(result[-1], coords[-1]) > 1e-6:
+        result.append(coords[-1])
+    return result
+
 class GlobalCoveragePlanner:
     def __init__(self, output_enu: bool = True, logger: Optional[logging.Logger] = None):
         """
@@ -81,7 +171,10 @@ class GlobalCoveragePlanner:
         self,
         parcel_data: ParcelData,
         vehicle_config: VehicleConfig,
-        path_point_spacing: float = 0.5
+        path_point_spacing: float = 0.5,
+        smooth_turns: bool = False,
+        turn_smoothing_radius_m: Optional[float] = None,
+        turn_smoothing_min_angle_deg: float = 35.0,
     ) -> List[Tuple[float, float]]:
         """
         执行全覆盖路径规划
@@ -256,6 +349,20 @@ class GlobalCoveragePlanner:
         # 9. 输出坐标（直接返回ENU坐标，输入已经是ENU）
         # 输入parcel_data来自task_enu，已经在ENU坐标系，直接返回规划结果
         raw_coords = list(connected_local.coords)
+        if smooth_turns:
+            radius = turn_smoothing_radius_m
+            if radius is None:
+                radius = vehicle_config.min_turn_radius_m or max(1.0, vehicle_config.implement_width_m * 0.5)
+            raw_coords = smooth_polyline_corners(
+                raw_coords,
+                corner_radius_m=float(radius),
+                spacing_m=path_point_spacing,
+                min_turn_angle_deg=turn_smoothing_min_angle_deg,
+            )
+            self.logger.info(
+                f"[掉头圆角] 启用: 半径={float(radius):.2f}m, "
+                f"圆角后关键点={len(raw_coords)}"
+            )
 
         # 保存关键转折点（密化前）
         self.last_keypoints = raw_coords

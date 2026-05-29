@@ -33,13 +33,15 @@ def _path_station(path: List[Tuple[float, float]]) -> List[float]:
 def _turn_indices(
     path: List[Tuple[float, float]],
     turn_angle_threshold_deg: float,
+    turn_window_m: float = 4.0,
 ) -> List[int]:
     if len(path) < 3:
         return []
 
     threshold = math.radians(turn_angle_threshold_deg)
     result: List[int] = []
-    prev_heading = None
+    stations = _path_station(path)
+    headings: List[Tuple[int, float, float]] = []
 
     for i in range(1, len(path)):
         x0, y0 = path[i - 1]
@@ -49,11 +51,20 @@ def _turn_indices(
             continue
 
         heading = math.atan2(y1 - y0, x1 - x0)
-        if prev_heading is not None:
-            turn = abs(normalize_angle(heading - prev_heading))
+        headings.append((i - 1, stations[i - 1] + seg_len * 0.5, heading))
+
+    if len(headings) < 2:
+        return []
+
+    window = max(0.1, turn_window_m)
+    for current_pos, (idx, station, heading) in enumerate(headings):
+        for future_idx, future_station, future_heading in headings[current_pos + 1:]:
+            if future_station - station > window:
+                break
+            turn = abs(normalize_angle(future_heading - heading))
             if turn >= threshold:
-                result.append(i - 1)
-        prev_heading = heading
+                result.append(max(idx, min(future_idx, len(path) - 1)))
+                break
 
     return result
 
@@ -75,7 +86,7 @@ def classify_path_zones(
 
     zones = ["work"] * len(path)
     stations = _path_station(path)
-    turns = _turn_indices(path, turn_angle_threshold_deg)
+    turns = _turn_indices(path, turn_angle_threshold_deg, max(turn_zone_radius_m * 2.0, 8.0))
 
     for idx in turns:
         center = stations[idx]

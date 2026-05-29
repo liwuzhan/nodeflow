@@ -75,6 +75,9 @@ nodes:
       turn_zone_radius_m: 4.0
       work_speed_limit_mps: 1.2
       turn_speed_limit_mps: 0.5
+      smooth_turns: true
+      turn_smoothing_radius_m: 2.0
+      turn_smoothing_min_angle_deg: 35.0
 
   # ┌─────────────────────────────────────────────────────────────────────┐
   # │ 纯追踪速度控制器                                                     │
@@ -152,6 +155,18 @@ nodes:
       sharp_turn_speed_factor: 0.35
       cross_track_slowdown_error_m: 0.5
       cross_track_stop_error_m: 1.5
+
+  - id: tillage_controller
+    package: tillage_controller
+    description: "机具控制状态机，用于覆盖率和作业状态复盘"
+    params:
+      hitch_lower_time_s: 1.5
+      hitch_raise_time_s: 1.5
+      headland_width_m: 3.0
+      pto_engage_delay_s: 0.5
+      auto_zone_detect: true
+      hitch_working_height: 1.0
+      enable_verbose_log: false
 
   # ┌─────────────────────────────────────────────────────────────────────┐
   # │ 仿真器输入 (接收控制命令)                                            │
@@ -265,6 +280,18 @@ edges:
   - from: path_progress.progress_state
     to: track_controller.path_progress
     description: "路径进度 → 段限速/误差保护"
+  - from: coord_transform.pose_enu
+    to: tillage_controller.pose_enu
+    description: "ENU姿态 → 机具控制"
+  - from: waypoint_selector.next_point
+    to: tillage_controller.next_point
+    description: "前瞻点 zone/final → 机具控制"
+  - from: coord_transform.task_enu
+    to: tillage_controller.task_enu
+    description: "地块边界 → 机具 zone 自动检测"
+  - from: path_progress.progress_state
+    to: tillage_controller.path_progress
+    description: "路径段语义与机具意图 → 机具控制"
 
   # 速度指令 → 仿真器输入
   # 这个边确保sim_input依赖velocity_controller，sim_input会在velocity_controller之后启动
@@ -306,6 +333,12 @@ edges:
   - from: track_controller.velocity_cmd
     to: trajectory_viz.velocity_cmd
     description: "速度指令与减速因子 → 可视化"
+  - from: tillage_controller.tillage_cmd
+    to: trajectory_viz.tillage_cmd
+    description: "机具控制指令 → 覆盖率可视化"
+  - from: tillage_controller.tillage_status
+    to: trajectory_viz.tillage_status
+    description: "机具状态 → 覆盖率可视化"
 
   # ┌─────────────────────────────────────────────────────────────────────┐
   # │ 监测和日志 (关键数据流) - 暂时禁用
