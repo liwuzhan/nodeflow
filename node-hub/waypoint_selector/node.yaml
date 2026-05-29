@@ -87,3 +87,8 @@ params:
     type: number
     default: 1.5
     description: "每帧检查，距离小于此值的点自动消费 (米) - 防止跳过点"
+
+  turn_preview_distance:
+    type: number
+    default: 8.0
+    description: "向前预览路径距离，用于输出急转弯预警 (米)"

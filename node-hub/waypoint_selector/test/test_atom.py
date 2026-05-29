@@ -281,6 +281,34 @@ def test_u_turn():
     print(f"✓ U型弯道测试完成")
 
 
+def test_upcoming_turn_preview():
+    """测试7: 前方急转弯预判"""
+    print("\n=== 测试7: 前方急转弯预判 ===")
+
+    config = ViewConfig(
+        view_distance=2.0,
+        view_width=4.0,
+        view_depth=1.5,
+        turn_preview_distance=8.0
+    )
+    selector = WaypointSelector(config)
+
+    path = [
+        (0.0, 0.0), (1.0, 0.0), (2.0, 0.0), (3.0, 0.0),
+        (3.0, 1.0), (3.0, 2.0), (3.0, 3.0),
+    ]
+    selector.set_path({"path": path, "task_id": "turn_preview"})
+
+    result = selector.select({"x": 0.0, "y": 0.0, "theta": 0.0})
+
+    assert result["upcoming_turn_angle_deg"] >= 80.0
+    assert result["upcoming_turn_distance"] > 0.0
+    print(
+        f"✓ 预判转角: {result['upcoming_turn_angle_deg']:.1f}°, "
+        f"距离={result['upcoming_turn_distance']:.1f}m"
+    )
+
+
 def run_all_tests():
     """运行所有测试"""
     print("=" * 60)
@@ -294,6 +322,7 @@ def run_all_tests():
         test_path_consumption()
         test_initial_consume()
         test_u_turn()
+        test_upcoming_turn_preview()
 
         print("\n" + "=" * 60)
         print("✅ 所有测试通过!")

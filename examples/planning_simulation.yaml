@@ -111,6 +111,8 @@ nodes:
       max_view_width: 12.0    # 最大视野宽度
       # 持续消费参数（防止跳过点）
       continuous_consume_distance: 1.5  # 每帧自动消费距离过近的点
+      # 前方路径预判（给控制器提供掉头/急弯信号）
+      turn_preview_distance: 8.0
 
   - id: track_controller
     package: track_controller
@@ -123,7 +125,20 @@ nodes:
       pivot_threshold_deg: 20.0  # 增大原地转向阈值，避免频繁切换
       # 减速参数
       decel_start_distance: 3.0  # 开始减速的距离 (米)
+      decel_min_factor: 0.3      # 距离减速最小速度因子
       final_stop_distance: 0.5   # 终点停止距离 (米)
+      # 视野/模式自适应减速
+      low_view_threshold: 2
+      low_view_speed_factor: 0.75
+      very_low_view_threshold: 1
+      very_low_view_speed_factor: 0.45
+      approach_mode_factor: 0.5
+      fallback_mode_factor: 0.3
+      # 前方路径转角预判减速（U形弯/锐角折返）
+      turn_slowdown_angle_deg: 45.0
+      turn_speed_factor: 0.65
+      sharp_turn_angle_deg: 120.0
+      sharp_turn_speed_factor: 0.35
 
   # ┌─────────────────────────────────────────────────────────────────────┐
   # │ 仿真器输入 (接收控制命令)                                            │
@@ -247,6 +262,15 @@ edges:
   - from: coord_transform.pose_enu
     to: trajectory_viz.pose_enu
     description: "实际轨迹 (ENU坐标)"
+
+  # 前瞻点与速度指令 → 可视化复盘
+  - from: waypoint_selector.next_point
+    to: trajectory_viz.next_point
+    description: "前瞻点状态与掉头预判 → 可视化"
+
+  - from: track_controller.velocity_cmd
+    to: trajectory_viz.velocity_cmd
+    description: "速度指令与减速因子 → 可视化"
 
   # ┌─────────────────────────────────────────────────────────────────────┐
   # │ 监测和日志 (关键数据流) - 暂时禁用

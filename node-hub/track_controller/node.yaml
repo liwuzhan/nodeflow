@@ -53,9 +53,53 @@ params:
     default: 15.0
   decel_start_distance:
     type: float
-    default: 2.0
+    default: 3.0
     description: "开始减速的距离阈值 (米)"
+  decel_min_factor:
+    type: float
+    default: 0.3
+    description: "距离减速的最小速度因子"
   final_stop_distance:
     type: float
     default: 0.5
     description: "终点停止距离阈值 (米)"
+  low_view_threshold:
+    type: integer
+    default: 2
+    description: "视野内路径点较少阈值"
+  low_view_speed_factor:
+    type: float
+    default: 0.7
+    description: "视野内路径点较少时的速度因子"
+  very_low_view_threshold:
+    type: integer
+    default: 1
+    description: "视野内路径点极少阈值"
+  very_low_view_speed_factor:
+    type: float
+    default: 0.45
+    description: "视野内路径点极少时的速度因子"
+  approach_mode_factor:
+    type: float
+    default: 0.5
+    description: "waypoint_selector 进入 approach 模式时的速度因子"
+  fallback_mode_factor:
+    type: float
+    default: 0.3
+    description: "waypoint_selector 进入 fallback 模式时的速度因子"
+  turn_slowdown_angle_deg:
+    type: float
+    default: 45.0
+    description: "前方路径转角达到该角度时开始减速"
+  sharp_turn_angle_deg:
+    type: float
+    default: 120.0
+    description: "前方路径转角达到该角度时执行强减速"
+  turn_speed_factor:
+    type: float
+    default: 0.65
+    description: "普通急转弯速度因子"
+  sharp_turn_speed_factor:
+    type: float
+    default: 0.35
+    description: "尖锐掉头速度因子"

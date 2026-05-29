@@ -33,13 +33,22 @@ class NextPoint(BaseModel):
     final: bool
     index: Optional[int] = None
     total: Optional[int] = None
+    consumed: Optional[int] = None
+    in_view_count: Optional[int] = None
     mode: Optional[str] = None
+    upcoming_turn_angle_deg: Optional[float] = None
+    upcoming_turn_distance: Optional[float] = None
 
 class VelocityCmd(BaseModel):
     linear_velocity: float
     angular_velocity: float
     timestamp: float
     status: Optional[str] = None
+    speed_factor: Optional[float] = None
+    dist_factor: Optional[float] = None
+    view_factor: Optional[float] = None
+    mode_factor: Optional[float] = None
+    turn_factor: Optional[float] = None
 
 # --- End Schema Definitions ---
 
@@ -54,9 +63,32 @@ def main():
         pivot_th = float(sdk.params.get("pivot_threshold_deg", 15.0))
         decel_start_dist = float(sdk.params.get("decel_start_distance", 2.0))
         final_stop_dist = float(sdk.params.get("final_stop_distance", 0.5))
+        decel_min_factor = float(sdk.params.get("decel_min_factor", 0.3))
+        low_view_threshold = int(sdk.params.get("low_view_threshold", 2))
+        low_view_speed_factor = float(sdk.params.get("low_view_speed_factor", 0.7))
+        very_low_view_threshold = int(sdk.params.get("very_low_view_threshold", 1))
+        very_low_view_speed_factor = float(sdk.params.get("very_low_view_speed_factor", 0.45))
+        approach_mode_factor = float(sdk.params.get("approach_mode_factor", 0.5))
+        fallback_mode_factor = float(sdk.params.get("fallback_mode_factor", 0.3))
+        turn_slowdown_angle_deg = float(sdk.params.get("turn_slowdown_angle_deg", 45.0))
+        sharp_turn_angle_deg = float(sdk.params.get("sharp_turn_angle_deg", 120.0))
+        turn_speed_factor = float(sdk.params.get("turn_speed_factor", 0.65))
+        sharp_turn_speed_factor = float(sdk.params.get("sharp_turn_speed_factor", 0.35))
 
         sdk.logger.info(f"参数: max_speed={max_speed}, kp={kp}, max_w={max_w}, pivot_th={pivot_th}°")
-        sdk.logger.info(f"减速参数: decel_start={decel_start_dist}m, final_stop={final_stop_dist}m")
+        sdk.logger.info(
+            f"减速参数: decel_start={decel_start_dist}m, min_factor={decel_min_factor}, "
+            f"final_stop={final_stop_dist}m"
+        )
+        sdk.logger.info(
+            f"视野/模式减速: low_view<={low_view_threshold}->{low_view_speed_factor}, "
+            f"very_low<={very_low_view_threshold}->{very_low_view_speed_factor}, "
+            f"approach={approach_mode_factor}, fallback={fallback_mode_factor}"
+        )
+        sdk.logger.info(
+            f"转角预判减速: turn>={turn_slowdown_angle_deg}°->{turn_speed_factor}, "
+            f"sharp>={sharp_turn_angle_deg}°->{sharp_turn_speed_factor}"
+        )
 
         # 使用ENU坐标
         in_pose = sdk.create_input_port("pose_enu")
@@ -90,7 +122,18 @@ def main():
                 pivot_th,
                 decel_start_dist,
                 final_stop_dist,
-                now
+                now,
+                decel_min_factor,
+                low_view_threshold,
+                low_view_speed_factor,
+                very_low_view_threshold,
+                very_low_view_speed_factor,
+                approach_mode_factor,
+                fallback_mode_factor,
+                turn_slowdown_angle_deg,
+                sharp_turn_angle_deg,
+                turn_speed_factor,
+                sharp_turn_speed_factor
             )
             out.send(cmd)
             time.sleep(0.005)  # 200Hz

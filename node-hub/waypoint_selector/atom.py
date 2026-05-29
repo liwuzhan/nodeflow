@@ -31,6 +31,8 @@ class ViewConfig:
     max_view_width: float = 12.0       # 最大视野宽度 (米)
     # 持续消费参数（防止跳过点）
     continuous_consume_distance: float = 1.5  # 每帧检查，距离小于此值的点自动消费
+    # 前方路径预判参数
+    turn_preview_distance: float = 8.0  # 向前预览路径距离，用于检测急转弯
 
 
 @dataclass
@@ -377,6 +379,62 @@ class WaypointSelector:
             return zones[idx] or ""
         return ""
 
+    @staticmethod
+    def _normalize_angle(angle_rad: float) -> float:
+        """归一化角度到 (-pi, pi] 区间"""
+        while angle_rad > math.pi:
+            angle_rad -= 2.0 * math.pi
+        while angle_rad <= -math.pi:
+            angle_rad += 2.0 * math.pi
+        return angle_rad
+
+    def _compute_upcoming_turn_info(self, start_idx: int) -> Dict[str, Any]:
+        """
+        计算从当前路径索引向前一段距离内的最大航向变化。
+
+        返回值只描述路径几何，不直接决定控制速度。控制器可用它在急弯前提前减速。
+        """
+        path = self.state.path
+        if start_idx >= len(path) - 2:
+            return {
+                "upcoming_turn_angle_deg": 0.0,
+                "upcoming_turn_distance": 0.0,
+            }
+
+        cfg = self.config
+        base_idx = max(0, min(start_idx, len(path) - 2))
+        base_heading = math.atan2(
+            path[base_idx + 1][1] - path[base_idx][1],
+            path[base_idx + 1][0] - path[base_idx][0],
+        )
+
+        walked = 0.0
+        max_turn = 0.0
+        turn_distance = 0.0
+
+        for i in range(base_idx + 1, len(path) - 1):
+            prev_x, prev_y = path[i - 1]
+            cur_x, cur_y = path[i]
+            walked += self.euclidean_distance(prev_x, prev_y, cur_x, cur_y)
+            if walked > cfg.turn_preview_distance:
+                break
+
+            next_x, next_y = path[i + 1]
+            seg_len = self.euclidean_distance(cur_x, cur_y, next_x, next_y)
+            if seg_len <= 1e-6:
+                continue
+
+            heading = math.atan2(next_y - cur_y, next_x - cur_x)
+            turn = abs(self._normalize_angle(heading - base_heading))
+            if turn > max_turn:
+                max_turn = turn
+                turn_distance = walked
+
+        return {
+            "upcoming_turn_angle_deg": math.degrees(max_turn),
+            "upcoming_turn_distance": turn_distance,
+        }
+
     def _select_lookahead_point(
         self, vx: float, vy: float
     ) -> Dict[str, Any]:
@@ -395,6 +453,7 @@ class WaypointSelector:
         # 情况3: 所有点都已消费
         if first_unconsumed >= len(path):
             final_x, final_y = path[-1]
+            turn_info = self._compute_upcoming_turn_info(len(path) - 1)
 
             return {
                 "x": final_x,
@@ -406,12 +465,14 @@ class WaypointSelector:
                 "in_view_count": 0,
                 "mode": "finished",
                 "zone": self._get_zone_for_index(len(path) - 1),
+                **turn_info,
             }
 
         # 情况1: 有视野点
         if in_view:
             last_in_view_idx = in_view[-1]
             tx, ty = path[last_in_view_idx]
+            turn_info = self._compute_upcoming_turn_info(first_unconsumed)
 
             return {
                 "x": tx,
@@ -423,10 +484,12 @@ class WaypointSelector:
                 "in_view_count": len(in_view),
                 "mode": "tracking",
                 "zone": self._get_zone_for_index(last_in_view_idx),
+                **turn_info,
             }
 
         # 情况2: 无视野点，输出第一个未消费点
         tx, ty = path[first_unconsumed]
+        turn_info = self._compute_upcoming_turn_info(first_unconsumed)
 
         return {
             "x": tx,
@@ -438,6 +501,7 @@ class WaypointSelector:
             "in_view_count": 0,
             "mode": "approach",
             "zone": self._get_zone_for_index(first_unconsumed),
+            **turn_info,
         }
 
     def get_debug_info(self, vx: float, vy: float, theta: float) -> Dict[str, Any]:

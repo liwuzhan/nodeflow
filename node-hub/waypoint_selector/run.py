@@ -55,6 +55,8 @@ class NextPoint(BaseModel):
     in_view_count: int = 0
     mode: str = "unknown"
     zone: str = ""  # "work" / "transit" / "" (auto)
+    upcoming_turn_angle_deg: float = 0.0
+    upcoming_turn_distance: float = 0.0
 
 # --- End Schema Definitions ---
 
@@ -85,10 +87,12 @@ def main():
 
         # 持续消费参数
         continuous_consume_distance = float(sdk.params.get("continuous_consume_distance", 1.5))
+        turn_preview_distance = float(sdk.params.get("turn_preview_distance", 8.0))
 
         sdk.logger.info(f"初始消费: 检查{initial_check_points}点, 距离<{initial_consume_distance}m")
         sdk.logger.info(f"视野扩宽: 最少{min_view_points}点, 扩宽x{view_expand_factor}, 最大{max_view_width}m")
         sdk.logger.info(f"持续消费: 距离<{continuous_consume_distance}m")
+        sdk.logger.info(f"转弯预判: 向前预览{turn_preview_distance}m")
 
         # 2. 初始化 L4 原子层算法
         config = ViewConfig(
@@ -102,7 +106,8 @@ def main():
             min_view_points=min_view_points,
             view_expand_factor=view_expand_factor,
             max_view_width=max_view_width,
-            continuous_consume_distance=continuous_consume_distance
+            continuous_consume_distance=continuous_consume_distance,
+            turn_preview_distance=turn_preview_distance
         )
         selector = WaypointSelector(config)
 

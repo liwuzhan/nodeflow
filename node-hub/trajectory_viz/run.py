@@ -55,8 +55,13 @@ def main():
         web_port = int(sdk.get_param('web_port', 8080))
         update_interval = float(sdk.get_param('update_interval', 5.0))
         timeout = float(sdk.get_param('timeout', 0.0))
+        max_replay_samples = int(sdk.get_param('max_replay_samples', 3000))
+        replay_sample_interval = float(sdk.get_param('replay_sample_interval', 0.2))
 
-        print(f"配置: host={web_host}, port={web_port}, interval={update_interval}s")
+        print(
+            f"配置: host={web_host}, port={web_port}, interval={update_interval}s, "
+            f"replay={max_replay_samples}@{replay_sample_interval}s"
+        )
 
         # 2. 启动 Web 服务器 (工具层，daemon线程)
         web_server.start_web_server(host=web_host, port=web_port)
@@ -67,17 +72,41 @@ def main():
         task_port = sdk.create_input_port('task_enu')
         path_port = sdk.create_input_port('global_path')
         pose_port = sdk.create_input_port('pose_enu')
+        next_point_port = sdk.create_input_port('next_point')
+        velocity_port = sdk.create_input_port('velocity_cmd')
+        tillage_cmd_port = sdk.create_input_port('tillage_cmd')
+        tillage_status_port = sdk.create_input_port('tillage_status')
+        path_progress_port = sdk.create_input_port('path_progress')
         output_port = sdk.create_output_port('web_url', schema=TrajectoryWebURL)
 
-        print("端口已创建: task_enu, global_path, pose_enu -> web_url")
+        print(
+            "端口已创建: task_enu, global_path, pose_enu, next_point, "
+            "velocity_cmd, tillage_cmd, tillage_status, path_progress -> web_url"
+        )
         print()
 
         # 4. 状态变量 (L3 职责：状态管理)
         current_task_id: Optional[str] = None
         field_boundary: Optional[List[Tuple[float, float]]] = None
         planned_path: Optional[List[Tuple[float, float]]] = None
+        path_zones: List[str] = []
+        operation_segments: List[Dict[str, Any]] = []
         actual_trajectory: List[Tuple[float, float]] = []
         actual_trajectory_with_heading: List[Tuple[float, float, float]] = []
+        implement_width_m = 0.0
+        coverage_overlay: Dict[str, Any] = {}
+        replay_samples: List[Dict[str, Any]] = []
+        replay_events: List[Dict[str, Any]] = []
+        last_replay_sample: Optional[Dict[str, Any]] = None
+        last_replay_sample_time = 0.0
+
+        # 最新控制/状态包。端口是可选输入，没有连接时保持 None。
+        last_pose = None
+        last_next_point = None
+        last_velocity_cmd = None
+        last_tillage_cmd = None
+        last_tillage_status = None
+        last_path_progress = None
 
         # 统计
         update_count = 0
@@ -101,6 +130,11 @@ def main():
                 task_data = task_port.recv_latest()
                 path_data = path_port.recv_latest()
                 pose_data = pose_port.recv_latest()
+                next_point_data = next_point_port.recv_latest()
+                velocity_data = velocity_port.recv_latest()
+                tillage_cmd_data = tillage_cmd_port.recv_latest()
+                tillage_status_data = tillage_status_port.recv_latest()
+                path_progress_data = path_progress_port.recv_latest()
 
                 # 5c. 处理 task_enu (地块边界)
                 if task_data:
@@ -112,6 +146,11 @@ def main():
                         current_task_id = task_id
                         actual_trajectory = []
                         actual_trajectory_with_heading = []
+                        coverage_overlay = {}
+                        replay_samples = []
+                        replay_events = []
+                        last_replay_sample = None
+                        last_replay_sample_time = 0.0
 
                     # 提取边界
                     parcel = task_data.get("parcel", {})
@@ -120,15 +159,31 @@ def main():
                         field_boundary = outer
                         print(f"✓ 地块边界: {len(outer)}个点")
 
+                    vehicle = task_data.get("vehicle", {})
+                    width = vehicle.get("implement_width_m")
+                    if width is not None:
+                        try:
+                            implement_width_m = float(width)
+                        except (TypeError, ValueError):
+                            implement_width_m = 0.0
+
                 # 5d. 处理 global_path (规划路径)
                 if path_data:
                     path = path_data.get("path")
+                    segments = path_data.get("segments", []) or []
+                    if isinstance(path, dict):
+                        segments = segments or path.get("segments", []) or []
+                        path = path.get("points", []) or []
+
                     if isinstance(path, list) and len(path) >= 2:
                         planned_path = path
+                        path_zones = path_data.get("path_zones", []) or []
+                        operation_segments = segments
                         print(f"✓ 规划路径: {len(path)}个点")
 
                 # 5e. 处理 pose_enu (实际轨迹，持续累积)
                 if pose_data:
+                    last_pose = pose_data
                     x = pose_data.get("x")
                     y = pose_data.get("y")
                     theta = pose_data.get("theta", 0.0)
@@ -138,8 +193,42 @@ def main():
                         actual_trajectory_with_heading.append((float(x), float(y), float(theta)))
                         pose_count += 1
 
-                # 5f. 定期推送到Web (每 update_interval 秒)
+                if next_point_data:
+                    last_next_point = next_point_data
+                if velocity_data:
+                    last_velocity_cmd = velocity_data
+                if tillage_cmd_data:
+                    last_tillage_cmd = tillage_cmd_data
+                if tillage_status_data:
+                    last_tillage_status = tillage_status_data
+                if path_progress_data:
+                    last_path_progress = path_progress_data
+
+                # 5f. 复盘采样：把最新 pose/control/implement 状态压成低频历史。
                 current_time = time.time()
+                if last_pose and current_time - last_replay_sample_time >= replay_sample_interval:
+                    sample = atom.make_replay_sample(
+                        pose=last_pose,
+                        velocity_cmd=last_velocity_cmd,
+                        next_point=last_next_point,
+                        tillage_cmd=last_tillage_cmd,
+                        tillage_status=last_tillage_status,
+                        path_progress=last_path_progress,
+                        now=current_time,
+                    )
+                    replay_samples.append(sample)
+                    replay_events.extend(atom.detect_replay_events(last_replay_sample, sample))
+                    last_replay_sample = sample
+                    last_replay_sample_time = current_time
+
+                    if len(replay_samples) > max_replay_samples:
+                        overflow = len(replay_samples) - max_replay_samples
+                        replay_samples = replay_samples[overflow:]
+                    max_events = max(100, max_replay_samples)
+                    if len(replay_events) > max_events:
+                        replay_events = replay_events[-max_events:]
+
+                # 5g. 定期推送到Web (每 update_interval 秒)
                 should_update = current_time - last_update_time >= update_interval
 
                 # 检查是否有足够数据
@@ -159,14 +248,37 @@ def main():
                         except Exception as e:
                             print(f"✗ 计算指标失败: {e}")
 
+                    if implement_width_m > 0 and replay_samples:
+                        coverage_overlay = atom.build_coverage_overlay(
+                            replay_samples,
+                            implement_width_m=implement_width_m,
+                            field_boundary=field_boundary,
+                        )
+                        metrics.update({
+                            "implement_width_m": coverage_overlay.get("implement_width_m"),
+                            "field_area_m2": coverage_overlay.get("field_area_m2"),
+                            "covered_area_m2": coverage_overlay.get("covered_area_m2"),
+                            "coverage_rate_percent": coverage_overlay.get("coverage_rate_percent"),
+                        })
+
                     # 推送到 Web 客户端
                     try:
                         web_server.update_trajectory_data(
                             field_boundary=field_boundary,
                             planned_path=planned_path,
+                            path_zones=path_zones,
+                            operation_segments=operation_segments,
                             actual_trajectory=actual_trajectory,
                             actual_trajectory_with_heading=actual_trajectory_with_heading,
-                            metrics=metrics
+                            metrics=metrics,
+                            next_point=last_next_point,
+                            velocity_cmd=last_velocity_cmd,
+                            tillage_cmd=last_tillage_cmd,
+                            tillage_status=last_tillage_status,
+                            path_progress=last_path_progress,
+                            replay_samples=replay_samples,
+                            replay_events=replay_events,
+                            coverage_overlay=coverage_overlay,
                         )
 
                         update_count += 1

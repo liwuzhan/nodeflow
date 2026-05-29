@@ -24,6 +24,21 @@ ports:
     - name: pose_enu
       type: localization.pose_enu
       description: "ENU坐标系姿态，用于记录实际轨迹 (x, y, theta)"
+    - name: next_point
+      type: planning.waypoint
+      description: "可选：前瞻点和路径跟踪状态，用于复盘目标点选择"
+    - name: velocity_cmd
+      type: control.velocity
+      description: "可选：底盘速度指令，用于复盘限速、掉头减速和控制状态"
+    - name: tillage_cmd
+      type: implement.tillage_cmd
+      description: "可选：旋耕机具控制指令，用于显示 PTO/悬挂状态"
+    - name: tillage_status
+      type: implement.tillage_status
+      description: "可选：旋耕机具反馈状态，优先用于复盘"
+    - name: path_progress
+      type: planning.path_progress
+      description: "可选：路径进度状态，用于显示段语义、横向误差和到段尾距离"
   outputs:
     - name: web_url
       type: json
@@ -49,3 +64,13 @@ params:
     type: float
     default: 5.0
     description: "日志打印间隔（秒）。数据推送是近实时的（0.5秒防抖），此参数仅控制日志频率"
+
+  max_replay_samples:
+    type: integer
+    default: 3000
+    description: "内存中保留的复盘采样点数量"
+
+  replay_sample_interval:
+    type: float
+    default: 0.2
+    description: "复盘采样间隔 (秒)，用于限制高频 pose 数据量"

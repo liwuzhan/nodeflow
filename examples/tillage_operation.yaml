@@ -262,3 +262,20 @@ edges:
   - from: coord_transform.pose_enu
     to: trajectory_viz.pose_enu
     description: "实际行驶轨迹"
+
+  # 前瞻点、速度与机具状态 → 可视化复盘
+  - from: waypoint_selector.next_point
+    to: trajectory_viz.next_point
+    description: "前瞻点状态 → 可视化"
+
+  - from: track_controller.velocity_cmd
+    to: trajectory_viz.velocity_cmd
+    description: "速度指令 → 可视化"
+
+  - from: tillage_controller.tillage_cmd
+    to: trajectory_viz.tillage_cmd
+    description: "机具逻辑指令 → 可视化"
+
+  - from: tillage_controller.tillage_status
+    to: trajectory_viz.tillage_status
+    description: "机具状态反馈 → 可视化"

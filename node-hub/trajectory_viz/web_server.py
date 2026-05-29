@@ -24,9 +24,19 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 current_data = {
     "field_boundary": None,
     "planned_path": None,
+    "path_zones": [],
+    "operation_segments": [],
     "actual_trajectory": [],
     "actual_trajectory_with_heading": [],
-    "metrics": {}
+    "metrics": {},
+    "next_point": None,
+    "velocity_cmd": None,
+    "tillage_cmd": None,
+    "tillage_status": None,
+    "path_progress": None,
+    "replay_samples": [],
+    "replay_events": [],
+    "coverage_overlay": {}
 }
 
 # HTML 模板（稍后创建独立文件）
@@ -69,12 +79,49 @@ HTML_TEMPLATE = """
             background-color: #f8d7da;
             color: #721c24;
         }
-        #plot {
+        .dashboard {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+        .panel {
             background: white;
             border-radius: 8px;
             box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-            padding: 20px;
+            padding: 14px 16px;
+        }
+        .panel-label {
+            font-size: 0.82em;
+            color: #666;
+            margin-bottom: 6px;
+        }
+        .panel-value {
+            font-size: 1.25em;
+            font-weight: 700;
+            color: #222;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .panel-sub {
+            color: #666;
+            font-size: 0.86em;
+            margin-top: 6px;
+        }
+        #plot,
+        #speed-plot,
+        #factor-plot {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            padding: 16px;
             margin-bottom: 20px;
+        }
+        .plot-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
         }
         .metrics {
             background: white;
@@ -113,6 +160,18 @@ HTML_TEMPLATE = """
             color: #666;
             margin-left: 5px;
         }
+        @media (max-width: 1000px) {
+            .dashboard,
+            .plot-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+        @media (max-width: 680px) {
+            .dashboard,
+            .plot-grid {
+                grid-template-columns: 1fr;
+            }
+        }
     </style>
 </head>
 <body>
@@ -120,7 +179,34 @@ HTML_TEMPLATE = """
         <h1>🚜 NodeFlow 轨迹实时可视化</h1>
         <div id="status" class="status disconnected">⏳ 连接中...</div>
 
+        <div class="dashboard">
+            <div class="panel">
+                <div class="panel-label">底盘状态</div>
+                <div class="panel-value" id="track-state">--</div>
+                <div class="panel-sub" id="speed-state">v -- m/s, w -- rad/s</div>
+            </div>
+            <div class="panel">
+                <div class="panel-label">前瞻目标</div>
+                <div class="panel-value" id="waypoint-state">--</div>
+                <div class="panel-sub" id="turn-state">turn -- deg</div>
+            </div>
+            <div class="panel">
+                <div class="panel-label">路径段</div>
+                <div class="panel-value" id="segment-state">--</div>
+                <div class="panel-sub" id="error-state">cte -- m, heading -- deg</div>
+            </div>
+            <div class="panel">
+                <div class="panel-label">机具状态</div>
+                <div class="panel-value" id="implement-state">--</div>
+                <div class="panel-sub" id="hitch-state">PTO --, hitch --</div>
+            </div>
+        </div>
+
         <div id="plot"></div>
+        <div class="plot-grid">
+            <div id="speed-plot"></div>
+            <div id="factor-plot"></div>
+        </div>
 
         <div class="metrics">
             <h2>📊 轨迹统计</h2>
@@ -168,6 +254,27 @@ HTML_TEMPLATE = """
                         <span class="metric-unit">个</span>
                     </div>
                 </div>
+                <div class="metric-item">
+                    <div class="metric-label">机具幅宽</div>
+                    <div class="metric-value">
+                        <span id="implement-width">--</span>
+                        <span class="metric-unit">m</span>
+                    </div>
+                </div>
+                <div class="metric-item">
+                    <div class="metric-label">已覆盖面积</div>
+                    <div class="metric-value">
+                        <span id="covered-area">--</span>
+                        <span class="metric-unit">m²</span>
+                    </div>
+                </div>
+                <div class="metric-item">
+                    <div class="metric-label">覆盖率</div>
+                    <div class="metric-value">
+                        <span id="coverage-rate">--</span>
+                        <span class="metric-unit">%</span>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -191,6 +298,8 @@ HTML_TEMPLATE = """
 
         // 初始化 Plotly 图表
         const plotDiv = document.getElementById('plot');
+        const speedPlotDiv = document.getElementById('speed-plot');
+        const factorPlotDiv = document.getElementById('factor-plot');
         const layout = {
             title: '轨迹对比 (ENU坐标系)',
             xaxis: { title: 'X - 东向 (m)', scaleanchor: 'y', scaleratio: 1 },
@@ -200,9 +309,29 @@ HTML_TEMPLATE = """
             legend: { x: 1, y: 1 },
             height: 600
         };
+        const speedLayout = {
+            title: '速度与预判转角',
+            xaxis: { title: '时间 (s)' },
+            yaxis: { title: '速度 / 角速度' },
+            yaxis2: { title: '转角 (deg)', overlaying: 'y', side: 'right' },
+            hovermode: 'x unified',
+            showlegend: true,
+            height: 360
+        };
+        const factorLayout = {
+            title: '减速因子与机具状态',
+            xaxis: { title: '时间 (s)' },
+            yaxis: { title: '因子 / PTO', range: [-0.05, 1.05] },
+            yaxis2: { title: '悬挂高度', overlaying: 'y', side: 'right', range: [-0.05, 1.05] },
+            hovermode: 'x unified',
+            showlegend: true,
+            height: 360
+        };
 
         // 初始化空图表
         Plotly.newPlot(plotDiv, [], layout, { responsive: true });
+        Plotly.newPlot(speedPlotDiv, [], speedLayout, { responsive: true });
+        Plotly.newPlot(factorPlotDiv, [], factorLayout, { responsive: true });
 
         // 接收数据更新
         socket.on('trajectory_update', function(data) {
@@ -296,6 +425,59 @@ HTML_TEMPLATE = """
                 });
             }
 
+            // 已覆盖区域（机具作业 footprint，近似）
+            if (data.coverage_overlay && data.coverage_overlay.polygons) {
+                data.coverage_overlay.polygons.forEach((poly, idx) => {
+                    if (!poly || poly.length < 3) {
+                        return;
+                    }
+                    const xs = poly.map(p => p[0]).concat([poly[0][0]]);
+                    const ys = poly.map(p => p[1]).concat([poly[0][1]]);
+                    traces.push({
+                        x: xs,
+                        y: ys,
+                        mode: 'lines',
+                        fill: 'toself',
+                        fillcolor: 'rgba(22, 163, 74, 0.18)',
+                        line: { color: 'rgba(22, 163, 74, 0.25)', width: 1 },
+                        name: idx === 0 ? '已覆盖区域' : '已覆盖区域',
+                        showlegend: idx === 0,
+                        hoverinfo: 'skip'
+                    });
+                });
+            }
+
+            // 当前前瞻目标点
+            if (data.next_point && data.next_point.x !== undefined && data.next_point.y !== undefined) {
+                traces.push({
+                    x: [data.next_point.x],
+                    y: [data.next_point.y],
+                    mode: 'markers',
+                    marker: { color: '#111827', size: 12, symbol: 'x' },
+                    name: '当前目标点'
+                });
+            }
+
+            // 复盘事件点
+            if (data.replay_events && data.replay_events.length > 0) {
+                const events = data.replay_events.filter(e => e.x !== null && e.y !== null);
+                if (events.length > 0) {
+                    traces.push({
+                        x: events.map(e => e.x),
+                        y: events.map(e => e.y),
+                        text: events.map(e => e.label),
+                        mode: 'markers',
+                        marker: {
+                            color: events.map(e => eventColor(e.kind)),
+                            size: 10,
+                            symbol: 'diamond'
+                        },
+                        hovertemplate: '%{text}<br>x=%{x:.2f}<br>y=%{y:.2f}<extra>事件</extra>',
+                        name: '控制事件'
+                    });
+                }
+            }
+
             // 更新图表
             Plotly.react(plotDiv, traces, layout);
 
@@ -340,7 +522,137 @@ HTML_TEMPLATE = """
 
             // 更新统计信息
             updateMetrics(data.metrics || {});
+            updateStatusPanels(data);
+            updateReplayPlots(data.replay_samples || []);
         });
+
+        function fmt(value, digits = 2) {
+            if (value === null || value === undefined || Number.isNaN(Number(value))) {
+                return '--';
+            }
+            return Number(value).toFixed(digits);
+        }
+
+        function textOrDash(value) {
+            return value || '--';
+        }
+
+        function eventColor(kind) {
+            const colors = {
+                track_status: '#7c3aed',
+                waypoint_mode: '#2563eb',
+                segment: '#0891b2',
+                tillage_state: '#16a34a',
+                pto: '#dc2626',
+                turn_preview: '#ea580c'
+            };
+            return colors[kind] || '#374151';
+        }
+
+        function updateStatusPanels(data) {
+            const velocity = data.velocity_cmd || {};
+            const nextPoint = data.next_point || {};
+            const progress = data.path_progress || {};
+            const tillage = data.tillage_status || data.tillage_cmd || {};
+
+            document.getElementById('track-state').textContent =
+                textOrDash(velocity.status || 'tracking');
+            document.getElementById('speed-state').textContent =
+                `v ${fmt(velocity.linear_velocity)} m/s, w ${fmt(velocity.angular_velocity)} rad/s`;
+
+            document.getElementById('waypoint-state').textContent =
+                `${textOrDash(nextPoint.mode)} #${nextPoint.index ?? '--'}`;
+            document.getElementById('turn-state').textContent =
+                `turn ${fmt(nextPoint.upcoming_turn_angle_deg, 1)} deg, view ${nextPoint.in_view_count ?? '--'}`;
+
+            document.getElementById('segment-state').textContent =
+                textOrDash(progress.segment_id || progress.segment_type || nextPoint.zone);
+            document.getElementById('error-state').textContent =
+                `cte ${fmt(progress.cross_track_error_m)} m, heading ${fmt(progress.heading_error_deg, 1)} deg`;
+
+            document.getElementById('implement-state').textContent =
+                textOrDash(tillage.state);
+            document.getElementById('hitch-state').textContent =
+                `PTO ${tillage.pto_on === true ? 'ON' : tillage.pto_on === false ? 'OFF' : '--'}, hitch ${fmt(tillage.hitch_height)}`;
+        }
+
+        function updateReplayPlots(samples) {
+            if (!samples.length) {
+                Plotly.react(speedPlotDiv, [], speedLayout);
+                Plotly.react(factorPlotDiv, [], factorLayout);
+                return;
+            }
+
+            const t0 = samples[0].timestamp || 0;
+            const times = samples.map(s => (s.timestamp || 0) - t0);
+
+            const speedTraces = [
+                {
+                    x: times,
+                    y: samples.map(s => s.linear_velocity),
+                    mode: 'lines',
+                    line: { color: '#dc2626', width: 2 },
+                    name: '线速度'
+                },
+                {
+                    x: times,
+                    y: samples.map(s => s.angular_velocity),
+                    mode: 'lines',
+                    line: { color: '#2563eb', width: 2 },
+                    name: '角速度'
+                },
+                {
+                    x: times,
+                    y: samples.map(s => s.upcoming_turn_angle_deg),
+                    mode: 'lines',
+                    yaxis: 'y2',
+                    line: { color: '#ea580c', width: 2, dash: 'dot' },
+                    name: '预判转角'
+                }
+            ];
+
+            const factorTraces = [
+                {
+                    x: times,
+                    y: samples.map(s => s.speed_factor),
+                    mode: 'lines',
+                    line: { color: '#111827', width: 2 },
+                    name: '总减速因子'
+                },
+                {
+                    x: times,
+                    y: samples.map(s => s.turn_factor),
+                    mode: 'lines',
+                    line: { color: '#ea580c', width: 1.5 },
+                    name: '转角因子'
+                },
+                {
+                    x: times,
+                    y: samples.map(s => s.view_factor),
+                    mode: 'lines',
+                    line: { color: '#2563eb', width: 1.5 },
+                    name: '视野因子'
+                },
+                {
+                    x: times,
+                    y: samples.map(s => s.pto_on === true ? 1 : s.pto_on === false ? 0 : null),
+                    mode: 'lines',
+                    line: { color: '#16a34a', width: 2, shape: 'hv' },
+                    name: 'PTO'
+                },
+                {
+                    x: times,
+                    y: samples.map(s => s.hitch_height),
+                    mode: 'lines',
+                    yaxis: 'y2',
+                    line: { color: '#9333ea', width: 2 },
+                    name: '悬挂高度'
+                }
+            ];
+
+            Plotly.react(speedPlotDiv, speedTraces, speedLayout);
+            Plotly.react(factorPlotDiv, factorTraces, factorLayout);
+        }
 
         function updateMetrics(metrics) {
             document.getElementById('planned-distance').textContent =
@@ -357,6 +669,12 @@ HTML_TEMPLATE = """
                 metrics.max_lateral_error_m || '--';
             document.getElementById('trajectory-points').textContent =
                 metrics.trajectory_points || '--';
+            document.getElementById('implement-width').textContent =
+                metrics.implement_width_m || '--';
+            document.getElementById('covered-area').textContent =
+                metrics.covered_area_m2 || '--';
+            document.getElementById('coverage-rate').textContent =
+                metrics.coverage_rate_percent || '--';
         }
     </script>
 </body>
@@ -385,14 +703,20 @@ def handle_disconnect():
 
 
 def update_trajectory_data(field_boundary=None, planned_path=None,
+                          path_zones=None, operation_segments=None,
                           actual_trajectory=None, actual_trajectory_with_heading=None,
-                          metrics=None):
+                          metrics=None, next_point=None, velocity_cmd=None,
+                          tillage_cmd=None, tillage_status=None, path_progress=None,
+                          replay_samples=None, replay_events=None,
+                          coverage_overlay=None):
     """
     更新轨迹数据并推送到所有客户端
 
     Args:
         field_boundary: 地块边界 [(x, y), ...]
         planned_path: 规划路径 [(x, y), ...]
+        path_zones: 每个路径点的作业区域标注
+        operation_segments: 作业段语义
         actual_trajectory: 实际轨迹 [(x, y), ...]
         actual_trajectory_with_heading: 带航向角的实际轨迹 [(x, y, theta), ...]
         metrics: 统计指标字典
@@ -405,6 +729,12 @@ def update_trajectory_data(field_boundary=None, planned_path=None,
     if planned_path is not None:
         current_data["planned_path"] = planned_path
 
+    if path_zones is not None:
+        current_data["path_zones"] = path_zones
+
+    if operation_segments is not None:
+        current_data["operation_segments"] = operation_segments
+
     if actual_trajectory is not None:
         current_data["actual_trajectory"] = actual_trajectory
 
@@ -413,6 +743,30 @@ def update_trajectory_data(field_boundary=None, planned_path=None,
 
     if metrics is not None:
         current_data["metrics"] = metrics
+
+    if next_point is not None:
+        current_data["next_point"] = next_point
+
+    if velocity_cmd is not None:
+        current_data["velocity_cmd"] = velocity_cmd
+
+    if tillage_cmd is not None:
+        current_data["tillage_cmd"] = tillage_cmd
+
+    if tillage_status is not None:
+        current_data["tillage_status"] = tillage_status
+
+    if path_progress is not None:
+        current_data["path_progress"] = path_progress
+
+    if replay_samples is not None:
+        current_data["replay_samples"] = replay_samples
+
+    if replay_events is not None:
+        current_data["replay_events"] = replay_events
+
+    if coverage_overlay is not None:
+        current_data["coverage_overlay"] = coverage_overlay
 
     # 推送到所有连接的客户端
     socketio.emit('trajectory_update', current_data)
