@@ -76,3 +76,42 @@ def test_compute_progress_handles_nested_path_points():
     assert progress["path_index"] == 0
     assert abs(progress["cross_track_error_m"] + 0.4) < 1e-6
     assert abs(progress["heading_error_deg"]) < 0.01
+
+
+def test_compute_progress_relocalizes_when_local_window_is_wrong():
+    plan = {
+        "task_id": "task_003",
+        "path": [(float(i), 0.0) for i in range(20)] + [(20.0, float(i)) for i in range(1, 21)],
+        "segments": [
+            {
+                "id": "row_001",
+                "type": "work",
+                "zone": "work",
+                "start_index": 0,
+                "end_index": 19,
+                "motion": {"speed_limit_mps": 1.2},
+                "implement": {},
+            },
+            {
+                "id": "turn_001",
+                "type": "headland_turn",
+                "zone": "transit",
+                "start_index": 20,
+                "end_index": 39,
+                "motion": {"speed_limit_mps": 0.5},
+                "implement": {},
+            },
+        ],
+    }
+
+    progress = compute_progress(
+        plan,
+        {"x": 20.2, "y": 15.0, "theta": 1.57},
+        last_path_index=0,
+        search_window=5,
+        relocalize_error_m=2.0,
+    )
+
+    assert progress["relocalized"] is True
+    assert progress["path_index"] >= 20
+    assert abs(progress["cross_track_error_m"]) < 0.5

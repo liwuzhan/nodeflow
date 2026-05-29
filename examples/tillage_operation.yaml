@@ -74,6 +74,10 @@ nodes:
       trajectory_file: ""            # 留空自动选最新
       publish_interval: 0.1          # 10Hz
       enable_bezier: false           # 使用原始折线路径（配合 waypoint_selector）
+      turn_angle_threshold_deg: 45.0
+      turn_zone_radius_m: 4.0
+      work_speed_limit_mps: 1.0
+      turn_speed_limit_mps: 0.5
 
   # ┌─────────────────────────────────────────────────────────────────────┐
   # │ RTK 滤波器                                                          │
@@ -109,6 +113,14 @@ nodes:
       initial_check_points: 10
       initial_consume_distance: 2.0
       continuous_consume_distance: 1.5
+      turn_preview_distance: 8.0
+
+  - id: path_progress
+    package: path_progress
+    description: "路径进度节点 - 统一输出当前作业段和误差"
+    params:
+      search_window: 120
+      publish_interval: 0.02
 
   # ┌─────────────────────────────────────────────────────────────────────┐
   # │ 轨迹跟踪控制器 - P 控制器 (运动控制)                                │
@@ -124,6 +136,13 @@ nodes:
       pivot_threshold_deg: 15.0
       decel_start_distance: 2.0
       final_stop_distance: 0.5
+      decel_min_factor: 0.3
+      turn_slowdown_angle_deg: 45.0
+      turn_speed_factor: 0.65
+      sharp_turn_angle_deg: 120.0
+      sharp_turn_speed_factor: 0.35
+      cross_track_slowdown_error_m: 0.5
+      cross_track_stop_error_m: 1.5
 
   # ┌─────────────────────────────────────────────────────────────────────┐
   # │ 旋耕控制器 - 机具控制 (PTO + 三点悬挂)                              │
@@ -204,11 +223,23 @@ edges:
   - from: trajectory_loader.global_path
     to: waypoint_selector.global_path
     description: "全局路径 (ENU) → 视野区域选择"
+  - from: trajectory_loader.operation_plan
+    to: waypoint_selector.operation_plan
+    description: "作业计划 → 前瞻点选择"
+  - from: trajectory_loader.operation_plan
+    to: path_progress.operation_plan
+    description: "作业计划 → 路径进度"
 
   # ENU 位姿 → 前瞻点选择 (用于视野计算)
   - from: coord_transform.pose_enu
     to: waypoint_selector.pose_enu
     description: "实时位姿 → 视野区域更新"
+  - from: coord_transform.pose_enu
+    to: path_progress.pose_enu
+    description: "实时位姿 → 路径进度"
+  - from: path_progress.progress_state
+    to: waypoint_selector.path_progress
+    description: "路径进度 → 前瞻点索引同步"
 
   # 前瞻点 → 轨迹跟踪控制器
   - from: waypoint_selector.next_point
@@ -219,6 +250,9 @@ edges:
   - from: coord_transform.pose_enu
     to: track_controller.pose_enu
     description: "实时位姿 → 航向误差计算"
+  - from: path_progress.progress_state
+    to: track_controller.path_progress
+    description: "路径进度 → 段限速/误差保护"
 
   # 速度指令 → 仿真器
   - from: track_controller.velocity_cmd
@@ -233,6 +267,9 @@ edges:
   - from: coord_transform.pose_enu
     to: tillage_controller.pose_enu
     description: "实时 ENU 位姿 → 旋耕 zone 检测"
+  - from: path_progress.progress_state
+    to: tillage_controller.path_progress
+    description: "路径进度与机具意图 → 旋耕状态机"
 
   # 前瞻点 → 旋耕控制器 (zone 提示 + final 检测)
   - from: waypoint_selector.next_point
@@ -257,11 +294,17 @@ edges:
   - from: trajectory_loader.global_path
     to: trajectory_viz.global_path
     description: "规划路径 (ENU)"
+  - from: trajectory_loader.operation_plan
+    to: trajectory_viz.operation_plan
+    description: "作业计划与段语义 → 可视化"
 
   # 实际轨迹 → 可视化
   - from: coord_transform.pose_enu
     to: trajectory_viz.pose_enu
     description: "实际行驶轨迹"
+  - from: path_progress.progress_state
+    to: trajectory_viz.path_progress
+    description: "路径进度 → 可视化"
 
   # 前瞻点、速度与机具状态 → 可视化复盘
   - from: waypoint_selector.next_point

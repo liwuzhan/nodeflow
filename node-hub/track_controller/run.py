@@ -64,6 +64,7 @@ class VelocityCmd(BaseModel):
     speed_limit_factor: Optional[float] = None
     segment_speed_limit_mps: Optional[float] = None
     cross_track_error_m: Optional[float] = None
+    cross_track_recovery_factor: Optional[float] = None
 
 # --- End Schema Definitions ---
 
@@ -91,6 +92,7 @@ def main():
         sharp_turn_speed_factor = float(sdk.params.get("sharp_turn_speed_factor", 0.35))
         cross_track_slowdown_error_m = float(sdk.params.get("cross_track_slowdown_error_m", 0.5))
         cross_track_stop_error_m = float(sdk.params.get("cross_track_stop_error_m", 1.5))
+        cross_track_recovery_factor = float(sdk.params.get("cross_track_recovery_factor", 0.15))
 
         sdk.logger.info(f"参数: max_speed={max_speed}, kp={kp}, max_w={max_w}, pivot_th={pivot_th}°")
         sdk.logger.info(
@@ -158,7 +160,8 @@ def main():
                 sharp_turn_speed_factor,
                 last_progress,
                 cross_track_slowdown_error_m,
-                cross_track_stop_error_m
+                cross_track_stop_error_m,
+                cross_track_recovery_factor
             )
             out.send(cmd)
             time.sleep(0.005)  # 200Hz

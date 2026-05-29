@@ -34,7 +34,8 @@ def compute_velocity_cmd(
     sharp_turn_speed_factor: float = 0.35,
     path_progress: dict | None = None,
     cross_track_slowdown_error_m: float = 0.5,
-    cross_track_stop_error_m: float = 1.5
+    cross_track_stop_error_m: float = 1.5,
+    cross_track_recovery_factor: float = 0.15
 ) -> dict:
     """
     计算速度控制命令（ENU坐标系）
@@ -147,11 +148,11 @@ def compute_velocity_cmd(
     cte_factor = 1.0
     if cross_track_error_m is not None:
         if cross_track_error_m >= cross_track_stop_error_m:
-            cte_factor = 0.0
+            cte_factor = max(0.0, min(1.0, cross_track_recovery_factor))
         elif cross_track_error_m >= cross_track_slowdown_error_m:
             span = max(1e-6, cross_track_stop_error_m - cross_track_slowdown_error_m)
             ratio = (cross_track_error_m - cross_track_slowdown_error_m) / span
-            cte_factor = max(0.3, 1.0 - 0.7 * ratio)
+            cte_factor = max(cross_track_recovery_factor, 1.0 - 0.7 * ratio)
 
     speed_limit_factor = 1.0
     if segment_speed_limit is not None and max_speed > 0:
@@ -189,6 +190,7 @@ def compute_velocity_cmd(
         result["segment_speed_limit_mps"] = float(segment_speed_limit)
     if cross_track_error_m is not None:
         result["cross_track_error_m"] = cross_track_error_m
+        result["cross_track_recovery_factor"] = cross_track_recovery_factor
     if status:
         result["status"] = status
     return result

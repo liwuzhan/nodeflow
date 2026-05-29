@@ -58,7 +58,7 @@ def test_convert_to_enu_path():
     ref_lon, ref_lat = atom.compute_ref_point(points)
     print(f"自动参考点: ({ref_lon}, {ref_lat})")
 
-    enu_path = atom.convert_to_enu_path(points, ref_lon, ref_lat)
+    enu_path, zones = atom.convert_to_enu_path(points, ref_lon, ref_lat)
     print(f"转换得到 {len(enu_path)} 个ENU点:")
     for i, (x, y) in enumerate(enu_path):
         print(f"  点 {i}: ({x:.2f}, {y:.2f}) 米")
@@ -67,6 +67,7 @@ def test_convert_to_enu_path():
     # 第一个点应该在原点
     assert abs(enu_path[0][0]) < 0.1, "起点X坐标应该接近0"
     assert abs(enu_path[0][1]) < 0.1, "起点Y坐标应该接近0"
+    assert zones == ["", "", ""]
     print("✓ 批量转换测试通过")
     print()
 
@@ -121,6 +122,25 @@ def test_build_global_path():
     print()
 
 
+def test_build_operation_plan_from_loaded_path():
+    """测试从加载路径构建 operation_plan"""
+    enu_path = [(0, 0), (5, 0), (10, 0), (10, 5), (10, 10)]
+    plan = atom.build_operation_plan(
+        enu_path,
+        "test_task_plan",
+        turn_angle_threshold_deg=45.0,
+        turn_zone_radius_m=1.0,
+    )
+
+    assert plan["task_id"] == "test_task_plan"
+    assert len(plan["path_zones"]) == len(enu_path)
+    assert plan["segments"]
+    assert any(segment["type"] == "work" for segment in plan["segments"])
+    assert any(segment["type"] == "headland_turn" for segment in plan["segments"])
+    print("✓ operation_plan 构建测试通过")
+    print()
+
+
 def test_build_task_enu():
     """测试构建 task_enu 消息"""
     print("=" * 60)
@@ -156,6 +176,7 @@ def main():
     test_convert_to_enu_path()
     test_compute_path_length()
     test_build_global_path()
+    test_build_operation_plan_from_loaded_path()
     test_build_task_enu()
 
     print("=" * 60)

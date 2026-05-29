@@ -251,6 +251,9 @@ edges:
   - from: coord_transform.pose_enu
     to: path_progress.pose_enu
     description: "ENU姿态 → 路径进度"
+  - from: path_progress.progress_state
+    to: waypoint_selector.path_progress
+    description: "路径进度 → 前瞻点索引同步"
 
   # 前瞻点 + ENU姿态 → 轨迹控制
   - from: waypoint_selector.next_point

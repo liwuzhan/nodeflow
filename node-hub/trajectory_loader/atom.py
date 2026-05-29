@@ -226,6 +226,109 @@ def compute_path_length(enu_path: List[Tuple[float, float]]) -> float:
     return total
 
 
+def _normalize_angle(angle_rad: float) -> float:
+    while angle_rad > math.pi:
+        angle_rad -= 2.0 * math.pi
+    while angle_rad <= -math.pi:
+        angle_rad += 2.0 * math.pi
+    return angle_rad
+
+
+def classify_path_zones(
+    enu_path: List[Tuple[float, float]],
+    existing_zones: Optional[List[str]] = None,
+    turn_angle_threshold_deg: float = 45.0,
+    turn_zone_radius_m: float = 4.0,
+) -> List[str]:
+    """Generate work/transit zones for a loaded trajectory."""
+    if not enu_path:
+        return []
+
+    if existing_zones and len(existing_zones) == len(enu_path) and any(existing_zones):
+        return [zone if zone in ("work", "transit") else "work" for zone in existing_zones]
+
+    zones = ["work"] * len(enu_path)
+    stations = [0.0]
+    for i in range(1, len(enu_path)):
+        stations.append(stations[-1] + _dist(enu_path[i - 1], enu_path[i]))
+
+    threshold = math.radians(turn_angle_threshold_deg)
+    prev_heading = None
+    turn_centers = []
+    for i in range(1, len(enu_path)):
+        x0, y0 = enu_path[i - 1]
+        x1, y1 = enu_path[i]
+        seg_len = math.hypot(x1 - x0, y1 - y0)
+        if seg_len <= 1e-6:
+            continue
+        heading = math.atan2(y1 - y0, x1 - x0)
+        if prev_heading is not None:
+            if abs(_normalize_angle(heading - prev_heading)) >= threshold:
+                turn_centers.append(stations[i - 1])
+        prev_heading = heading
+
+    for center in turn_centers:
+        for idx, station in enumerate(stations):
+            if abs(station - center) <= turn_zone_radius_m:
+                zones[idx] = "transit"
+
+    zones[0] = "transit"
+    zones[-1] = "transit"
+    return zones
+
+
+def build_segments_from_zones(
+    enu_path: List[Tuple[float, float]],
+    zones: List[str],
+    work_speed_mps: float = 1.0,
+    turn_speed_mps: float = 0.5,
+) -> List[Dict[str, Any]]:
+    if not enu_path:
+        return []
+
+    stations = [0.0]
+    for i in range(1, len(enu_path)):
+        stations.append(stations[-1] + _dist(enu_path[i - 1], enu_path[i]))
+
+    segments = []
+    counts = {"work": 0, "headland_turn": 0}
+    start = 0
+    for i in range(1, len(enu_path) + 1):
+        at_end = i == len(enu_path)
+        changed = not at_end and zones[i] != zones[start]
+        if not at_end and not changed:
+            continue
+
+        zone = zones[start]
+        seg_type = "work" if zone == "work" else "headland_turn"
+        counts[seg_type] += 1
+        seg_id = f"{'row' if seg_type == 'work' else 'turn'}_{counts[seg_type]:03d}"
+        end = i - 1
+        speed_limit = work_speed_mps if seg_type == "work" else turn_speed_mps
+        segments.append({
+            "id": seg_id,
+            "type": seg_type,
+            "zone": zone,
+            "start_index": start,
+            "end_index": end,
+            "length_m": round(max(0.0, stations[end] - stations[start]), 3),
+            "motion": {
+                "speed_limit_mps": speed_limit,
+                "preferred_tracker": "line" if seg_type == "work" else "turn",
+            },
+            "implement": {
+                "mode": "tillage",
+                "pto": "on" if seg_type == "work" else "off",
+                "hitch": "down" if seg_type == "work" else "up",
+                "engage_offset_m": 1.0,
+                "disengage_offset_m": 1.5,
+            },
+        })
+        start = i
+
+    return segments
+
+
 def build_global_path(
     enu_path: List[Tuple[float, float]],
     task_id: str,
@@ -252,6 +355,46 @@ def build_global_path(
     if path_zones:
         msg['path_zones'] = path_zones
     return msg
+
+
+def build_operation_plan(
+    enu_path: List[Tuple[float, float]],
+    task_id: str,
+    path_zones: Optional[List[str]] = None,
+    turn_angle_threshold_deg: float = 45.0,
+    turn_zone_radius_m: float = 4.0,
+    work_speed_mps: float = 1.0,
+    turn_speed_mps: float = 0.5,
+) -> Dict[str, Any]:
+    zones = classify_path_zones(
+        enu_path,
+        existing_zones=path_zones,
+        turn_angle_threshold_deg=turn_angle_threshold_deg,
+        turn_zone_radius_m=turn_zone_radius_m,
+    )
+    segments = build_segments_from_zones(
+        enu_path,
+        zones,
+        work_speed_mps=work_speed_mps,
+        turn_speed_mps=turn_speed_mps,
+    )
+
+    return {
+        "task_id": task_id,
+        "timestamp": time.time(),
+        "frame": "ENU",
+        "path": enu_path,
+        "path_zones": zones,
+        "segments": segments,
+        "status": "success" if enu_path else "failed",
+        "summary": {
+            "path_points": len(enu_path),
+            "path_length_m": round(compute_path_length(enu_path), 3),
+            "segment_count": len(segments),
+            "work_segment_count": sum(1 for s in segments if s.get("type") == "work"),
+            "turn_segment_count": sum(1 for s in segments if s.get("type") == "headland_turn"),
+        },
+    }
 
 
 def build_task_enu(

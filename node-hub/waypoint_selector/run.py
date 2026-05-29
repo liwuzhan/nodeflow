@@ -46,6 +46,12 @@ class OperationPlan(BaseModel):
     segments: list = []
     status: str = "success"
 
+class PathProgress(BaseModel):
+    task_id: str | None = None
+    path_index: int = 0
+    segment_fraction: float = 0.0
+    cross_track_error_m: float = 0.0
+
 class PoseENU(BaseModel):
     x: float
     y: float
@@ -96,11 +102,17 @@ def main():
         # 持续消费参数
         continuous_consume_distance = float(sdk.params.get("continuous_consume_distance", 1.5))
         turn_preview_distance = float(sdk.params.get("turn_preview_distance", 8.0))
+        progress_sync_max_cross_track_m = float(sdk.params.get("progress_sync_max_cross_track_m", 6.0))
+        progress_sync_fraction_threshold = float(sdk.params.get("progress_sync_fraction_threshold", 0.2))
 
         sdk.logger.info(f"初始消费: 检查{initial_check_points}点, 距离<{initial_consume_distance}m")
         sdk.logger.info(f"视野扩宽: 最少{min_view_points}点, 扩宽x{view_expand_factor}, 最大{max_view_width}m")
         sdk.logger.info(f"持续消费: 距离<{continuous_consume_distance}m")
         sdk.logger.info(f"转弯预判: 向前预览{turn_preview_distance}m")
+        sdk.logger.info(
+            f"路径进度同步: 横向误差<={progress_sync_max_cross_track_m}m, "
+            f"segment_fraction>={progress_sync_fraction_threshold}"
+        )
 
         # 2. 初始化 L4 原子层算法
         config = ViewConfig(
@@ -115,7 +127,9 @@ def main():
             view_expand_factor=view_expand_factor,
             max_view_width=max_view_width,
             continuous_consume_distance=continuous_consume_distance,
-            turn_preview_distance=turn_preview_distance
+            turn_preview_distance=turn_preview_distance,
+            progress_sync_max_cross_track_m=progress_sync_max_cross_track_m,
+            progress_sync_fraction_threshold=progress_sync_fraction_threshold
         )
         selector = WaypointSelector(config)
 
@@ -123,6 +137,7 @@ def main():
         in_path = sdk.create_input_port("global_path")
         in_plan = sdk.create_input_port("operation_plan")
         in_pose = sdk.create_input_port("pose_enu")
+        in_progress = sdk.create_input_port("path_progress")
         out_np = sdk.create_output_port("next_point", schema=NextPoint)
 
         # 缓存最新位置
@@ -134,6 +149,7 @@ def main():
             plan_pkt = in_plan.recv_latest()
             path_pkt = in_path.recv_latest()
             pose = in_pose.recv_latest()
+            progress = in_progress.recv_latest()
 
             # 更新位置缓存
             if pose:
@@ -170,6 +186,9 @@ def main():
                         sdk.logger.info(
                             f"[路径更新] 当前位置: ({cx:.1f}, {cy:.1f}), 距起点: {dist:.1f}m"
                         )
+
+            if progress:
+                selector.sync_progress(progress)
 
             # 4b. 调用 L4 原子层算法选择前瞻点
             if last_pose:

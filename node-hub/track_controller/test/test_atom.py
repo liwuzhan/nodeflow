@@ -99,7 +99,7 @@ def test_path_progress_speed_limit_caps_segment_speed():
     assert cmd["speed_limit_factor"] == 0.25
 
 
-def test_cross_track_error_can_stop_linear_speed():
+def test_cross_track_error_keeps_low_recovery_speed():
     pose = {"x": 0.0, "y": 0.0, "theta": 0.0}
     npkt = {
         "x": 5.0,
@@ -126,5 +126,6 @@ def test_cross_track_error_can_stop_linear_speed():
         path_progress=progress,
     )
 
-    assert cmd["linear_velocity"] == 0.0
-    assert cmd["cte_factor"] == 0.0
+    assert cmd["linear_velocity"] == 0.3
+    assert cmd["cte_factor"] == 0.15
+    assert cmd["cross_track_recovery_factor"] == 0.15

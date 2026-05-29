@@ -33,6 +33,9 @@ class ViewConfig:
     continuous_consume_distance: float = 1.5  # 每帧检查，距离小于此值的点自动消费
     # 前方路径预判参数
     turn_preview_distance: float = 8.0  # 向前预览路径距离，用于检测急转弯
+    # 外部路径进度同步参数
+    progress_sync_max_cross_track_m: float = 6.0  # 超过该横向偏差时不信任进度同步
+    progress_sync_fraction_threshold: float = 0.2  # 投影超过该比例后消费当前路径点
 
 
 @dataclass
@@ -169,6 +172,53 @@ class WaypointSelector:
             "start_y": start_y,
             "initial_consumed": self.state.first_unconsumed_idx
         }
+
+    def sync_progress(self, progress: Dict[str, Any]) -> bool:
+        """
+        使用外部路径投影进度同步第一个未消费点。
+
+        waypoint_selector 的视野消费适合连续跟踪，但在仿真重启、掉头中途或
+        车辆初始位置不在路径起点时，内部 first_unconsumed_idx 可能落后于
+        实际路径进度。path_progress 已经把车辆投影到 operation_plan 上，这里
+        只允许索引单调向前修正，避免回头追旧点。
+        """
+        if not self.state.path or not progress:
+            return False
+
+        progress_task_id = progress.get("task_id")
+        if progress_task_id and self.state.task_id and progress_task_id != self.state.task_id:
+            return False
+
+        cross_track_error = progress.get("cross_track_error_m")
+        if cross_track_error is not None:
+            try:
+                if abs(float(cross_track_error)) > self.config.progress_sync_max_cross_track_m:
+                    return False
+            except (TypeError, ValueError):
+                return False
+
+        try:
+            path_index = int(progress.get("path_index", 0))
+            segment_fraction = float(progress.get("segment_fraction", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return False
+
+        if path_index < 0:
+            return False
+
+        next_idx = path_index
+        if segment_fraction >= self.config.progress_sync_fraction_threshold:
+            next_idx += 1
+        next_idx = max(0, min(next_idx, len(self.state.path)))
+
+        if next_idx <= self.state.first_unconsumed_idx:
+            return False
+
+        self.state.first_unconsumed_idx = next_idx
+        self.state.in_view_indices = [
+            idx for idx in self.state.in_view_indices if idx >= next_idx
+        ]
+        return True
 
     def select(self, pose: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """

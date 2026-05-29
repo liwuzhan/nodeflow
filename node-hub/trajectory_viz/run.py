@@ -13,6 +13,7 @@
 
 import sys
 import time
+import os
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, Optional, List, Tuple
@@ -40,6 +41,14 @@ try:
         stats: Dict[str, Any]
 except ImportError:
     TrajectoryWebURL = None
+
+
+def create_optional_input_port(sdk: NodeFlowSDK, name: str):
+    """Create an input port only when the runtime graph connects it."""
+    if f"NODE_IN_{name}" not in os.environ:
+        print(f"可选端口未连接: {name}")
+        return None
+    return sdk.create_input_port(name)
 
 
 def main():
@@ -75,8 +84,8 @@ def main():
         pose_port = sdk.create_input_port('pose_enu')
         next_point_port = sdk.create_input_port('next_point')
         velocity_port = sdk.create_input_port('velocity_cmd')
-        tillage_cmd_port = sdk.create_input_port('tillage_cmd')
-        tillage_status_port = sdk.create_input_port('tillage_status')
+        tillage_cmd_port = create_optional_input_port(sdk, 'tillage_cmd')
+        tillage_status_port = create_optional_input_port(sdk, 'tillage_status')
         path_progress_port = sdk.create_input_port('path_progress')
         output_port = sdk.create_output_port('web_url', schema=TrajectoryWebURL)
 
@@ -134,8 +143,8 @@ def main():
                 pose_data = pose_port.recv_latest()
                 next_point_data = next_point_port.recv_latest()
                 velocity_data = velocity_port.recv_latest()
-                tillage_cmd_data = tillage_cmd_port.recv_latest()
-                tillage_status_data = tillage_status_port.recv_latest()
+                tillage_cmd_data = tillage_cmd_port.recv_latest() if tillage_cmd_port else None
+                tillage_status_data = tillage_status_port.recv_latest() if tillage_status_port else None
                 path_progress_data = path_progress_port.recv_latest()
 
                 # 5c. 处理 task_enu (地块边界)

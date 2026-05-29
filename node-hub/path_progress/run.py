@@ -35,6 +35,7 @@ class ProgressState(BaseModel):
     motion: Dict[str, Any] = {}
     implement: Dict[str, Any] = {}
     upcoming: Dict[str, Any] = {}
+    relocalized: bool = False
     timestamp: float = 0.0
 
 
@@ -43,6 +44,7 @@ def main():
         sdk.logger.info("Path Progress Node started")
 
         search_window = int(sdk.get_param("search_window", 120))
+        relocalize_error_m = float(sdk.get_param("relocalize_error_m", 8.0))
         publish_interval = float(sdk.get_param("publish_interval", 0.02))
 
         in_plan = sdk.create_input_port("operation_plan")
@@ -78,6 +80,7 @@ def main():
                     last_pose,
                     last_path_index=last_path_index,
                     search_window=search_window,
+                    relocalize_error_m=relocalize_error_m,
                 )
                 if progress:
                     progress["timestamp"] = time.time()

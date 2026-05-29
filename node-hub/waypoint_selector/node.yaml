@@ -24,6 +24,9 @@ ports:
     - name: pose_enu
       type: localization.pose_enu
       description: "车辆姿态 (x, y, theta) - 必须包含航向"
+    - name: path_progress
+      type: planning.path_progress
+      description: "可选：路径投影进度，用于同步已消费路径点，避免掉头/重启后追旧点"
   outputs:
     - name: next_point
       type: planning.waypoint
@@ -95,3 +98,13 @@ params:
     type: number
     default: 8.0
     description: "向前预览路径距离，用于输出急转弯预警 (米)"
+
+  progress_sync_max_cross_track_m:
+    type: number
+    default: 6.0
+    description: "路径进度同步允许的最大横向误差 (米)"
+
+  progress_sync_fraction_threshold:
+    type: number
+    default: 0.2
+    description: "路径投影超过当前线段该比例后，前瞻选择器消费当前路径点"

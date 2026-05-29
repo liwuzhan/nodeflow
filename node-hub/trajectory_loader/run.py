@@ -44,9 +44,14 @@ class TrajectoryLoaderNode:
         self.publish_interval = float(sdk.get_param('publish_interval', 0.1))
         self.enable_bezier = sdk.get_param('enable_bezier', True)
         self.corner_radius = float(sdk.get_param('corner_radius', 1.0))
+        self.turn_angle_threshold_deg = float(sdk.get_param('turn_angle_threshold_deg', 45.0))
+        self.turn_zone_radius_m = float(sdk.get_param('turn_zone_radius_m', 4.0))
+        self.work_speed_limit_mps = float(sdk.get_param('work_speed_limit_mps', 1.0))
+        self.turn_speed_limit_mps = float(sdk.get_param('turn_speed_limit_mps', 0.5))
 
         # 创建输出端口
         self.output_global_path = sdk.create_output_port('global_path')
+        self.output_operation_plan = sdk.create_output_port('operation_plan')
         self.output_task_enu = sdk.create_output_port('task_enu')
         self.output_bezier_path = None
         if self.enable_bezier:
@@ -54,6 +59,7 @@ class TrajectoryLoaderNode:
 
         # 状态
         self.loaded_path = None
+        self.operation_plan_msg = None
         self.bezier_path_msg = None
         self.task_enu_msg = None
         self.task_id = str(uuid.uuid4())[:8]
@@ -129,7 +135,21 @@ class TrajectoryLoaderNode:
             self.sdk.logger.info(f"  路径总长: {path_length:.2f} 米")
 
         # 5. 构建输出消息
-        self.loaded_path = atom.build_global_path(enu_path, self.task_id, path_zones)
+        self.operation_plan_msg = atom.build_operation_plan(
+            enu_path,
+            self.task_id,
+            path_zones=path_zones,
+            turn_angle_threshold_deg=self.turn_angle_threshold_deg,
+            turn_zone_radius_m=self.turn_zone_radius_m,
+            work_speed_mps=self.work_speed_limit_mps,
+            turn_speed_mps=self.turn_speed_limit_mps,
+        )
+        self.loaded_path = atom.build_global_path(
+            enu_path,
+            self.task_id,
+            self.operation_plan_msg.get("path_zones", path_zones),
+        )
+        self.loaded_path["segments"] = self.operation_plan_msg.get("segments", [])
         self.task_enu_msg = atom.build_task_enu(ref_lon, ref_lat, self.task_id)
 
         # 6. 构建贝塞尔平滑路径（可选）
@@ -163,8 +183,11 @@ class TrajectoryLoaderNode:
                 self.output_task_enu.send(self.task_enu_msg)
 
                 # 发送 global_path（ENU路径）
-                self.loaded_path['timestamp'] = time.time()
+                now = time.time()
+                self.loaded_path['timestamp'] = now
                 self.output_global_path.send(self.loaded_path)
+                self.operation_plan_msg['timestamp'] = now
+                self.output_operation_plan.send(self.operation_plan_msg)
 
                 # 发送 bezier_path（贝塞尔平滑路径）
                 if self.output_bezier_path and self.bezier_path_msg:

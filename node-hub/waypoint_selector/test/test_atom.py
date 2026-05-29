@@ -317,6 +317,63 @@ def test_upcoming_turn_preview():
     )
 
 
+def test_sync_progress_advances_consumed_index():
+    """测试8: 外部路径进度可以纠正落后的已消费索引"""
+    print("\n=== 测试8: 路径进度同步 ===")
+
+    selector = WaypointSelector(ViewConfig())
+    path = [(float(i), 0.0) for i in range(10)]
+    selector.set_path({"path": path, "task_id": "progress_task"})
+
+    synced = selector.sync_progress({
+        "task_id": "progress_task",
+        "path_index": 5,
+        "segment_fraction": 0.4,
+        "cross_track_error_m": 0.2,
+    })
+    assert selector.state.first_unconsumed_idx == 6
+    result = selector.select({"x": 5.2, "y": 0.0, "theta": 0.0})
+
+    assert synced is True
+    assert result["consumed"] >= 6
+    assert result["index"] >= 6
+    print(f"✓ 同步后已消费索引: {result['consumed']}")
+
+
+def test_sync_progress_ignores_backward_or_untrusted_updates():
+    """测试9: 外部路径进度只允许可信的单调前进修正"""
+    print("\n=== 测试9: 路径进度同步保护 ===")
+
+    selector = WaypointSelector(ViewConfig(progress_sync_max_cross_track_m=2.0))
+    path = [(float(i), 0.0) for i in range(10)]
+    selector.set_path({"path": path, "task_id": "progress_guard"})
+
+    assert selector.sync_progress({
+        "task_id": "progress_guard",
+        "path_index": 4,
+        "segment_fraction": 0.5,
+        "cross_track_error_m": 0.1,
+    })
+    assert selector.state.first_unconsumed_idx == 5
+
+    assert not selector.sync_progress({
+        "task_id": "progress_guard",
+        "path_index": 2,
+        "segment_fraction": 0.5,
+        "cross_track_error_m": 0.1,
+    })
+    assert selector.state.first_unconsumed_idx == 5
+
+    assert not selector.sync_progress({
+        "task_id": "progress_guard",
+        "path_index": 8,
+        "segment_fraction": 0.5,
+        "cross_track_error_m": 3.0,
+    })
+    assert selector.state.first_unconsumed_idx == 5
+    print("✓ 单调前进和横向误差保护通过")
+
+
 def run_all_tests():
     """运行所有测试"""
     print("=" * 60)
@@ -331,6 +388,8 @@ def run_all_tests():
         test_initial_consume()
         test_u_turn()
         test_upcoming_turn_preview()
+        test_sync_progress_advances_consumed_index()
+        test_sync_progress_ignores_backward_or_untrusted_updates()
 
         print("\n" + "=" * 60)
         print("✅ 所有测试通过!")

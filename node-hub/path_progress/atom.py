@@ -121,6 +121,7 @@ def compute_progress(
     pose: Dict[str, Any],
     last_path_index: int = 0,
     search_window: int = 100,
+    relocalize_error_m: float = 8.0,
 ) -> Optional[Dict[str, Any]]:
     if not operation_plan or not pose:
         return None
@@ -134,6 +135,13 @@ def compute_progress(
     projection = project_pose_to_path(pose, path, last_path_index, search_window)
     if not projection:
         return None
+
+    relocalized = False
+    if abs(projection["cross_track_error_m"]) > relocalize_error_m:
+        full_projection = project_pose_to_path(pose, path, 0, len(path) - 1)
+        if full_projection and abs(full_projection["cross_track_error_m"]) < abs(projection["cross_track_error_m"]):
+            projection = full_projection
+            relocalized = True
 
     segments = operation_plan.get("segments", []) or []
     segment = find_segment_for_index(segments, projection["path_index"])
@@ -158,6 +166,7 @@ def compute_progress(
         "cross_track_error_m": round(projection["cross_track_error_m"], 3),
         "heading_error_deg": round(math.degrees(heading_error), 2),
         "path_heading_rad": projection["path_heading_rad"],
+        "relocalized": relocalized,
         "motion": segment.get("motion", {}) if segment else {},
         "implement": segment.get("implement", {}) if segment else {},
         "upcoming": {

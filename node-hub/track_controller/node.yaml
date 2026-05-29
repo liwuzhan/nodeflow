@@ -113,4 +113,8 @@ params:
   cross_track_stop_error_m:
     type: float
     default: 1.5
-    description: "横向误差超过该值时线速度降为0"
+    description: "横向误差超过该值时进入低速恢复"
+  cross_track_recovery_factor:
+    type: float
+    default: 0.15
+    description: "横向误差过大时保留的低速恢复因子"
