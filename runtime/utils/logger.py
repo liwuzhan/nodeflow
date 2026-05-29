@@ -26,8 +26,9 @@ def setup_logger(name: str = "nodeflow", level: str = "INFO") -> logging.Logger:
     if logger.handlers:
         return logger
 
-    # 创建控制台处理器
-    console_handler = logging.StreamHandler(sys.stdout)
+    # 创建控制台处理器。CLI 的 JSON 输出依赖 stdout 保持纯净，
+    # 运行日志按惯例写到 stderr。
+    console_handler = logging.StreamHandler(sys.stderr)
     console_handler.setLevel(level.upper())
 
     # 创建格式化器

@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 from runtime.config.yaml_parser import YAMLParser
 from sdk.shared_buffer_lite import SharedBufferLite
+from tools.cli.utils.output import print_error, redirect_library_stdout_when_json
 
 def _expected_source_buffers(edges):
     items = []
@@ -47,10 +48,11 @@ def handle_monitor_command(args) -> int:
     iterations = int(args.iterations)
     as_json = bool(getattr(args, "json", False))
     if not config_path.exists():
-        print(f"Error: config not found: {config_path}")
+        print_error(f"config not found: {config_path}", as_json=as_json, code="not_found")
         return 1
-    parser = YAMLParser()
-    config = parser.parse_runtime_config(str(config_path))
+    with redirect_library_stdout_when_json(as_json):
+        parser = YAMLParser()
+        config = parser.parse_runtime_config(str(config_path))
     names = args.names if args.names else _expected_source_buffers(config.edges)
     bufs = _open_buffers(names)
     prev = {n: 0 for n in names}
@@ -95,4 +97,3 @@ def handle_monitor_command(args) -> int:
                 except Exception:
                     pass
     return 0
-

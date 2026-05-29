@@ -124,6 +124,13 @@ server:
   # 仿真模式
   realtime: true
 
+  # 固定随机种子，保证地块、孔洞和初始车位可复现
+  random_seed: 20260529
+
+  # 初始车位贴近地块入口，避免验证时先跑几十米接近段
+  initial_pose_mode: entry
+  initial_max_distance_m: 1.0
+
 # 日志配置
 logging:
   level: INFO

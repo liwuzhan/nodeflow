@@ -1,5 +1,8 @@
 import time
 import threading
+import os
+import subprocess
+from pathlib import Path
 from typing import Optional
 
 from sdk.shared_buffer_lite import SharedBufferLite
@@ -8,6 +11,41 @@ from runtime.task.store import TaskStore
 from runtime.utils.logger import setup_logger
 
 logger = setup_logger("task_executor")
+
+RUNTIME_PID_FILE = Path("/tmp/nodeflow_runtime.pid")
+
+
+def _runtime_process_running() -> bool:
+    if not RUNTIME_PID_FILE.exists():
+        return False
+    try:
+        lines = RUNTIME_PID_FILE.read_text().splitlines()
+        if not lines:
+            return False
+        pid = int(lines[0].strip())
+    except (OSError, ValueError):
+        return False
+
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        return True
+    except (ProcessLookupError, OSError):
+        return False
+
+    try:
+        ps = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "stat="],
+            capture_output=True,
+            text=True,
+            timeout=1,
+        )
+        if ps.returncode == 0 and ps.stdout.strip().startswith("Z"):
+            return False
+    except Exception:
+        pass
+
+    return True
 
 
 class TaskExecutor:
@@ -28,10 +66,18 @@ class TaskExecutor:
         self._current_task_id = task.task_id
         self.store.update_state(task.task_id, TaskState.READY)
 
+        if not _runtime_process_running():
+            logger.warning(f"Runtime not running for task {task.task_id}")
+            if self._current_task_id == task.task_id:
+                self._current_task_id = None
+            return False
+
         try:
             control_buf = SharedBufferLite("runtime.control", create=False)
         except FileNotFoundError:
             logger.warning(f"Control buffer not ready for task {task.task_id}")
+            if self._current_task_id == task.task_id:
+                self._current_task_id = None
             return False
 
         payload = {
@@ -41,6 +87,7 @@ class TaskExecutor:
             "timestamp": time.time(),
         }
         control_buf.write(payload)
+        control_buf.close()
         logger.info(f"Task {task.task_id} dispatched to runtime daemon")
 
         self.store.update_state(task.task_id, TaskState.RUNNING)
@@ -50,15 +97,19 @@ class TaskExecutor:
     def cancel(self, task_id: str):
         logger.info(f"Cancelling task {task_id}")
         self._stop_monitor()
-        try:
-            control_buf = SharedBufferLite("runtime.control", create=False)
-            control_buf.write({
-                "command": "stop_dataflow",
-                "task_id": task_id,
-                "timestamp": time.time(),
-            })
-        except FileNotFoundError:
-            logger.warning(f"Cannot cancel {task_id}: control buffer not found")
+        if _runtime_process_running():
+            try:
+                control_buf = SharedBufferLite("runtime.control", create=False)
+                control_buf.write({
+                    "command": "stop_dataflow",
+                    "task_id": task_id,
+                    "timestamp": time.time(),
+                })
+                control_buf.close()
+            except FileNotFoundError:
+                logger.warning(f"Cannot cancel {task_id}: control buffer not found")
+        else:
+            logger.warning(f"Cannot cancel {task_id}: runtime not running")
         self.store.update_state(task_id, TaskState.CANCELLED)
         if self._current_task_id == task_id:
             self._current_task_id = None

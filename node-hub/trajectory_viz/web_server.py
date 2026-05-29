@@ -81,7 +81,7 @@ HTML_TEMPLATE = """
         }
         .dashboard {
             display: grid;
-            grid-template-columns: repeat(4, minmax(0, 1fr));
+            grid-template-columns: repeat(5, minmax(0, 1fr));
             gap: 12px;
             margin-bottom: 20px;
         }
@@ -199,6 +199,11 @@ HTML_TEMPLATE = """
                 <div class="panel-label">机具状态</div>
                 <div class="panel-value" id="implement-state">--</div>
                 <div class="panel-sub" id="hitch-state">PTO --, hitch --</div>
+            </div>
+            <div class="panel">
+                <div class="panel-label">覆盖复盘</div>
+                <div class="panel-value" id="coverage-state">--</div>
+                <div class="panel-sub" id="covered-area-state">area -- m2, seg --, samples --/--</div>
             </div>
         </div>
 
@@ -533,6 +538,13 @@ HTML_TEMPLATE = """
             return Number(value).toFixed(digits);
         }
 
+        function valueOrDash(value) {
+            if (value === null || value === undefined || Number.isNaN(Number(value))) {
+                return '--';
+            }
+            return value;
+        }
+
         function textOrDash(value) {
             return value || '--';
         }
@@ -554,6 +566,8 @@ HTML_TEMPLATE = """
             const nextPoint = data.next_point || {};
             const progress = data.path_progress || {};
             const tillage = data.tillage_status || data.tillage_cmd || {};
+            const metrics = data.metrics || {};
+            const coverage = data.coverage_overlay || {};
 
             document.getElementById('track-state').textContent =
                 textOrDash(velocity.status || 'tracking');
@@ -574,6 +588,11 @@ HTML_TEMPLATE = """
                 textOrDash(tillage.state);
             document.getElementById('hitch-state').textContent =
                 `PTO ${tillage.pto_on === true ? 'ON' : tillage.pto_on === false ? 'OFF' : '--'}, hitch ${fmt(tillage.hitch_height)}`;
+
+            document.getElementById('coverage-state').textContent =
+                `${fmt(metrics.coverage_rate_percent, 1)}%`;
+            document.getElementById('covered-area-state').textContent =
+                `area ${fmt(metrics.covered_area_m2, 1)} m2, seg ${coverage.active_segments ?? '--'}, samples ${coverage.working_sample_count ?? '--'}/${coverage.sample_count ?? '--'}, active ${coverage.latest_active === true ? 'Y' : coverage.latest_active === false ? 'N' : '--'}`;
         }
 
         function updateReplayPlots(samples) {
@@ -656,25 +675,25 @@ HTML_TEMPLATE = """
 
         function updateMetrics(metrics) {
             document.getElementById('planned-distance').textContent =
-                metrics.planned_distance_m || '--';
+                valueOrDash(metrics.planned_distance_m);
             document.getElementById('actual-distance').textContent =
-                metrics.actual_distance_m || '--';
+                valueOrDash(metrics.actual_distance_m);
             document.getElementById('distance-error').textContent =
-                metrics.distance_error_m || '--';
+                valueOrDash(metrics.distance_error_m);
             document.getElementById('distance-error-percent').textContent =
-                metrics.distance_error_percent || '--';
+                valueOrDash(metrics.distance_error_percent);
             document.getElementById('avg-lateral-error').textContent =
-                metrics.avg_lateral_error_m || '--';
+                valueOrDash(metrics.avg_lateral_error_m);
             document.getElementById('max-lateral-error').textContent =
-                metrics.max_lateral_error_m || '--';
+                valueOrDash(metrics.max_lateral_error_m);
             document.getElementById('trajectory-points').textContent =
-                metrics.trajectory_points || '--';
+                valueOrDash(metrics.trajectory_points);
             document.getElementById('implement-width').textContent =
-                metrics.implement_width_m || '--';
+                valueOrDash(metrics.implement_width_m);
             document.getElementById('covered-area').textContent =
-                metrics.covered_area_m2 || '--';
+                valueOrDash(metrics.covered_area_m2);
             document.getElementById('coverage-rate').textContent =
-                metrics.coverage_rate_percent || '--';
+                valueOrDash(metrics.coverage_rate_percent);
         }
     </script>
 </body>

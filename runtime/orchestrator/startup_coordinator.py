@@ -5,7 +5,7 @@
 
 import time
 import subprocess
-from typing import Dict, List
+from typing import Callable, Dict, List, Optional
 
 from runtime.config.models import NodeInstance
 from runtime.orchestrator.node_launcher import NodeLauncher
@@ -35,7 +35,8 @@ class StartupCoordinator:
         layers: List[List[str]],
         nodes: Dict[str, NodeInstance],
         startup_timeout: float = 30.0,
-        startup_delay: float = 2.0
+        startup_delay: float = 2.0,
+        should_cancel: Optional[Callable[[], bool]] = None,
     ) -> Dict[str, subprocess.Popen]:
         """
         按拓扑层次启动节点（ZeroMQ版本）
@@ -70,14 +71,18 @@ class StartupCoordinator:
 
         # ========== 按层启动节点 ==========
         for layer_idx, layer_nodes in enumerate(layers):
+            if should_cancel and should_cancel():
+                logger.info("Startup cancelled before next layer")
+                break
+
             logger.info(f"=== Starting Layer {layer_idx} ({len(layer_nodes)} nodes) ===")
             logger.info(f"Nodes: {layer_nodes}")
 
             # 并行启动该层所有节点
-            layer_processes = self._start_layer(layer_nodes, nodes)
+            layer_processes = self._start_layer(layer_nodes, nodes, should_cancel=should_cancel)
 
             # 等待该层节点启动完成
-            self._wait_for_layer(layer_processes, startup_timeout)
+            self._wait_for_layer(layer_processes, startup_timeout, should_cancel=should_cancel)
 
             # 更新总进程字典
             processes.update(layer_processes)
@@ -85,7 +90,12 @@ class StartupCoordinator:
             # 层之间延迟（给ZMQ SUB时间连接到PUB）
             if layer_idx < len(layers) - 1:
                 logger.debug(f"Waiting {startup_delay}s before starting next layer (ZMQ connection setup)")
-                time.sleep(startup_delay)
+                delay_deadline = time.time() + startup_delay
+                while time.time() < delay_deadline:
+                    if should_cancel and should_cancel():
+                        logger.info("Startup cancelled during layer delay")
+                        return processes
+                    time.sleep(min(0.1, delay_deadline - time.time()))
 
         logger.info(f"All {len(processes)} nodes started successfully")
         return processes
@@ -93,7 +103,8 @@ class StartupCoordinator:
     def _start_layer(
         self,
         layer_nodes: List[str],
-        nodes: Dict[str, NodeInstance]
+        nodes: Dict[str, NodeInstance],
+        should_cancel: Optional[Callable[[], bool]] = None,
     ) -> Dict[str, subprocess.Popen]:
         """
         启动一层中的所有节点
@@ -111,6 +122,10 @@ class StartupCoordinator:
         layer_processes = {}
 
         for node_id in layer_nodes:
+            if should_cancel and should_cancel():
+                logger.info("Startup cancelled while starting layer")
+                break
+
             node = nodes[node_id]
             manifest = self.registry.get_manifest(node.package)
 
@@ -136,7 +151,8 @@ class StartupCoordinator:
     def _wait_for_layer(
         self,
         processes: Dict[str, subprocess.Popen],
-        timeout: float
+        timeout: float,
+        should_cancel: Optional[Callable[[], bool]] = None,
     ):
         """
         等待该层节点启动完成
@@ -156,6 +172,10 @@ class StartupCoordinator:
         check_interval = 0.5  # 每0.5秒检查一次
 
         while time.time() - start_time < timeout:
+            if should_cancel and should_cancel():
+                logger.info("Startup cancelled while waiting for layer")
+                return
+
             all_alive = True
 
             # 检查所有进程

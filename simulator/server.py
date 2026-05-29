@@ -16,6 +16,7 @@ import time
 import threading
 import logging
 import yaml
+import random
 from pathlib import Path
 from typing import Dict, Any
 
@@ -54,6 +55,11 @@ class SimulatorServer:
 
         # 加载配置文件
         self.config = self._load_config(config_path)
+        server_config = self.config.get('server', {})
+        random_seed = server_config.get('random_seed')
+        if random_seed is not None:
+            random.seed(random_seed)
+            logger.info(f"Simulator random seed: {random_seed}")
 
         # ZMQ 上下文
         self.context = zmq.Context()
@@ -97,7 +103,7 @@ class SimulatorServer:
         self.field_generator = FieldGenerator(base_x=base_x, base_y=base_y)
         self.field = self._generate_default_field()
         self.field_version = 1
-        self._init_robot_near_entry(max_distance_m=50.0)
+        self._init_robot_from_config()
 
         # 控制
         self.running = False
@@ -170,7 +176,16 @@ class SimulatorServer:
             logger.warning(f"Config file not found: {config_path}, using defaults")
             return {}
 
-    def _init_robot_near_entry(self, max_distance_m: float = 50.0):
+    def _init_robot_from_config(self):
+        server_config = self.config.get('server', {})
+        mode = server_config.get('initial_pose_mode', 'entry')
+        max_distance = float(server_config.get('initial_max_distance_m', 1.0))
+        if mode == 'entry':
+            self._init_robot_near_entry(max_distance_m=max_distance)
+        else:
+            self._init_robot_near_entry(max_distance_m=max_distance)
+
+    def _init_robot_near_entry(self, max_distance_m: float = 1.0):
         """将机器人初始位置设置在入口点附近（不超过指定距离）"""
         try:
             entry_points = self.field.get("entry_points", [])
@@ -178,7 +193,7 @@ class SimulatorServer:
                 return
             ex, ey = entry_points[0]
             cx, cy = self.field.get("center", (ex, ey))
-            import random, math
+            import math
             r = random.uniform(0.0, max_distance_m)
             theta = random.uniform(0.0, 2 * math.pi)
             self.state.x = ex + r * math.cos(theta)
@@ -519,7 +534,7 @@ class SimulatorServer:
         try:
             self.field = self._generate_default_field()
             self.field_version += 1
-            self._init_robot_near_entry(max_distance_m=50.0)
+            self._init_robot_from_config()
             return {
                 "status": "ok",
                 "field": self.field,

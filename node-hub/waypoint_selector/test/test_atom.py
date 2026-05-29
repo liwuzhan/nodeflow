@@ -374,6 +374,31 @@ def test_sync_progress_ignores_backward_or_untrusted_updates():
     print("✓ 单调前进和横向误差保护通过")
 
 
+def test_progress_lookahead_selects_target_from_projection():
+    """测试10: 路径进度前瞻直接沿路径里程选目标"""
+    print("\n=== 测试10: 路径进度前瞻目标 ===")
+
+    selector = WaypointSelector(ViewConfig(progress_target_lookahead_m=2.5))
+    path = [(float(i), 0.0) for i in range(10)]
+    selector.set_path({"path": path, "task_id": "progress_target"})
+
+    result = selector.select(
+        {"x": 4.2, "y": 3.0, "theta": 0.0},
+        progress={
+            "task_id": "progress_target",
+            "path_index": 4,
+            "segment_fraction": 0.25,
+            "cross_track_error_m": 3.0,
+        },
+    )
+
+    assert result["mode"] == "tracking"
+    assert result["index"] == 6
+    assert math.isclose(result["x"], 6.75)
+    assert math.isclose(result["y"], 0.0)
+    print(f"✓ 前瞻目标: ({result['x']:.2f}, {result['y']:.2f}), index={result['index']}")
+
+
 def run_all_tests():
     """运行所有测试"""
     print("=" * 60)
@@ -390,6 +415,7 @@ def run_all_tests():
         test_upcoming_turn_preview()
         test_sync_progress_advances_consumed_index()
         test_sync_progress_ignores_backward_or_untrusted_updates()
+        test_progress_lookahead_selects_target_from_projection()
 
         print("\n" + "=" * 60)
         print("✅ 所有测试通过!")

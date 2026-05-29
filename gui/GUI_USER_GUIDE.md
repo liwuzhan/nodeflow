@@ -227,7 +227,7 @@ python3 -m tools.cli.core.cli runtime stop
 /tmp/nodeflow_runtime.log
 
 # 各节点日志
-/tmp/nodeflow_logs/*.log
+/tmp/nodeflow/logs/*.jsonl
 ```
 
 ### Q4: 关闭 GUI 窗口会停止 Runtime 吗？
@@ -309,7 +309,7 @@ time.sleep(1)
 def open_logs(self):
     """打开日志目录"""
     import subprocess
-    subprocess.run(["open", "/tmp/nodeflow_logs/"])
+    subprocess.run(["open", "/tmp/nodeflow/logs/"])
 ```
 
 ## 故障排查
@@ -344,7 +344,7 @@ ls -lh /tmp/nodeflow/buffers/
 
 ```bash
 # 查看所有节点日志
-tail -f /tmp/nodeflow_logs/*.log
+tail -f /tmp/nodeflow/logs/*.jsonl
 
 # 检查进程
 ps aux | grep nodeflow

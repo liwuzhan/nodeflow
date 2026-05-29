@@ -227,6 +227,28 @@ def is_sample_working(sample: Dict[str, Any], hitch_threshold: float = 0.5) -> b
     return state in {"working", "lowering", "ready_to_engage"}
 
 
+def summarize_coverage_samples(replay_samples: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Summarize implement activity in replay samples for visual diagnostics.
+    """
+    total = len(replay_samples)
+    working = sum(1 for sample in replay_samples if is_sample_working(sample))
+    latest = replay_samples[-1] if replay_samples else {}
+    latest_state = latest.get("tillage_state", "") if latest else ""
+    latest_pto = latest.get("pto_on") if latest else None
+    latest_hitch = latest.get("hitch_height") if latest else None
+
+    return {
+        "sample_count": total,
+        "working_sample_count": working,
+        "working_sample_percent": round((working / total * 100.0) if total else 0.0, 1),
+        "latest_active": is_sample_working(latest) if latest else False,
+        "latest_tillage_state": latest_state,
+        "latest_pto_on": latest_pto,
+        "latest_hitch_height": latest_hitch,
+    }
+
+
 def build_coverage_overlay(
     replay_samples: List[Dict[str, Any]],
     implement_width_m: float,
@@ -242,6 +264,7 @@ def build_coverage_overlay(
     """
     if implement_width_m <= 0 or len(replay_samples) < 2:
         field_area = calculate_polygon_area(field_boundary or [])
+        summary = summarize_coverage_samples(replay_samples)
         return {
             "implement_width_m": implement_width_m,
             "field_area_m2": round(field_area, 2),
@@ -250,6 +273,13 @@ def build_coverage_overlay(
             "polygons": [],
             "planned_polygons": [],
             "active_segments": 0,
+            "sample_count": summary["sample_count"],
+            "working_sample_count": summary["working_sample_count"],
+            "working_sample_percent": summary["working_sample_percent"],
+            "latest_active": summary["latest_active"],
+            "latest_tillage_state": summary["latest_tillage_state"],
+            "latest_pto_on": summary["latest_pto_on"],
+            "latest_hitch_height": summary["latest_hitch_height"],
         }
 
     polygons: List[List[Tuple[float, float]]] = []
@@ -282,6 +312,7 @@ def build_coverage_overlay(
     else:
         coverage_rate = 0.0
 
+    summary = summarize_coverage_samples(replay_samples)
     return {
         "implement_width_m": round(implement_width_m, 3),
         "field_area_m2": round(field_area, 2),
@@ -290,6 +321,13 @@ def build_coverage_overlay(
         "polygons": polygons,
         "planned_polygons": [],
         "active_segments": active_segments,
+        "sample_count": summary["sample_count"],
+        "working_sample_count": summary["working_sample_count"],
+        "working_sample_percent": summary["working_sample_percent"],
+        "latest_active": summary["latest_active"],
+        "latest_tillage_state": summary["latest_tillage_state"],
+        "latest_pto_on": summary["latest_pto_on"],
+        "latest_hitch_height": summary["latest_hitch_height"],
         "area_estimation": "segment_sum_no_overlap_subtraction",
     }
 
@@ -356,6 +394,8 @@ def make_replay_sample(
         "linear_velocity": _float_or_none(velocity_cmd.get("linear_velocity")),
         "angular_velocity": _float_or_none(velocity_cmd.get("angular_velocity")),
         "track_status": velocity_cmd.get("status", ""),
+        "target_mode": velocity_cmd.get("target_mode", ""),
+        "headland_turn": velocity_cmd.get("headland_turn"),
         "speed_factor": _float_or_none(velocity_cmd.get("speed_factor")),
         "dist_factor": _float_or_none(velocity_cmd.get("dist_factor")),
         "view_factor": _float_or_none(velocity_cmd.get("view_factor")),

@@ -2,10 +2,11 @@
 node 命令实现 - 节点库管理
 """
 
-import json
 import sys
 from pathlib import Path
 from typing import List, Dict, Any, Optional
+
+from tools.cli.utils.output import print_error, print_json
 
 try:
     import yaml
@@ -45,18 +46,21 @@ def handle_node_list(args) -> int:
 
     # 检查节点库路径是否存在
     if not hub_path.exists():
-        print(f"Error: Node hub not found at '{hub_path}'", file=sys.stderr)
+        print_error(f"Node hub not found at '{hub_path}'", as_json=args.json, code="not_found")
         return 1
 
     if not hub_path.is_dir():
-        print(f"Error: '{hub_path}' is not a directory", file=sys.stderr)
+        print_error(f"'{hub_path}' is not a directory", as_json=args.json)
         return 1
 
     # 扫描节点包
     nodes = scan_node_packages(hub_path)
 
     if not nodes:
-        print(f"No nodes found in {hub_path}", file=sys.stderr)
+        if args.json:
+            print_json({"count": 0, "nodes": []})
+        else:
+            print(f"No nodes found in {hub_path}", file=sys.stderr)
         return 0
 
     # 排序
@@ -86,14 +90,18 @@ def handle_node_info(args) -> int:
     manifest_path = find_node_manifest(hub_path, package_name)
 
     if not manifest_path:
-        print(f"Error: Node package '{package_name}' not found in {hub_path}", file=sys.stderr)
+        print_error(
+            f"Node package '{package_name}' not found in {hub_path}",
+            as_json=args.json,
+            code="not_found",
+        )
         return 1
 
     # 加载 manifest
     try:
         manifest = load_manifest(manifest_path)
     except Exception as e:
-        print(f"Error: Failed to load manifest: {e}", file=sys.stderr)
+        print_error(f"Failed to load manifest: {e}", as_json=args.json)
         return 1
 
     # 输出
@@ -265,5 +273,4 @@ def output_node_info(manifest: Dict[str, Any]) -> None:
 
 def output_json(data) -> None:
     """以 JSON 格式输出数据"""
-    json_str = json.dumps(data, indent=2, ensure_ascii=False)
-    print(json_str)
+    print_json(data)

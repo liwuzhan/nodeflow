@@ -539,7 +539,7 @@ from sdk.structured_logger import StructuredLogger
 logger = StructuredLogger(
     node_id: str,
     log_level: str = "INFO",
-    log_dir: str = "/tmp/nodeflow_logs",
+    log_dir: str = "/tmp/nodeflow/logs",
     enable_json: bool = True,
     enable_console: bool = True
 )
@@ -724,7 +724,7 @@ SDK 通过以下环境变量进行配置（由框架自动设置）：
 
 | 变量 | 说明 | 示例 |
 |------|------|------|
-| `NODEFLOW_LOG_DIR` | 日志目录 | `/tmp/nodeflow_logs` |
+| `NODEFLOW_LOG_DIR` | 日志目录 | `/tmp/nodeflow/logs` |
 | `NODE_SCHEMA_VALIDATION` | Schema 验证模式 | `off/loose/strict` |
 
 ### Schema 验证模式

@@ -20,7 +20,7 @@ NodeFlow 现在集成了一套完整的**结构化日志系统**，专为多进�
   └─ ... (业务逻辑)
         │
         ├─→ 控制台输出（实时，彩色）
-        └─→ /tmp/nodeflow_logs/<node_id>.jsonl（JSON格式，持久化）
+        └─→ /tmp/nodeflow/logs/<node_id>.jsonl（JSON格式，持久化）
              │
              ├─ timestamp（ISO格式）
              ├─ timestamp_unix（纪元秒）
@@ -256,7 +256,7 @@ nodeflow logs --node track_controller --level ERROR --detailed
 所有日志文件存储在：
 
 ```
-/tmp/nodeflow_logs/
+/tmp/nodeflow/logs/
 ├── sim_output.jsonl
 ├── global_coverage.jsonl
 ├── track_controller.jsonl
@@ -271,16 +271,16 @@ nodeflow logs --node track_controller --level ERROR --detailed
 
 ```bash
 # 查看原始JSON
-cat /tmp/nodeflow_logs/sim_output.jsonl
+cat /tmp/nodeflow/logs/sim_output.jsonl
 
 # 用jq过滤JSON
-cat /tmp/nodeflow_logs/sim_output.jsonl | jq '.message'
+cat /tmp/nodeflow/logs/sim_output.jsonl | jq '.message'
 
 # 统计各级别的日志数
-cat /tmp/nodeflow_logs/*.jsonl | jq '.level' | sort | uniq -c
+cat /tmp/nodeflow/logs/*.jsonl | jq '.level' | sort | uniq -c
 
 # 查看所有自定义字段
-cat /tmp/nodeflow_logs/*.jsonl | jq '.custom'
+cat /tmp/nodeflow/logs/*.jsonl | jq '.custom'
 ```
 
 ## 环境变量配置
@@ -288,7 +288,7 @@ cat /tmp/nodeflow_logs/*.jsonl | jq '.custom'
 日志系统支持以下环境变量：
 
 ```bash
-# 日志目录（默认 /tmp/nodeflow_logs）
+# 日志目录（默认 /tmp/nodeflow/logs）
 export NODEFLOW_LOG_DIR=/path/to/custom/logs
 
 # 日志级别（在SDK初始化时指定）

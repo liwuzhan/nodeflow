@@ -101,10 +101,25 @@ params:
 
   progress_sync_max_cross_track_m:
     type: number
-    default: 6.0
+    default: 12.0
     description: "路径进度同步允许的最大横向误差 (米)"
 
   progress_sync_fraction_threshold:
     type: number
     default: 0.2
     description: "路径投影超过当前线段该比例后，前瞻选择器消费当前路径点"
+
+  progress_target_enabled:
+    type: boolean
+    default: true
+    description: "启用后优先使用 path_progress 沿路径里程生成前瞻目标，视野算法作为兜底"
+
+  progress_target_lookahead_m:
+    type: number
+    default: 2.5
+    description: "path_progress 前瞻目标距离 (米)"
+
+  progress_target_max_cross_track_m:
+    type: number
+    default: 12.0
+    description: "path_progress 前瞻目标允许的最大横向误差 (米)"

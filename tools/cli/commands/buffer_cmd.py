@@ -4,8 +4,10 @@ buffer 命令实现 - 共享缓冲区诊断
 
 import sys
 import struct
+import json
 from pathlib import Path
-from typing import Optional
+
+from tools.cli.utils.output import print_error, print_json
 
 
 def handle_buffer_command(args) -> int:
@@ -33,26 +35,68 @@ def handle_buffer_command(args) -> int:
 def handle_buffer_list(args) -> int:
     """列出所有共享缓冲区文件"""
     buf_dir = Path(args.dir)
+    as_json = bool(getattr(args, "json", False))
     if not buf_dir.exists() or not buf_dir.is_dir():
-        print(f"Error: Buffer directory not found or not a dir: {buf_dir}", file=sys.stderr)
-        return 1
+        if as_json:
+            print_json({"status": "empty", "directory": str(buf_dir), "count": 0, "buffers": []})
+        else:
+            print(f"No buffers found in {buf_dir}")
+        return 0
 
     buf_files = sorted(buf_dir.glob("*.buf"))
     if not buf_files:
-        print(f"No buffers found in {buf_dir}")
+        if as_json:
+            print_json({"status": "empty", "directory": str(buf_dir), "count": 0, "buffers": []})
+        else:
+            print(f"No buffers found in {buf_dir}")
         return 0
 
-    print()
-    print(f"Buffers in {buf_dir} ({len(buf_files)}):")
-    print("-" * 80)
+    rows = []
+    read_errors = 0
     for buf_file in buf_files:
         try:
             seq, length = _read_header(buf_file)
             size = buf_file.stat().st_size
-            name = buf_file.stem  # without .buf
-            print(f"  {name:30s} size={size//1024:6d}KB  seq={seq:10d}  len={length:8d} bytes")
+            name = buf_file.stem
+            rows.append({
+                "name": name,
+                "file": str(buf_file),
+                "size_bytes": size,
+                "size_kb": size // 1024,
+                "sequence": seq,
+                "length": length,
+                "status": "ok",
+            })
         except Exception as e:
-            print(f"  {buf_file.name:30s} <read error: {e}>")
+            read_errors += 1
+            rows.append({
+                "name": buf_file.stem,
+                "file": str(buf_file),
+                "status": "error",
+                "error": str(e),
+            })
+
+    if as_json:
+        print_json({
+            "status": "ok" if read_errors == 0 else "partial",
+            "directory": str(buf_dir),
+            "count": len(rows),
+            "read_errors": read_errors,
+            "buffers": rows,
+        })
+        return 0
+
+    print()
+    print(f"Buffers in {buf_dir} ({len(rows)}):")
+    print("-" * 80)
+    for row in rows:
+        if row["status"] == "ok":
+            print(
+                f"  {row['name']:30s} size={row['size_kb']:6d}KB  "
+                f"seq={row['sequence']:10d}  len={row['length']:8d} bytes"
+            )
+        else:
+            print(f"  {row['name']:30s} <read error: {row['error']}>")
     print("-" * 80)
     print()
     return 0
@@ -63,18 +107,30 @@ def handle_buffer_inspect(args) -> int:
     buf_dir = Path(args.dir)
     buf_name = args.name
     buf_path = buf_dir / (buf_name if buf_name.endswith(".buf") else f"{buf_name}.buf")
+    as_json = bool(getattr(args, "json", False))
 
     if not buf_path.exists():
-        print(f"Error: Buffer file not found: {buf_path}", file=sys.stderr)
+        print_error(f"Buffer file not found: {buf_path}", as_json=as_json, code="not_found")
         return 1
 
     seq, length = _read_header(buf_path)
-    print(f"\nBuffer: {buf_path.name}")
-    print(f"Sequence: {seq}")
-    print(f"Data length: {length} bytes")
+    result = {
+        "status": "ok",
+        "name": buf_path.stem,
+        "file": str(buf_path),
+        "sequence": seq,
+        "length": length,
+    }
 
     if length == 0:
-        print("No data written yet")
+        result["decoded"] = None
+        if as_json:
+            print_json(result)
+        else:
+            print(f"\nBuffer: {buf_path.name}")
+            print(f"Sequence: {seq}")
+            print(f"Data length: {length} bytes")
+            print("No data written yet")
         return 0
 
     with open(buf_path, "rb") as f:
@@ -82,24 +138,42 @@ def handle_buffer_inspect(args) -> int:
         data = f.read(length)
 
     if args.raw:
-        # 原始十六进制
         hex_str = data.hex()
         preview = hex_str[:512] + ("..." if len(hex_str) > 512 else "")
-        print(f"\nHex preview ({len(hex_str)} hex chars):")
-        print(preview)
+        result["hex_preview"] = preview
+        result["hex_chars"] = len(hex_str)
+        if as_json:
+            print_json(result)
+        else:
+            print(f"\nBuffer: {buf_path.name}")
+            print(f"Sequence: {seq}")
+            print(f"Data length: {length} bytes")
+            print(f"\nHex preview ({len(hex_str)} hex chars):")
+            print(preview)
         return 0
 
-    # 尝试 MsgPack 解码
     try:
         import msgpack  # lazy import
         obj = msgpack.unpackb(data, raw=False)
-        import json
-        json_str = json.dumps(obj, ensure_ascii=False, indent=2)
-        preview = json_str
-        print("\nDecoded JSON (MsgPack):")
-        print(preview)
+        result["decoded"] = obj
     except Exception as e:
-        print(f"\nDecode error: {e}")
+        result["status"] = "decode_error"
+        result["decoded"] = None
+        result["error"] = str(e)
+
+    if as_json:
+        print_json(result)
+        return 0
+
+    print(f"\nBuffer: {buf_path.name}")
+    print(f"Sequence: {seq}")
+    print(f"Data length: {length} bytes")
+    if result["status"] == "ok":
+        json_str = json.dumps(result["decoded"], ensure_ascii=False, indent=2)
+        print("\nDecoded JSON (MsgPack):")
+        print(json_str)
+    else:
+        print(f"\nDecode error: {result['error']}")
         print("Use --raw to view hex bytes")
 
     return 0
@@ -114,4 +188,3 @@ def _read_header(buf_path: Path) -> tuple[int, int]:
         seq = struct.unpack("<I", header[0:4])[0]
         length = struct.unpack("<I", header[4:8])[0]
         return seq, length
-

@@ -208,6 +208,90 @@ class TestStateMachine:
         assert cmd["pto_on"] is False  # 下降中 PTO 保持 OFF
         assert cmd["hitch_height"] >= 0.0
 
+    def test_continuous_work_zone_enters_working(self):
+        """连续 work zone 应稳定进入 WORKING 并打开 PTO"""
+        ctrl = TillageController(TillageConfig(
+            hitch_lower_time_s=0.02,
+            hitch_raise_time_s=0.02,
+            pto_engage_delay_s=0.01,
+            auto_zone_detect=False,
+        ))
+        task = make_task_enu(SQUARE_FIELD)
+        work_pt = make_next_point(50, 50, zone="work")
+
+        ctrl.update(pose=make_pose(50, 50), next_point=work_pt, task_enu=task)
+        time.sleep(0.08)
+        cmd = ctrl.update(pose=make_pose(50, 50), next_point=work_pt, task_enu=task)
+
+        assert cmd["state"] == TillageState.WORKING.value
+        assert cmd["pto_on"] is True
+        assert cmd["hitch_height"] == 1.0
+
+    def test_implement_work_intent_overrides_transit_zone(self):
+        """operation_plan 的机具意图为 down/on 时，不应被 transit zone 同帧打断"""
+        ctrl = TillageController(TillageConfig(
+            hitch_lower_time_s=0.02,
+            hitch_raise_time_s=0.02,
+            pto_engage_delay_s=0.01,
+            auto_zone_detect=False,
+        ))
+        task = make_task_enu(SQUARE_FIELD)
+        transit_pt = make_next_point(50, 99, zone="transit")
+        progress = {
+            "zone": "transit",
+            "segment_type": "headland_turn",
+            "implement": {"pto": "on", "hitch": "down"},
+        }
+
+        cmd = ctrl.update(
+            pose=make_pose(50, 99),
+            next_point=transit_pt,
+            task_enu=task,
+            path_progress=progress,
+        )
+        assert cmd["state"] == TillageState.LOWERING.value
+
+        time.sleep(0.08)
+        cmd = ctrl.update(
+            pose=make_pose(50, 99),
+            next_point=transit_pt,
+            task_enu=task,
+            path_progress=progress,
+        )
+        assert cmd["state"] == TillageState.WORKING.value
+        assert cmd["pto_on"] is True
+
+    def test_final_overrides_implement_work_intent(self):
+        """final=true 时即使机具意图为作业，也必须升起/停 PTO"""
+        ctrl = TillageController(TillageConfig(
+            hitch_lower_time_s=0.02,
+            hitch_raise_time_s=0.02,
+            pto_engage_delay_s=0.01,
+            auto_zone_detect=False,
+        ))
+        task = make_task_enu(SQUARE_FIELD)
+        work_pt = make_next_point(50, 50, zone="work")
+
+        ctrl.update(pose=make_pose(50, 50), next_point=work_pt, task_enu=task)
+        time.sleep(0.08)
+        ctrl.update(pose=make_pose(50, 50), next_point=work_pt, task_enu=task)
+
+        progress = {
+            "zone": "work",
+            "segment_type": "work",
+            "implement": {"pto": "on", "hitch": "down"},
+        }
+        final_pt = make_next_point(50, 50, zone="work", final=True)
+        cmd = ctrl.update(
+            pose=make_pose(50, 50),
+            next_point=final_pt,
+            task_enu=task,
+            path_progress=progress,
+        )
+
+        assert cmd["state"] == TillageState.RAISING.value
+        assert cmd["pto_on"] is False
+
     def test_full_work_cycle(self):
         """完整作业周期: TRANSPORT → LOWERING → WORKING → RAISING → TRANSPORT"""
         ctrl = TillageController(TillageConfig(

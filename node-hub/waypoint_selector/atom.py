@@ -34,8 +34,11 @@ class ViewConfig:
     # 前方路径预判参数
     turn_preview_distance: float = 8.0  # 向前预览路径距离，用于检测急转弯
     # 外部路径进度同步参数
-    progress_sync_max_cross_track_m: float = 6.0  # 超过该横向偏差时不信任进度同步
+    progress_sync_max_cross_track_m: float = 12.0  # 超过该横向偏差时不信任进度同步
     progress_sync_fraction_threshold: float = 0.2  # 投影超过该比例后消费当前路径点
+    progress_target_enabled: bool = True  # 使用 path_progress 直接生成前瞻目标
+    progress_target_lookahead_m: float = 2.5  # 沿路径投影点向前的目标距离
+    progress_target_max_cross_track_m: float = 12.0  # 横向误差过大时回退到视野算法
 
 
 @dataclass
@@ -220,7 +223,11 @@ class WaypointSelector:
         ]
         return True
 
-    def select(self, pose: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def select(
+        self,
+        pose: Dict[str, Any],
+        progress: Optional[Dict[str, Any]] = None
+    ) -> Optional[Dict[str, Any]]:
         """
         选择前瞻点 (主入口)
 
@@ -261,7 +268,13 @@ class WaypointSelector:
         # 更新当前视野点
         self.state.in_view_indices = new_in_view
 
-        # 4. 根据规则选择前瞻点
+        # 4. 有可信 path_progress 时，直接沿规划路径里程选前瞻目标。
+        # 视野窗口在掉头和短行段容易丢点；投影进度更符合 operation_plan 的段语义。
+        progress_target = self._select_progress_lookahead_point(progress)
+        if progress_target:
+            return progress_target
+
+        # 5. 根据视野规则选择前瞻点
         return self._select_lookahead_point(vx, vy)
 
     def _initial_consume(self, vx: float, vy: float) -> int:
@@ -483,6 +496,106 @@ class WaypointSelector:
         return {
             "upcoming_turn_angle_deg": math.degrees(max_turn),
             "upcoming_turn_distance": turn_distance,
+        }
+
+    def _progress_is_usable(self, progress: Optional[Dict[str, Any]]) -> bool:
+        if not self.config.progress_target_enabled or not progress or not self.state.path:
+            return False
+
+        progress_task_id = progress.get("task_id")
+        if progress_task_id and self.state.task_id and progress_task_id != self.state.task_id:
+            return False
+
+        try:
+            cross_track_error = abs(float(progress.get("cross_track_error_m", 0.0) or 0.0))
+        except (TypeError, ValueError):
+            return False
+
+        return cross_track_error <= self.config.progress_target_max_cross_track_m
+
+    def _select_progress_lookahead_point(
+        self,
+        progress: Optional[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        if not self._progress_is_usable(progress):
+            return None
+
+        path = self.state.path
+        try:
+            path_index = int(progress.get("path_index", 0))
+            segment_fraction = float(progress.get("segment_fraction", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return None
+
+        if path_index < 0:
+            return None
+        if path_index >= len(path) - 1:
+            final_x, final_y = path[-1]
+            turn_info = self._compute_upcoming_turn_info(len(path) - 1)
+            return {
+                "x": final_x,
+                "y": final_y,
+                "final": True,
+                "index": len(path) - 1,
+                "total": len(path),
+                "consumed": len(path),
+                "in_view_count": max(len(self.state.in_view_indices), self.config.min_view_points),
+                "mode": "finished",
+                "zone": self._get_zone_for_index(len(path) - 1),
+                **turn_info,
+            }
+
+        path_index = min(path_index, len(path) - 2)
+        segment_fraction = max(0.0, min(1.0, segment_fraction))
+        remaining = max(0.0, self.config.progress_target_lookahead_m)
+        target_idx = path_index
+
+        for idx in range(path_index, len(path) - 1):
+            x0, y0 = path[idx]
+            x1, y1 = path[idx + 1]
+            dx = x1 - x0
+            dy = y1 - y0
+            seg_len = math.hypot(dx, dy)
+            if seg_len <= 1e-6:
+                target_idx = idx + 1
+                continue
+
+            start_fraction = segment_fraction if idx == path_index else 0.0
+            available = seg_len * (1.0 - start_fraction)
+            if remaining <= available:
+                ratio = start_fraction + remaining / seg_len
+                target_idx = idx
+                tx = x0 + dx * ratio
+                ty = y0 + dy * ratio
+                turn_info = self._compute_upcoming_turn_info(target_idx)
+                return {
+                    "x": tx,
+                    "y": ty,
+                    "final": False,
+                    "index": target_idx,
+                    "total": len(path),
+                    "consumed": max(self.state.first_unconsumed_idx, min(target_idx, len(path))),
+                    "in_view_count": max(len(self.state.in_view_indices), self.config.min_view_points),
+                    "mode": "tracking",
+                    "zone": self._get_zone_for_index(target_idx),
+                    **turn_info,
+                }
+            remaining -= available
+            target_idx = idx + 1
+
+        final_x, final_y = path[-1]
+        turn_info = self._compute_upcoming_turn_info(len(path) - 1)
+        return {
+            "x": final_x,
+            "y": final_y,
+            "final": True,
+            "index": len(path) - 1,
+            "total": len(path),
+            "consumed": len(path),
+            "in_view_count": max(len(self.state.in_view_indices), self.config.min_view_points),
+            "mode": "finished",
+            "zone": self._get_zone_for_index(len(path) - 1),
+            **turn_info,
         }
 
     def _select_lookahead_point(

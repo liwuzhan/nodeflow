@@ -53,7 +53,7 @@
 **实现清单**：
 
 1. **结构化日志核心** (`sdk/structured_logger.py`)
-   - ✅ JSONFileHandler: 自动输出到 `/tmp/nodeflow_logs/<node_id>.jsonl`
+   - ✅ JSONFileHandler: 自动输出到 `/tmp/nodeflow/logs/<node_id>.jsonl`
    - ✅ 双层输出: JSON 文件 + 实时控制台日志
    - ✅ 完整上下文: 时间戳、代码位置、自定义字段
    - ✅ 无外部依赖，仅使用标准库

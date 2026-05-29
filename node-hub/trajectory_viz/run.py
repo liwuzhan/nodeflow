@@ -283,6 +283,11 @@ def main():
                             "field_area_m2": coverage_overlay.get("field_area_m2"),
                             "covered_area_m2": coverage_overlay.get("covered_area_m2"),
                             "coverage_rate_percent": coverage_overlay.get("coverage_rate_percent"),
+                            "coverage_active_segments": coverage_overlay.get("active_segments"),
+                            "coverage_sample_count": coverage_overlay.get("sample_count"),
+                            "coverage_working_sample_count": coverage_overlay.get("working_sample_count"),
+                            "coverage_working_sample_percent": coverage_overlay.get("working_sample_percent"),
+                            "coverage_latest_active": coverage_overlay.get("latest_active"),
                         })
 
                     # 推送到 Web 客户端

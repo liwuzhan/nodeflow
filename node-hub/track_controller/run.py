@@ -65,6 +65,11 @@ class VelocityCmd(BaseModel):
     segment_speed_limit_mps: Optional[float] = None
     cross_track_error_m: Optional[float] = None
     cross_track_recovery_factor: Optional[float] = None
+    target_mode: Optional[str] = None
+    headland_turn: Optional[bool] = None
+    heading_error_deg: Optional[float] = None
+    progress_heading_error_deg: Optional[float] = None
+    headland_turn_align_threshold_deg: Optional[float] = None
 
 # --- End Schema Definitions ---
 
@@ -93,6 +98,9 @@ def main():
         cross_track_slowdown_error_m = float(sdk.params.get("cross_track_slowdown_error_m", 0.5))
         cross_track_stop_error_m = float(sdk.params.get("cross_track_stop_error_m", 1.5))
         cross_track_recovery_factor = float(sdk.params.get("cross_track_recovery_factor", 0.15))
+        headland_turn_heading_gain = float(sdk.params.get("headland_turn_heading_gain", 2.0))
+        headland_turn_align_threshold_deg = float(sdk.params.get("headland_turn_align_threshold_deg", 35.0))
+        headland_turn_min_speed_factor = float(sdk.params.get("headland_turn_min_speed_factor", 0.25))
 
         sdk.logger.info(f"参数: max_speed={max_speed}, kp={kp}, max_w={max_w}, pivot_th={pivot_th}°")
         sdk.logger.info(
@@ -107,6 +115,11 @@ def main():
         sdk.logger.info(
             f"转角预判减速: turn>={turn_slowdown_angle_deg}°->{turn_speed_factor}, "
             f"sharp>={sharp_turn_angle_deg}°->{sharp_turn_speed_factor}"
+        )
+        sdk.logger.info(
+            f"掉头控制: heading_gain={headland_turn_heading_gain}, "
+            f"align_threshold={headland_turn_align_threshold_deg}°, "
+            f"speed_factor<={headland_turn_min_speed_factor}"
         )
 
         # 使用ENU坐标
@@ -161,7 +174,10 @@ def main():
                 last_progress,
                 cross_track_slowdown_error_m,
                 cross_track_stop_error_m,
-                cross_track_recovery_factor
+                cross_track_recovery_factor,
+                headland_turn_heading_gain,
+                headland_turn_align_threshold_deg,
+                headland_turn_min_speed_factor
             )
             out.send(cmd)
             time.sleep(0.005)  # 200Hz

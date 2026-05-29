@@ -35,7 +35,10 @@ def compute_velocity_cmd(
     path_progress: dict | None = None,
     cross_track_slowdown_error_m: float = 0.5,
     cross_track_stop_error_m: float = 1.5,
-    cross_track_recovery_factor: float = 0.15
+    cross_track_recovery_factor: float = 0.15,
+    headland_turn_heading_gain: float = 2.0,
+    headland_turn_align_threshold_deg: float = 35.0,
+    headland_turn_min_speed_factor: float = 0.25
 ) -> dict:
     """
     计算速度控制命令（ENU坐标系）
@@ -65,7 +68,13 @@ def compute_velocity_cmd(
     upcoming_turn_angle_deg = float(npkt.get("upcoming_turn_angle_deg", 0.0) or 0.0)
     segment_speed_limit = None
     cross_track_error_m = None
+    segment_type = None
+    path_heading_rad = None
+    heading_error_deg_from_progress = None
     if path_progress:
+        segment_type = path_progress.get("segment_type")
+        path_heading_rad = path_progress.get("path_heading_rad")
+        heading_error_deg_from_progress = path_progress.get("heading_error_deg")
         motion = path_progress.get("motion", {}) or {}
         segment_speed_limit = motion.get("speed_limit_mps")
         cte = path_progress.get("cross_track_error_m")
@@ -93,15 +102,29 @@ def compute_velocity_cmd(
 
     # 5. 计算航向角误差（数学坐标系，弧度）
     error_rad = normalize_angle(target_theta - current_theta)
+    target_mode = "point"
+    if segment_type == "headland_turn" and path_heading_rad is not None:
+        try:
+            path_heading = float(path_heading_rad)
+            error_rad = normalize_angle(path_heading - current_theta)
+            target_mode = "path_heading"
+        except (TypeError, ValueError):
+            pass
 
     # 6. 计算角速度控制命令（P控制）
     # 数学坐标系: CCW为正，无需取反，直接兼容仿真器
     w = kp * error_rad
+    if target_mode == "path_heading":
+        w = headland_turn_heading_gain * error_rad
     w = max(-max_w, min(max_w, w))
 
     # 7. 计算线速度
     error_deg = math.degrees(abs(error_rad))
-    if error_deg >= pivot_th:
+    active_pivot_threshold = pivot_th
+    if target_mode == "path_heading":
+        active_pivot_threshold = min(pivot_th, headland_turn_align_threshold_deg)
+
+    if error_deg >= active_pivot_threshold:
         # 原地转向模式
         v = 0.0
         dist_factor = 1.0
@@ -159,18 +182,24 @@ def compute_velocity_cmd(
         speed_limit_factor = max(0.0, min(1.0, float(segment_speed_limit) / max_speed))
 
     speed_factor = min(view_factor, mode_factor, turn_factor, cte_factor, speed_limit_factor)
+    if target_mode == "path_heading":
+        speed_factor = min(speed_factor, max(0.0, min(1.0, headland_turn_min_speed_factor)))
+
     if v > 0.0:
         v *= speed_factor
         if v < min_speed:
             v = min_speed
 
-    # 角速度保留至少一半，低速时仍能完成转向。
-    if speed_factor < 1.0:
+    # 普通跟踪在低速时保留至少一半角速度；headland_turn 使用路径航向
+    # 对齐，不能再削弱角速度，否则掉头段会转不够。
+    if speed_factor < 1.0 and target_mode != "path_heading":
         w *= max(speed_factor, 0.5)
 
     status = None
-    if error_deg >= pivot_th:
-        status = "pivot"
+    if error_deg >= active_pivot_threshold:
+        status = "turn_align" if target_mode == "path_heading" else "pivot"
+    elif target_mode == "path_heading":
+        status = "headland_turn"
     elif speed_factor < 1.0:
         status = "slowdown"
 
@@ -185,7 +214,17 @@ def compute_velocity_cmd(
         "turn_factor": turn_factor,
         "cte_factor": cte_factor,
         "speed_limit_factor": speed_limit_factor,
+        "target_mode": target_mode,
     }
+    if target_mode == "path_heading":
+        result["headland_turn"] = True
+        result["heading_error_deg"] = round(error_deg, 2)
+        result["headland_turn_align_threshold_deg"] = float(active_pivot_threshold)
+        if heading_error_deg_from_progress is not None:
+            try:
+                result["progress_heading_error_deg"] = float(heading_error_deg_from_progress)
+            except (TypeError, ValueError):
+                pass
     if segment_speed_limit is not None:
         result["segment_speed_limit_mps"] = float(segment_speed_limit)
     if cross_track_error_m is not None:

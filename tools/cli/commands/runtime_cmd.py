@@ -10,19 +10,24 @@ import json
 import time
 import os
 import sys
+import signal
 import subprocess
 from pathlib import Path
 from datetime import datetime
 
+from tools.cli.utils.output import print_json
+
+
+PID_FILE = Path("/tmp/nodeflow_runtime.pid")
+
 
 def get_runtime_pid():
     """获取运行时进程的 PID"""
-    pid_file = Path("/tmp/nodeflow_runtime.pid")
-    if not pid_file.exists():
+    if not PID_FILE.exists():
         return None
 
     try:
-        with open(pid_file, 'r') as f:
+        with open(PID_FILE, 'r') as f:
             lines = f.readlines()
             if lines:
                 return int(lines[0].strip())
@@ -38,12 +43,7 @@ def is_runtime_running():
     if pid is None:
         return False
 
-    # 检查进程是否存在
-    try:
-        os.kill(pid, 0)  # 发送 signal 0 来检查进程是否存在
-        return True
-    except (OSError, ProcessLookupError):
-        return False
+    return _process_alive(pid)
 
 
 def start_runtime(config_path, background=False, log_level="INFO", clean_buffers=True):
@@ -130,12 +130,28 @@ def _process_alive(pid):
     """检查进程是否存活（即使是 root 进程也能检查）"""
     try:
         os.kill(pid, 0)
-        return True
     except PermissionError:
         # 进程存在但没有权限发信号（root 进程）
         return True
     except ProcessLookupError:
         return False
+    except OSError:
+        return False
+
+    # kill(pid, 0) 会把 zombie 也视为存在；status/stop 里应按已退出处理。
+    try:
+        ps = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "stat="],
+            capture_output=True,
+            text=True,
+            timeout=1,
+        )
+        if ps.returncode == 0 and ps.stdout.strip().startswith("Z"):
+            return False
+    except Exception:
+        pass
+
+    return True
 
 
 def _wait_for_exit(pid, timeout_secs):
@@ -146,6 +162,73 @@ def _wait_for_exit(pid, timeout_secs):
             return True
         time.sleep(0.5)
     return not _process_alive(pid)
+
+
+def _cleanup_pid_file():
+    """清理 runtime PID 文件。"""
+    try:
+        if PID_FILE.exists():
+            PID_FILE.unlink()
+    except OSError:
+        pass
+
+
+def _send_signal(pid, sig):
+    """给 runtime 主进程发送信号；必要时退回 sudo。"""
+    try:
+        os.kill(pid, sig)
+        return True
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        try:
+            subprocess.run(
+                ["sudo", "kill", f"-{sig}", str(pid)],
+                capture_output=True,
+                timeout=5,
+            )
+            return True
+        except Exception:
+            return False
+    except OSError:
+        return False
+
+
+def _request_runtime_shutdown():
+    """
+    请求 runtime 优雅关闭。
+
+    daemon 模式实际监听 runtime.control；旧的 control.shutdown_request 只被
+    非 daemon run() 路径使用，因此两个都尽力写入。
+    """
+    wrote = False
+    try:
+        from sdk.shared_buffer_lite import SharedBufferLite
+
+        control_buf = SharedBufferLite("runtime.control", create=False)
+        control_buf.write({
+            "command": "shutdown",
+            "timestamp": time.time(),
+            "source": "runtime_cli",
+        })
+        wrote = True
+    except Exception:
+        pass
+
+    try:
+        from sdk.shared_buffer_lite import SharedBufferLite
+
+        shutdown_buf = SharedBufferLite("control.shutdown_request", create=False)
+        shutdown_buf.write({
+            "shutdown": True,
+            "reason": "CLI stop command",
+            "timestamp": time.time(),
+        })
+        wrote = True
+    except Exception:
+        pass
+
+    return wrote
 
 
 def _reset_pwm_to_center():
@@ -185,7 +268,7 @@ def _reset_pwm_to_center():
 
 
 def stop_runtime():
-    """停止运行时框架（三级策略：共享缓冲区 → sudo kill → sudo kill -9 + PWM 重置）"""
+    """停止运行时框架（三级策略：控制缓冲区 → SIGTERM → SIGKILL + PWM 重置）"""
     pid = get_runtime_pid()
 
     if pid is None:
@@ -195,46 +278,35 @@ def stop_runtime():
         }
 
     if not _process_alive(pid):
+        _cleanup_pid_file()
         return {
             "status": "not_running",
             "message": "Runtime process not found (stale PID file)"
         }
 
     # === 第一级：通过共享缓冲区请求优雅关闭 ===
-    try:
-        from sdk.shared_buffer_lite import SharedBufferLite
-        buf = SharedBufferLite("control.shutdown_request", create=False)
-        buf.write({"shutdown": True, "reason": "CLI stop command", "timestamp": time.time()})
-    except Exception:
-        # 缓冲区不存在（运行时可能未创建），跳过
-        pass
+    _request_runtime_shutdown()
 
     # 等待最多 10 秒让进程优雅退出
     if _wait_for_exit(pid, 10):
+        _cleanup_pid_file()
         return {
             "status": "success",
             "message": "Runtime stopped gracefully"
         }
 
-    # === 第二级：sudo kill -SIGTERM ===
-    try:
-        subprocess.run(["sudo", "kill", "-15", str(pid)],
-                       capture_output=True, timeout=5)
-    except Exception:
-        pass
+    # === 第二级：SIGTERM ===
+    _send_signal(pid, signal.SIGTERM)
 
     if _wait_for_exit(pid, 5):
+        _cleanup_pid_file()
         return {
             "status": "success",
-            "message": "Runtime stopped (via sudo SIGTERM)"
+            "message": "Runtime stopped (via SIGTERM)"
         }
 
-    # === 第三级：sudo kill -9 强杀 + PWM 安全重置 ===
-    try:
-        subprocess.run(["sudo", "kill", "-9", str(pid)],
-                       capture_output=True, timeout=5)
-    except Exception:
-        pass
+    # === 第三级：SIGKILL 强杀 + PWM 安全重置 ===
+    _send_signal(pid, signal.SIGKILL)
 
     time.sleep(0.5)
 
@@ -242,6 +314,7 @@ def stop_runtime():
     pwm_reset = _reset_pwm_to_center()
 
     if not _process_alive(pid):
+        _cleanup_pid_file()
         msg = "Runtime force-killed"
         if pwm_reset:
             msg += f" (PWM reset to center on {pwm_reset} channel(s))"
@@ -260,10 +333,12 @@ def get_runtime_status():
     """获取运行时状态"""
     pid = get_runtime_pid()
     running = is_runtime_running()
+    if pid is not None and not running:
+        _cleanup_pid_file()
 
     result = {
         "status": "running" if running else "not_running",
-        "pid": pid
+        "pid": pid if running else None
     }
 
     if running and pid:
@@ -292,16 +367,29 @@ def get_runtime_status():
 
 def start_dataflow():
     """启动数据流（通过控制缓冲区）"""
+    if not is_runtime_running():
+        return {
+            "status": "not_running",
+            "message": "Runtime is not running; cannot start dataflow"
+        }
+
     try:
         from sdk.shared_buffer_lite import SharedBufferLite
 
         # 写入启动命令到控制缓冲区
-        buf = SharedBufferLite("runtime.control", create=True, size=1024)
-        buf.write({"command": "start_dataflow", "timestamp": time.time()})
+        buf = SharedBufferLite("runtime.control", create=False)
+        seq = buf.write({"command": "start_dataflow", "timestamp": time.time()})
+        buf.close()
 
         return {
             "status": "success",
-            "message": "Start dataflow command sent"
+            "message": "Start dataflow command sent",
+            "sequence": seq,
+        }
+    except FileNotFoundError:
+        return {
+            "status": "control_unavailable",
+            "message": "Runtime control buffer is not available"
         }
     except Exception as e:
         return {
@@ -312,16 +400,29 @@ def start_dataflow():
 
 def stop_dataflow():
     """停止数据流（通过控制缓冲区）"""
+    if not is_runtime_running():
+        return {
+            "status": "not_running",
+            "message": "Runtime is not running; cannot stop dataflow"
+        }
+
     try:
         from sdk.shared_buffer_lite import SharedBufferLite
 
         # 写入停止命令到控制缓冲区
-        buf = SharedBufferLite("runtime.control", create=True, size=1024)
-        buf.write({"command": "stop_dataflow", "timestamp": time.time()})
+        buf = SharedBufferLite("runtime.control", create=False)
+        seq = buf.write({"command": "stop_dataflow", "timestamp": time.time()})
+        buf.close()
 
         return {
             "status": "success",
-            "message": "Stop dataflow command sent"
+            "message": "Stop dataflow command sent",
+            "sequence": seq,
+        }
+    except FileNotFoundError:
+        return {
+            "status": "control_unavailable",
+            "message": "Runtime control buffer is not available"
         }
     except Exception as e:
         return {
@@ -381,7 +482,7 @@ def handle_runtime_command(args):
 
     # 输出结果
     if args.json:
-        print(json.dumps(result, indent=2))
+        print_json(result)
     else:
         if result.get("status") == "success":
             print(f"✓ {result.get('message', 'Success')}")
@@ -407,4 +508,8 @@ def handle_runtime_command(args):
         else:
             print(f"✗ {result.get('message', 'Error')}")
 
-    return 0 if result.get("status") in ["success", "running", "already_running"] else 1
+    if result.get("status") in {"success", "running", "already_running"}:
+        return 0
+    if result.get("status") == "not_running" and subcommand in {"status", "stop"}:
+        return 0
+    return 1

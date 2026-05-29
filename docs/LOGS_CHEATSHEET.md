@@ -49,7 +49,7 @@ nodeflow logs --node track_controller --level ERROR --follow
 ## 日志文件位置
 
 ```
-/tmp/nodeflow_logs/
+/tmp/nodeflow/logs/
 ├── sim_output.jsonl           # 仿真器输出日志
 ├── global_coverage.jsonl      # 路径规划日志
 ├── track_controller.jsonl     # 轨迹控制日志

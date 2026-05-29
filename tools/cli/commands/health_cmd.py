@@ -6,6 +6,8 @@ from typing import Dict, List, Tuple, Any
 
 from runtime.config.yaml_parser import YAMLParser
 from sdk.shared_buffer_lite import SharedBufferLite
+from tools.cli.utils.output import print_error, redirect_library_stdout_when_json
+from tools.cli.commands.runtime_cmd import is_runtime_running
 
 try:
     from jsonschema import validate, ValidationError
@@ -15,13 +17,14 @@ except ImportError:
 
 def handle_health_command(args) -> int:
     subcommand = getattr(args, "subcommand", None)
+    as_json = bool(getattr(args, "json", False))
 
     if subcommand == "check":
         return _handle_health_check(args)
     elif subcommand == "flow" or subcommand is None: # Default to flow for backward compatibility
         return _handle_health_flow(args)
     else:
-        print(f"Error: Unknown subcommand '{subcommand}'")
+        print_error(f"Unknown subcommand '{subcommand}'", as_json=as_json)
         return 1
 
 def _handle_health_flow(args) -> int:
@@ -29,26 +32,71 @@ def _handle_health_flow(args) -> int:
     buffer_dir = Path(args.dir)
     interval = float(args.interval)
     as_json = bool(getattr(args, "json", False))
+    runtime_running = is_runtime_running()
 
     if not config_path.exists():
-        print(f"Error: config not found: {config_path}")
+        print_error(f"config not found: {config_path}", as_json=as_json, code="not_found")
         return 1
 
     if not buffer_dir.exists():
-        print(f"Error: buffer dir not found: {buffer_dir}")
-        return 1
+        results = {}
+        graph_id = None
+        with redirect_library_stdout_when_json(as_json):
+            parser = YAMLParser()
+            config = parser.parse_runtime_config(str(config_path))
+        graph_id = config.graph_id
+        expected = _expected_source_buffers(config.edges)
+        for name in expected:
+            results[name] = {
+                "status": "MISSING",
+                "seq_start": 0,
+                "seq_end": 0,
+                "delta": 0,
+                "length": 0,
+                "size_kb": 0,
+            }
+        return _emit_flow_results(graph_id, results, as_json, runtime_running)
 
-    parser = YAMLParser()
-    config = parser.parse_runtime_config(str(config_path))
+    with redirect_library_stdout_when_json(as_json):
+        parser = YAMLParser()
+        config = parser.parse_runtime_config(str(config_path))
 
     expected = _expected_source_buffers(config.edges)
     results = _sample_buffers(expected, buffer_dir, interval)
 
+    return _emit_flow_results(config.graph_id, results, as_json, runtime_running)
+
+def _emit_flow_results(
+    graph_id: str,
+    results: Dict[str, Dict],
+    as_json: bool,
+    runtime_running: bool = True,
+) -> int:
+    counts: Dict[str, int] = {}
+    for r in results.values():
+        counts[r["status"]] = counts.get(r["status"], 0) + 1
+    healthy = bool(results) and all(r["status"] == "OK" for r in results.values())
+    summary = {
+        "status": "ok" if healthy else "unhealthy",
+        "graph_id": graph_id,
+        "runtime_running": runtime_running,
+        "total": len(results),
+        "counts": counts,
+        "buffers": results,
+    }
+    if not runtime_running:
+        summary["reason"] = "runtime_not_running"
+        summary["message"] = (
+            "Runtime is not running; missing or stale buffers may simply mean "
+            "the dataflow has not been started."
+        )
     if as_json:
-        print(json.dumps({"buffers": results}, ensure_ascii=False, indent=2))
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
     else:
         print()
-        print(f"Health check: {config.graph_id}")
+        print(f"Health check: {graph_id}")
+        if not runtime_running:
+            print("Runtime: not running (buffer status may reflect an idle dataflow)")
         print("-" * 80)
         for name, r in results.items():
             status = r["status"]
@@ -62,9 +110,10 @@ def _handle_health_flow(args) -> int:
                 f"seq={seq0}->{seq1} (+{delta}) len={length} bytes size={size_kb}KB"
             )
         print("-" * 80)
+        print(f"Summary: {summary['status']} {counts}")
         print()
 
-    return 0
+    return 0 if healthy else 2
 
 def _handle_health_check(args) -> int:
     node_id = args.node_id
@@ -73,8 +122,7 @@ def _handle_health_check(args) -> int:
     as_json = bool(getattr(args, "json", False))
     
     if not HAS_JSONSCHEMA:
-        print("Error: 'jsonschema' library is required for health check.", file=sys.stderr)
-        print("Please install it via 'pip install jsonschema' or 'pip install pydantic'", file=sys.stderr)
+        print_error("'jsonschema' library is required for health check.", as_json=as_json, code="dependency_missing")
         return 1
 
     # 1. 读取元数据
@@ -84,22 +132,25 @@ def _handle_health_check(args) -> int:
         metadata = meta_buf.read()
         meta_buf.close()
     except FileNotFoundError:
-        print(f"Error: Metadata buffer not found for node '{node_id}'", file=sys.stderr)
-        print("Make sure the node is running and supports schema metadata.", file=sys.stderr)
+        print_error(
+            f"Metadata buffer not found for node '{node_id}'",
+            as_json=as_json,
+            code="not_found",
+        )
         return 1
     except Exception as e:
-        print(f"Error reading metadata: {e}", file=sys.stderr)
+        print_error(f"Error reading metadata: {e}", as_json=as_json)
         return 1
 
     if not metadata or "ports" not in metadata:
-        print(f"Error: Invalid metadata for node '{node_id}'", file=sys.stderr)
+        print_error(f"Invalid metadata for node '{node_id}'", as_json=as_json)
         return 1
 
     ports_meta = metadata["ports"]
     results = {}
 
-    print(f"Checking health for node '{node_id}'...")
     if not as_json:
+        print(f"Checking health for node '{node_id}'...")
         print("-" * 60)
 
     # 2. 遍历每个端口进行检查
@@ -169,12 +220,17 @@ def _handle_health_check(args) -> int:
                 for msg, count in port_result["errors"].items():
                     print(f"    - {msg} (x{count})")
 
+    invalid = sum(r["invalid"] for r in results.values())
     if as_json:
-        print(json.dumps(results, ensure_ascii=False, indent=2))
+        print(json.dumps({
+            "status": "ok" if invalid == 0 else "unhealthy",
+            "node_id": node_id,
+            "ports": results,
+        }, ensure_ascii=False, indent=2))
     else:
         print("-" * 60)
         
-    return 0
+    return 0 if invalid == 0 else 2
 
 def _expected_source_buffers(edges) -> List[Tuple[str, str]]:
     items = []
@@ -246,4 +302,3 @@ def _sample_buffers(names: List[str], buffer_dir: Path, interval: float) -> Dict
             results[name]["status"] = "ERROR"
 
     return results
-

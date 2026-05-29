@@ -120,6 +120,11 @@ nodes:
       continuous_consume_distance: 1.5  # 每帧自动消费距离过近的点
       # 前方路径预判（给控制器提供掉头/急弯信号）
       turn_preview_distance: 8.0
+      # 仿真复盘优先使用路径投影里程选目标，避免掉头区视野窗口追旧点
+      progress_sync_max_cross_track_m: 12.0
+      progress_target_enabled: true
+      progress_target_lookahead_m: 2.5
+      progress_target_max_cross_track_m: 12.0
 
   - id: path_progress
     package: path_progress

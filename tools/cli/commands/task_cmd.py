@@ -22,20 +22,20 @@ except ImportError:
 from runtime.task.models import Task, TaskState
 from runtime.task.store import TaskStore
 from runtime.task.executor import TaskExecutor
+from tools.cli.utils.output import print_error, print_json
 
 
-def _load_task_from_yaml(yaml_path: str) -> Task:
+def _load_task_from_yaml(yaml_path: str, *, as_json: bool = False) -> Task:
     """从 YAML 文件加载任务定义"""
     if yaml is None:
-        print("Error: PyYAML is required for task YAML parsing", file=sys.stderr)
-        print("  Install with: pip install pyyaml", file=sys.stderr)
+        print_error("PyYAML is required for task YAML parsing", as_json=as_json, code="dependency_missing")
         sys.exit(1)
 
     with open(yaml_path, "r") as f:
         data = yaml.safe_load(f)
 
     if not data:
-        print(f"Error: Empty or invalid task file: {yaml_path}", file=sys.stderr)
+        print_error(f"Empty or invalid task file: {yaml_path}", as_json=as_json)
         sys.exit(1)
 
     task = Task(
@@ -80,59 +80,107 @@ def _print_task(task: Task, detailed: bool = False):
 def _run_task(args):
     """执行离线任务"""
     yaml_path = args.task_file
+    as_json = bool(getattr(args, "json", False))
     if not Path(yaml_path).exists():
-        print(f"Error: Task file not found: {yaml_path}", file=sys.stderr)
+        print_error(f"Task file not found: {yaml_path}", as_json=as_json, code="not_found")
         return 1
 
-    task = _load_task_from_yaml(yaml_path)
+    task = _load_task_from_yaml(yaml_path, as_json=as_json)
     store = TaskStore()
     executor = TaskExecutor(store)
     store.save(task)
 
-    print(f"Task loaded: {task.task_id}")
-    print(f"  Preset: {task.preset_yaml}")
-    if task.node_params:
-        for node, params in task.node_params.items():
-            print(f"  {node}: {params}")
+    dispatched = executor.execute(task)
+    task = store.get(task.task_id) or task
+    if not dispatched:
+        store.update_state(
+            task.task_id,
+            TaskState.FAILED,
+            error_message="Runtime control buffer is not available",
+        )
+        task = store.get(task.task_id) or task
 
-    executor.execute(task)
-    print(f"✓ Task {task.task_id} dispatched")
-    return 0
+    result = {
+        "status": "dispatched" if dispatched else "control_unavailable",
+        "task": task.to_dict(),
+        "message": (
+            f"Task {task.task_id} dispatched"
+            if dispatched
+            else "Runtime control buffer is not available"
+        ),
+    }
+    if as_json:
+        print_json(result)
+    else:
+        print(f"Task loaded: {task.task_id}")
+        print(f"  Preset: {task.preset_yaml}")
+        if task.node_params:
+            for node, params in task.node_params.items():
+                print(f"  {node}: {params}")
+        if dispatched:
+            print(f"✓ Task {task.task_id} dispatched")
+        else:
+            print("✗ Runtime control buffer is not available", file=sys.stderr)
+    return 0 if dispatched else 1
 
 
 def _list_tasks(args):
     """列出所有任务"""
+    as_json = bool(getattr(args, "json", False))
     store = TaskStore()
     tasks = store.get_all()
+    tasks.sort(key=lambda t: t.created_at, reverse=True)
+    if as_json:
+        print_json({
+            "status": "ok",
+            "count": len(tasks),
+            "tasks": [t.to_dict() for t in tasks],
+        })
+        return 0
+
     if not tasks:
         print("No tasks found")
         return 0
 
-    tasks.sort(key=lambda t: t.created_at, reverse=True)
     for task in tasks:
         _print_task(task, detailed=args.verbose)
+    return 0
 
 
 def _show_task(args):
     """查看任务详情"""
+    as_json = bool(getattr(args, "json", False))
     store = TaskStore()
     task = store.get(args.task_id)
     if task is None:
-        print(f"Error: Task not found: {args.task_id}", file=sys.stderr)
+        print_error(f"Task not found: {args.task_id}", as_json=as_json, code="not_found")
         return 1
-    _print_task(task, detailed=True)
+    if as_json:
+        print_json({"status": "ok", "task": task.to_dict()})
+    else:
+        _print_task(task, detailed=True)
+    return 0
 
 
 def _cancel_task(args):
     """取消任务"""
+    as_json = bool(getattr(args, "json", False))
     store = TaskStore()
     task = store.get(args.task_id)
     if task is None:
-        print(f"Error: Task not found: {args.task_id}", file=sys.stderr)
+        print_error(f"Task not found: {args.task_id}", as_json=as_json, code="not_found")
         return 1
     executor = TaskExecutor(store)
     executor.cancel(args.task_id)
-    print(f"✓ Task {args.task_id} cancelled")
+    task = store.get(args.task_id)
+    if as_json:
+        print_json({
+            "status": "cancelled",
+            "task": task.to_dict() if task else None,
+        })
+    else:
+        print(f"✓ Task {args.task_id} cancelled")
+    return 0
 
 
 def handle_task_command(args):

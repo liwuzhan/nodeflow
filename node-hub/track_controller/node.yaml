@@ -118,3 +118,15 @@ params:
     type: float
     default: 0.15
     description: "横向误差过大时保留的低速恢复因子"
+  headland_turn_heading_gain:
+    type: float
+    default: 2.0
+    description: "headland_turn 段按路径切线航向控制时的航向增益"
+  headland_turn_align_threshold_deg:
+    type: float
+    default: 35.0
+    description: "headland_turn 段航向误差超过该阈值时原地对齐"
+  headland_turn_min_speed_factor:
+    type: float
+    default: 0.25
+    description: "headland_turn 段最大速度因子，用于低速掉头"

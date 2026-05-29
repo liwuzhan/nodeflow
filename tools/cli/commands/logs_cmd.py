@@ -18,13 +18,18 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Iterator
 
+from tools.cli.utils.output import print_error, print_json
+
 
 class LogEntry:
     """日志条目"""
 
     def __init__(self, data: Dict[str, Any]):
         self.data = data
-        self.timestamp = datetime.fromisoformat(data.get('timestamp', ''))
+        timestamp = data.get('timestamp') or datetime.fromtimestamp(
+            data.get('timestamp_unix', 0) or 0
+        ).isoformat()
+        self.timestamp = datetime.fromisoformat(timestamp)
         self.timestamp_unix = data.get('timestamp_unix', 0)
         self.node_id = data.get('node_id', 'unknown')
         self.level = data.get('level', 'INFO')
@@ -233,6 +238,84 @@ def parse_time_offset(offset_str: str) -> datetime:
         raise ValueError(f"Invalid time format: {offset_str}")
 
 
+def handle_logs_command(args) -> int:
+    log_dir = args.log_dir
+    if log_dir is None:
+        from runtime.utils.constants import LOGS_DIR
+        log_dir = LOGS_DIR
+
+    as_json = bool(getattr(args, "json", False))
+
+    if not os.path.isdir(log_dir):
+        if as_json:
+            print_json({
+                "status": "empty",
+                "log_dir": str(log_dir),
+                "count": 0,
+                "entries": [],
+            })
+        else:
+            print(f"No logs found in {log_dir}")
+        return 0
+
+    aggregator = LogAggregator(log_dir)
+
+    since_time = None
+    if args.since:
+        try:
+            since_time = parse_time_offset(args.since)
+        except ValueError as e:
+            print_error(str(e), as_json=as_json)
+            return 1
+
+    if args.follow:
+        try:
+            for entry in aggregator.follow_logs(
+                node_filter=args.node,
+                level_filter=args.level,
+                search_text=args.search
+            ):
+                if since_time and entry.timestamp < since_time:
+                    continue
+
+                if as_json:
+                    print(entry.format_json(), flush=True)
+                elif args.detailed:
+                    print(entry.format_detailed(), flush=True)
+                else:
+                    print(entry.format_simple(), flush=True)
+        except KeyboardInterrupt:
+            print("\n日志跟踪已停止", file=sys.stderr)
+        return 0
+
+    entries = aggregator.read_log_files_sorted()
+    filtered_entries = [
+        e for e in entries
+        if e.matches_filter(args.node, args.level, args.search)
+        and (since_time is None or e.timestamp >= since_time)
+    ]
+    selected_entries = filtered_entries[-args.count:]
+
+    if as_json:
+        print_json({
+            "status": "ok",
+            "log_dir": str(log_dir),
+            "count": len(selected_entries),
+            "total_matched": len(filtered_entries),
+            "entries": [e.data for e in selected_entries],
+        })
+    else:
+        for entry in selected_entries:
+            if args.detailed:
+                print(entry.format_detailed())
+            else:
+                print(entry.format_simple())
+        if not filtered_entries:
+            print("没有匹配的日志条目", file=sys.stderr)
+
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="NodeFlow 日志聚合工具",
@@ -325,75 +408,7 @@ def main():
     )
 
     args = parser.parse_args()
-
-    # 确定日志目录
-    log_dir = args.log_dir
-    if args.config:
-        # 如果提供了配置文件，可以从中读取日志目录（暂时不实现）
-        pass
-
-    # 检查日志目录
-    if not os.path.isdir(log_dir):
-        print(f"错误: 日志目录不存在: {log_dir}", file=sys.stderr)
-        sys.exit(1)
-
-    # 创建日志聚合器
-    aggregator = LogAggregator(log_dir)
-
-    # 解析时间过滤
-    since_time = None
-    if args.since:
-        try:
-            since_time = parse_time_offset(args.since)
-        except ValueError as e:
-            print(f"错误: {e}", file=sys.stderr)
-            sys.exit(1)
-
-    # 实时跟踪模式
-    if args.follow:
-        try:
-            for entry in aggregator.follow_logs(
-                node_filter=args.node,
-                level_filter=args.level,
-                search_text=args.search
-            ):
-                if since_time and entry.timestamp < since_time:
-                    continue
-
-                if args.json:
-                    print(entry.format_json())
-                elif args.detailed:
-                    print(entry.format_detailed())
-                else:
-                    print(entry.format_simple())
-
-        except KeyboardInterrupt:
-            print("\n日志跟踪已停止", file=sys.stderr)
-            sys.exit(0)
-
-    # 历史模式
-    else:
-        entries = aggregator.read_log_files_sorted()
-
-        # 应用过滤
-        filtered_entries = [
-            e for e in entries
-            if e.matches_filter(args.node, args.level, args.search)
-            and (since_time is None or e.timestamp >= since_time)
-        ]
-
-        # 显示最后N行
-        for entry in filtered_entries[-args.count:]:
-            if args.json:
-                print(entry.format_json())
-            elif args.detailed:
-                print(entry.format_detailed())
-            else:
-                print(entry.format_simple())
-
-        if not filtered_entries:
-            print("没有匹配的日志条目", file=sys.stderr)
-            sys.exit(1)
+    sys.exit(handle_logs_command(args))
 
 
 if __name__ == '__main__':

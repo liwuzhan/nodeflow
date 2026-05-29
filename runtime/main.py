@@ -96,14 +96,11 @@ class NodeFlowRuntime:
         }
         signal_name = signal_names.get(signum, f"signal {signum}")
 
-        # 如果有正在运行的数据流，先停止它
-        if self.dataflow_running:
-            logger.info(f"Received {signal_name}, stopping dataflow...")
-            self.dataflow_running = False
-        # 如果框架正在运行，关闭框架
-        elif self.running:
+        if self.running or self.dataflow_running:
             logger.info(f"Received {signal_name}, shutting down framework...")
             self.running = False
+            # stop_dataflow() must still run after the loop exits; do not clear
+            # dataflow_running here or child processes will be orphaned.
         else:
             logger.debug(f"Received {signal_name} but nothing is running")
 
@@ -349,8 +346,16 @@ class NodeFlowRuntime:
                 self.topology_layers,
                 self.nodes_dict,
                 startup_timeout=2.0,  # 减少等待时间，仅用于检测启动初期崩溃
-                startup_delay=1.0
+                startup_delay=1.0,
+                should_cancel=lambda: not self.running,
             )
+
+            if not self.running:
+                logger.info("Dataflow startup cancelled, shutting down started nodes...")
+                if self.processes:
+                    self.coordinator.shutdown_nodes(self.processes)
+                    self.processes = {}
+                return False
 
             logger.info(f"All {len(self.processes)} nodes started successfully")
 
@@ -384,6 +389,7 @@ class NodeFlowRuntime:
             self.dataflow_running = True
             logger.info("Dataflow started successfully")
             logger.info("=" * 60)
+            return True
 
         except Exception as e:
             logger.error(f"Failed to start dataflow: {e}", exc_info=True)
@@ -445,8 +451,13 @@ class NodeFlowRuntime:
             if result != 0:
                 return result
 
-            # 启动数据流
-            self.start_dataflow()
+            # 启动数据流。start_dataflow() 会用 self.running 判断启动是否
+            # 被取消，因此传统 run() 模式必须先进入 running 状态。
+            self.running = True
+            started = self.start_dataflow()
+            if not started:
+                self.shutdown_complete = True
+                return 0
 
             # 主循环
             logger.info("=" * 60)
@@ -456,7 +467,6 @@ class NodeFlowRuntime:
             logger.info("Press Ctrl+C to stop")
             logger.info("=" * 60)
 
-            self.running = True
             shutdown_buf = None
             try:
                 from sdk.shared_buffer_lite import SharedBufferLite
@@ -664,8 +674,11 @@ class NodeFlowRuntime:
                                 logger.info(f"Task {task_id} params applied")
                             if not self.dataflow_running:
                                 try:
-                                    self.start_dataflow()
-                                    logger.info("✓ Dataflow started by CLI command")
+                                    started = self.start_dataflow()
+                                    if started:
+                                        logger.info("✓ Dataflow started by CLI command")
+                                    else:
+                                        logger.info("Dataflow startup cancelled")
                                 except Exception as e:
                                     logger.error(f"Failed to start dataflow: {e}")
                             else:

@@ -263,7 +263,7 @@ SDK 使用以下环境变量（由框架自动设置）：
 | `NODE_IN_*` | 输入端口 ZMQ 地址 | `ipc://...` |
 | `NODE_OUT_*` | 输出端口 ZMQ 地址 | `ipc://...` |
 | `NODE_PARENT_WATCHDOG` | 启用父进程监控 | `true` |
-| `NODEFLOW_LOG_DIR` | 日志目录 | `/tmp/nodeflow_logs` |
+| `NODEFLOW_LOG_DIR` | 日志目录 | `/tmp/nodeflow/logs` |
 | `NODE_SCHEMA_VALIDATION` | Schema 验证模式 | `off/loose/strict` |
 
 ## 错误处理

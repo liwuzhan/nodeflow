@@ -242,6 +242,7 @@ class TillageController:
         if emergency_stop and not self.state.emergency_stop_active:
             self.state.emergency_stop_active = True
             self.state.pto_on = False
+            self.state.pto_rpm = 0.0
             self.state.hitch_height = 0.0
             self.state.state = TillageState.TRANSPORT
             self.state.state_enter_time = now
@@ -262,14 +263,20 @@ class TillageController:
         intent_pto = implement_intent.get("pto")
         intent_hitch = implement_intent.get("hitch")
 
-        # 需要在 headland 升起机具的条件
-        should_raise = (current_zone == "transit") or is_final
-        should_lower = (current_zone == "work") and not is_final and has_data
-        if intent_pto == "off" or intent_hitch == "up":
+        # 需要在 headland 升起机具的条件。优先级:
+        # final > 明确机具意图 > zone 判定，确保 raise/lower 不会同时为真。
+        if is_final:
             should_raise = True
             should_lower = False
         elif intent_pto == "on" or intent_hitch == "down":
+            should_raise = False
             should_lower = not is_final and has_data
+        elif intent_pto == "off" or intent_hitch == "up":
+            should_raise = True
+            should_lower = False
+        else:
+            should_raise = current_zone == "transit"
+            should_lower = (current_zone == "work") and has_data
 
         # === 状态机驱动 ===
         state = self.state.state
@@ -278,6 +285,7 @@ class TillageController:
         if state == TillageState.TRANSPORT:
             # TRANSPORT: PTO=OFF, hitch=UP
             self.state.pto_on = False
+            self.state.pto_rpm = 0.0
             self.state.hitch_height = 0.0
 
             if should_lower:
@@ -289,6 +297,7 @@ class TillageController:
             elapsed_ratio = min(1.0, elapsed / self.config.hitch_lower_time_s)
             self.state.hitch_height = elapsed_ratio * self.config.hitch_working_height
             self.state.pto_on = False
+            self.state.pto_rpm = 0.0
 
             # 超时检查
             if elapsed > self.config.state_timeout_s and self.config.enable_safety_check:

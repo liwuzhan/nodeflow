@@ -9,6 +9,15 @@ import sys
 from pathlib import Path
 
 
+def _add_json_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        '--json',
+        action='store_true',
+        default=argparse.SUPPRESS,
+        help='以 JSON 格式输出结果'
+    )
+
+
 def create_parser() -> argparse.ArgumentParser:
     """创建 CLI 参数解析器"""
     parser = argparse.ArgumentParser(
@@ -77,6 +86,7 @@ def create_parser() -> argparse.ArgumentParser:
         default='name',
         help='排序方式 (默认: name)'
     )
+    _add_json_argument(node_list_parser)
 
     # node info
     node_info_parser = node_subparsers.add_parser(
@@ -93,6 +103,7 @@ def create_parser() -> argparse.ArgumentParser:
         default='./node-hub',
         help='节点库路径 (默认: ./node-hub)'
     )
+    _add_json_argument(node_info_parser)
 
     # ========== buffer 命令组 ==========
     buffer_parser = subparsers.add_parser(
@@ -115,6 +126,7 @@ def create_parser() -> argparse.ArgumentParser:
         default='/tmp/nodeflow/buffers',
         help='缓冲区目录 (默认: /tmp/nodeflow/buffers)'
     )
+    _add_json_argument(buffer_list_parser)
     buffer_inspect_parser = buffer_subparsers.add_parser(
         'inspect',
         help='查看指定缓冲区的详细内容',
@@ -134,6 +146,7 @@ def create_parser() -> argparse.ArgumentParser:
         action='store_true',
         help='以十六进制原始字节显示，不尝试解码'
     )
+    _add_json_argument(buffer_inspect_parser)
 
     # ========== health 命令组 ==========
     health_parser = subparsers.add_parser(
@@ -172,6 +185,7 @@ def create_parser() -> argparse.ArgumentParser:
     health_check_parser.add_argument(
         '--json',
         action='store_true',
+        default=argparse.SUPPRESS,
         help='以 JSON 格式输出'
     )
 
@@ -200,6 +214,7 @@ def create_parser() -> argparse.ArgumentParser:
     health_flow_parser.add_argument(
         '--json',
         action='store_true',
+        default=argparse.SUPPRESS,
         help='以 JSON 格式输出'
     )
     sim_parser = subparsers.add_parser(
@@ -228,6 +243,7 @@ def create_parser() -> argparse.ArgumentParser:
         default=5555,
         help='仿真器端口（默认 5555）'
     )
+    _add_json_argument(sim_refresh_parser)
     monitor_parser = subparsers.add_parser(
         'monitor',
         help='缓冲区实时监控',
@@ -258,6 +274,7 @@ def create_parser() -> argparse.ArgumentParser:
     monitor_parser.add_argument(
         '--json',
         action='store_true',
+        default=argparse.SUPPRESS,
         help='以 JSON 事件输出'
     )
 
@@ -302,6 +319,7 @@ def create_parser() -> argparse.ArgumentParser:
     runtime_start_parser.add_argument(
         '--json',
         action='store_true',
+        default=argparse.SUPPRESS,
         help='以 JSON 格式输出'
     )
 
@@ -314,6 +332,7 @@ def create_parser() -> argparse.ArgumentParser:
     runtime_stop_parser.add_argument(
         '--json',
         action='store_true',
+        default=argparse.SUPPRESS,
         help='以 JSON 格式输出'
     )
 
@@ -326,6 +345,7 @@ def create_parser() -> argparse.ArgumentParser:
     runtime_status_parser.add_argument(
         '--json',
         action='store_true',
+        default=argparse.SUPPRESS,
         help='以 JSON 格式输出'
     )
 
@@ -338,6 +358,7 @@ def create_parser() -> argparse.ArgumentParser:
     runtime_start_df_parser.add_argument(
         '--json',
         action='store_true',
+        default=argparse.SUPPRESS,
         help='以 JSON 格式输出'
     )
 
@@ -350,6 +371,7 @@ def create_parser() -> argparse.ArgumentParser:
     runtime_stop_df_parser.add_argument(
         '--json',
         action='store_true',
+        default=argparse.SUPPRESS,
         help='以 JSON 格式输出'
     )
 
@@ -362,6 +384,7 @@ def create_parser() -> argparse.ArgumentParser:
     runtime_restart_df_parser.add_argument(
         '--json',
         action='store_true',
+        default=argparse.SUPPRESS,
         help='以 JSON 格式输出'
     )
 
@@ -389,6 +412,7 @@ def create_parser() -> argparse.ArgumentParser:
     task_run_parser.add_argument(
         '--json',
         action='store_true',
+        default=argparse.SUPPRESS,
         help='以 JSON 格式输出'
     )
 
@@ -400,6 +424,7 @@ def create_parser() -> argparse.ArgumentParser:
     task_list_parser.add_argument(
         '--json',
         action='store_true',
+        default=argparse.SUPPRESS,
         help='以 JSON 格式输出'
     )
     task_list_parser.add_argument(
@@ -420,6 +445,7 @@ def create_parser() -> argparse.ArgumentParser:
     task_show_parser.add_argument(
         '--json',
         action='store_true',
+        default=argparse.SUPPRESS,
         help='以 JSON 格式输出'
     )
 
@@ -435,6 +461,7 @@ def create_parser() -> argparse.ArgumentParser:
     task_cancel_parser.add_argument(
         '--json',
         action='store_true',
+        default=argparse.SUPPRESS,
         help='以 JSON 格式输出'
     )
 
@@ -479,6 +506,7 @@ def create_parser() -> argparse.ArgumentParser:
     logs_parser.add_argument(
         '--json',
         action='store_true',
+        default=argparse.SUPPRESS,
         help='JSON 格式输出'
     )
     logs_parser.add_argument(
@@ -533,8 +561,9 @@ def main():
             exit_code = handle_runtime_command(args)
             sys.exit(exit_code)
         elif args.command == 'logs':
-            from tools.cli.commands.logs_cmd import main as handle_logs_command
-            handle_logs_command()
+            from tools.cli.commands.logs_cmd import handle_logs_command
+            exit_code = handle_logs_command(args)
+            sys.exit(exit_code)
         elif args.command == 'task':
             from tools.cli.commands.task_cmd import handle_task_command
             exit_code = handle_task_command(args)

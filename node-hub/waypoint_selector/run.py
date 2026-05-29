@@ -104,6 +104,11 @@ def main():
         turn_preview_distance = float(sdk.params.get("turn_preview_distance", 8.0))
         progress_sync_max_cross_track_m = float(sdk.params.get("progress_sync_max_cross_track_m", 6.0))
         progress_sync_fraction_threshold = float(sdk.params.get("progress_sync_fraction_threshold", 0.2))
+        progress_target_enabled = bool(sdk.params.get("progress_target_enabled", True))
+        progress_target_lookahead_m = float(sdk.params.get("progress_target_lookahead_m", view_distance))
+        progress_target_max_cross_track_m = float(
+            sdk.params.get("progress_target_max_cross_track_m", progress_sync_max_cross_track_m)
+        )
 
         sdk.logger.info(f"初始消费: 检查{initial_check_points}点, 距离<{initial_consume_distance}m")
         sdk.logger.info(f"视野扩宽: 最少{min_view_points}点, 扩宽x{view_expand_factor}, 最大{max_view_width}m")
@@ -112,6 +117,11 @@ def main():
         sdk.logger.info(
             f"路径进度同步: 横向误差<={progress_sync_max_cross_track_m}m, "
             f"segment_fraction>={progress_sync_fraction_threshold}"
+        )
+        sdk.logger.info(
+            f"路径进度前瞻: enabled={progress_target_enabled}, "
+            f"lookahead={progress_target_lookahead_m}m, "
+            f"横向误差<={progress_target_max_cross_track_m}m"
         )
 
         # 2. 初始化 L4 原子层算法
@@ -129,7 +139,10 @@ def main():
             continuous_consume_distance=continuous_consume_distance,
             turn_preview_distance=turn_preview_distance,
             progress_sync_max_cross_track_m=progress_sync_max_cross_track_m,
-            progress_sync_fraction_threshold=progress_sync_fraction_threshold
+            progress_sync_fraction_threshold=progress_sync_fraction_threshold,
+            progress_target_enabled=progress_target_enabled,
+            progress_target_lookahead_m=progress_target_lookahead_m,
+            progress_target_max_cross_track_m=progress_target_max_cross_track_m
         )
         selector = WaypointSelector(config)
 
@@ -142,6 +155,7 @@ def main():
 
         # 缓存最新位置
         last_pose = None
+        last_progress = None
 
         # 4. 主循环 (L3 职责: 数据搬运)
         while True:
@@ -188,11 +202,12 @@ def main():
                         )
 
             if progress:
+                last_progress = progress
                 selector.sync_progress(progress)
 
             # 4b. 调用 L4 原子层算法选择前瞻点
             if last_pose:
-                npkt = selector.select(last_pose)
+                npkt = selector.select(last_pose, progress=last_progress)
 
                 # 4c. 发送输出 (L3 职责)
                 if npkt:
