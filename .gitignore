@@ -54,6 +54,16 @@ htmlcov/
 *.bak
 .trae/
 
+# Local runtime artifacts
+cloud/server/*.db
+cloud/server/*.db-shm
+cloud/server/*.db-wal
+cloud/server/old/
+node-hub/global_coverage/txt/path_*.txt
+node-hub/global_coverage/txt/old/
+other/png/
+uml/
+
 # Test reports
 .test-reports/
 *.report.json
