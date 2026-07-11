@@ -14,7 +14,7 @@
 │  FastAPI (25 端点) ── MQTT Client ── Splitter ── SQLite  │
 │       │              (paho-mqtt)    (shapely)            │
 └───────┼──────────────────────────────────────────────────┘
-        │ MQTT (QoS 1 control / QoS 0 status + heartbeat)
+        │ MQTT (QoS 1 control/status, QoS 0 heartbeat)
 ┌───────┼──────────────────────────────────────────────────┐
 │  Edge Side (runtime/task/)                               │
 │       │                                                  │
@@ -25,7 +25,7 @@
 
 **三层网络模型**:
 1. **前端 ←→ 后端**: HTTP REST + SSE 推送
-2. **云端 ←→ 边侧**: MQTT (任务下发 QoS 1, 状态/心跳 QoS 0)
+2. **云端 ←→ 边侧**: MQTT (任务/状态 QoS 1, 心跳 QoS 0)
 3. **云端 → 边侧**: HTTP 大文件下载 (地块/路径 > 1MB)
 
 ---
@@ -184,7 +184,7 @@ cloud/
 |-------|-----|------|----------|
 | `nodeflow/{id}/task/dispatch` | 1 | 云端→边侧 | TaskDispatch |
 | `nodeflow/{id}/task/cancel` | 1 | 云端→边侧 | TaskCancel |
-| `nodeflow/{id}/status` | 0 | 边侧→云端 | TaskStatus |
+| `nodeflow/{id}/status` | 1 | 边侧→云端 | TaskStatus |
 | `nodeflow/{id}/heartbeat` | 0 | 边侧→云端 | Heartbeat |
 | `nodeflow/{id}/task/ack` | 1 | 边侧→云端 | TaskAck |
 
@@ -194,14 +194,14 @@ cloud/
 
 ## 7. 机器自动发现
 
-**不需要手动输入 IP**。机制:
+**不需要在云端手动输入每台机器的 IP**。边侧需要配置 Cloud Box 的固定 LAN IP，随后由 TaskAgent 主动报到。机制:
 
 1. 边侧 TaskAgent 启动 → 连接 MQTT broker → 每 30s 发送心跳
 2. 云端 `_handle_heartbeat` 收到未知 `machine_id` 的心跳 → 自动创建 `status="unregistered"` 的 Machine 记录
 3. 前端 `/machines` 页面显示 "待确认设备" 列表
 4. 操作员点击 "确认注册" → `POST /machines/{id}/confirm` → 状态变为 `online`
 
-边侧只需配置一个环境变量 `NF_MQTT_BROKER` 指向 broker 地址。
+边侧至少需要配置 `NF_MQTT_BROKER` 指向 Cloud Box 的固定 LAN IP，`NF_MACHINE_ID` 用于给机器一个稳定身份。
 
 ---
 

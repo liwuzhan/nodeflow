@@ -15,6 +15,7 @@ def test_create_and_list(client):
     data = r.json()
     assert data["name"] == "Test Field"
     assert data["id"]  # has a UUID
+    assert 107.0 < data["area_ha"] < 109.0
 
     r2 = client.get("/api/v1/parcels")
     assert r2.status_code == 200
@@ -49,3 +50,6 @@ def test_preview_split(client):
     result = r2.json()
     assert "sub_parcels" in result
     assert len(result["sub_parcels"]) == 2
+    areas = [part["area_ha"] for part in result["sub_parcels"]]
+    assert all(area > 0 for area in areas)
+    assert abs(areas[0] - areas[1]) < 0.01

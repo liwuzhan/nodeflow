@@ -45,6 +45,7 @@ class TaskENU(BaseModel):
     ref_lon: float
     ref_lat: float
     timestamp: float
+    plan_revision: int = 0
 
 # --- End Schema Definitions ---
 
@@ -141,7 +142,10 @@ def build_task_enu(parcel_config: Dict[str, Any]) -> tuple[Optional[Dict[str, An
             'vehicle': vehicle_config,
             'ref_lon': ref_lon,
             'ref_lat': ref_lat,
-            'timestamp': time.time()
+            'timestamp': time.time(),
+            'plan_revision': int(
+                parcel_config.get('plan_revision', parcel_config.get('field_revision', 0)) or 0
+            ),
         }
 
         return task_enu, None

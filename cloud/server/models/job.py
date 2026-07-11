@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, JSON
+from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, JSON, UniqueConstraint
 from sqlalchemy.dialects.sqlite import CHAR
 from sqlalchemy.orm import relationship
 
@@ -21,7 +21,7 @@ class Job(Base):
 
     id = Column(String(128), primary_key=True)
     name = Column(String(256), nullable=False)
-    parcel_id = Column(CHAR(36), nullable=False, index=True)
+    parcel_id = Column(CHAR(36), ForeignKey("parcels.id"), nullable=False, index=True)
     status = Column(String(16), default="draft")
     split_mode = Column(String(16), default="strip")
     split_count = Column(Integer, default=1)
@@ -35,6 +35,7 @@ class Job(Base):
 
 class JobStep(Base):
     __tablename__ = "job_steps"
+    __table_args__ = (UniqueConstraint("job_id", "seq_index", name="uq_job_step_sequence"),)
 
     id = Column(CHAR(36), primary_key=True, default=_uuid)
     job_id = Column(String(128), ForeignKey("jobs.id"), nullable=False, index=True)
@@ -42,6 +43,10 @@ class JobStep(Base):
     operation_type = Column(String(32), nullable=False)
     preset_yaml = Column(String(128), nullable=False)
     depends_on = Column(Integer, nullable=True)
+    planning_mode = Column(String(24), nullable=False, default="edge")
+    fallback_policy = Column(String(32), nullable=False, default="deny")
+    operation_config = Column(JSON, nullable=False, default=dict)
+    machine_assignments = Column(JSON, nullable=False, default=dict)
     status = Column(String(16), default="pending")
     created_at = Column(DateTime, default=_utcnow)
 

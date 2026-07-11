@@ -22,8 +22,9 @@ def get_task(task_id: str, db: Session = Depends(get_db)):
 def retry_task(task_id: str, request: Request, db: Session = Depends(get_db)):
     mqtt = request.app.state.mqtt
     dispatcher = Dispatcher(mqtt)
-    return dispatcher.retry_dispatch(
-        db, task_id,
-        http_host="localhost",
-        http_port=settings.HTTP_SERVER_PORT,
-    )
+    try:
+        return dispatcher.retry_dispatch(
+            db, task_id, base_url=settings.HTTP_PUBLIC_BASE_URL,
+        )
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc

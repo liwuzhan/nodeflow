@@ -7,9 +7,11 @@ import paho.mqtt.client as mqtt
 
 from runtime.task.config import TaskAgentConfig
 from runtime.task.models import Task, TaskState
+from nodeflow_protocol.task import FallbackPolicy, PlanningMode, PROTOCOL_VERSION
 from runtime.task.store import TaskStore
 from runtime.task.executor import TaskExecutor
 from runtime.task.reporter import StatusReporter
+from runtime.task.assets import TaskAssetPreparer
 
 logger = logging.getLogger("task_agent")
 
@@ -19,6 +21,7 @@ class TaskAgent:
         self._config = config or TaskAgentConfig.from_env()
         self._store = TaskStore()
         self._executor = TaskExecutor(self._store, self._config.machine_id)
+        self._asset_preparer = TaskAssetPreparer()
         self._reporter: StatusReporter | None = None
         self._running = False
         self._heartbeat_timer: threading.Timer | None = None
@@ -35,11 +38,28 @@ class TaskAgent:
 
     def start(self):
         self._reporter = StatusReporter(self._client, self._config.machine_id)
+        self._executor.set_callbacks(
+            on_progress=self._report_progress,
+            on_completed=lambda task_id: self._reporter.send_status(
+                task_id, TaskState.COMPLETED, progress_pct=100.0,
+            ),
+            on_failed=lambda task_id, error: self._reporter.send_status(
+                task_id, TaskState.FAILED, error_detail=error,
+            ),
+        )
         self._client.connect(self._config.mqtt_broker, self._config.mqtt_port, keepalive=60)
         self._client.loop_start()
         self._running = True
         self._start_heartbeat()
         logger.info(f"TaskAgent started: {self._config.client_id} → {self._config.mqtt_broker}")
+
+    def _report_progress(self, progress):
+        self._reporter.send_status(
+            progress.task_id,
+            progress.state,
+            progress_pct=progress.progress_pct,
+            current_node=progress.current_node,
+        )
 
     def stop(self):
         self._running = False
@@ -79,11 +99,31 @@ class TaskAgent:
         dispatch_id = payload.get("dispatch_id", "")
         machine_id = payload.get("machine_id", self._config.machine_id)
 
-        # 去重: 已存在的 task 发送拒绝 ACK
-        if self._store.exists(task_id):
-            logger.info(f"Task {task_id} duplicate, sending reject ACK")
+        if machine_id != self._config.machine_id:
+            logger.warning(f"Task {task_id} targets {machine_id}, rejecting on {self._config.machine_id}")
             self._reporter.send_ack(task_id, dispatch_id, accepted=False,
-                                    reject_reason="duplicate_task_id")
+                                    reject_reason="machine_id_mismatch")
+            return
+
+        protocol_version = payload.get("protocol_version", PROTOCOL_VERSION)
+        if protocol_version != PROTOCOL_VERSION:
+            self._reporter.send_ack(task_id, dispatch_id, accepted=False,
+                                    reject_reason="unsupported_protocol_version")
+            return
+
+        # 同一任务的 QoS 1 重投是幂等成功，云端可据此恢复丢失的 ACK。
+        existing = self._store.get(task_id)
+        if existing:
+            logger.info(f"Task {task_id} duplicate delivery, acknowledging existing task")
+            self._reporter.send_ack(task_id, dispatch_id, accepted=True)
+            self._reporter.send_status(task_id, existing.state)
+            return
+
+        active = [task for task in self._store.get_active() if task.task_id != task_id]
+        if active:
+            logger.info(f"Task {task_id} rejected: machine busy with {active[0].task_id}")
+            self._reporter.send_ack(task_id, dispatch_id, accepted=False,
+                                    reject_reason=f"machine_busy:{active[0].task_id}")
             return
 
         task = Task(
@@ -93,10 +133,21 @@ class TaskAgent:
             operation_type=payload.get("operation_type", ""),
             sequence_index=payload.get("sequence_index", 0),
             machine_id=machine_id,
+            protocol_version=protocol_version,
+            command_id=payload.get("command_id", dispatch_id),
+            planning_mode=PlanningMode(payload.get("planning_mode", PlanningMode.EDGE.value)),
+            fallback_policy=FallbackPolicy(payload.get("fallback_policy", FallbackPolicy.DENY.value)),
             parcel_ref=payload.get("parcel_ref"),
             parcel_data=payload.get("parcel_data"),
             parcel_url=payload.get("parcel_url"),
             path_url=payload.get("path_url"),
+            path_checksum=payload.get("path_checksum"),
+            plan_id=payload.get("plan_id"),
+            plan_revision=payload.get("plan_revision", 0),
+            field_revision=payload.get("field_revision", 1),
+            field_checksum=payload.get("field_checksum"),
+            coordinate_frame=payload.get("coordinate_frame", {}),
+            operation_config=payload.get("operation_config", {}),
             node_params=payload.get("node_params", {}),
             state=TaskState.PENDING,
         )
@@ -105,10 +156,14 @@ class TaskAgent:
 
         if self._config.auto_accept:
             logger.info(f"Auto-accepting task {task_id}")
+            self._store.update_state(task_id, TaskState.DOWNLOADING)
             self._reporter.send_status(task_id, TaskState.DOWNLOADING)
-            self._reporter.send_status(task_id, TaskState.READY)
 
             try:
+                task = self._asset_preparer.prepare(task)
+                self._store.save(task)
+                self._store.update_state(task_id, TaskState.READY)
+                self._reporter.send_status(task_id, TaskState.READY)
                 ok = self._executor.execute(task)
                 if ok:
                     self._schedule_running_report(task.task_id)

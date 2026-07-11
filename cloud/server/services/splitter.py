@@ -1,14 +1,19 @@
 import logging
+import warnings
 from typing import List
 
 try:
-    from shapely.geometry import Polygon, shape, mapping, box
-    from shapely.ops import unary_union
+    from shapely.geometry import Polygon, box
     HAS_SHAPELY = True
 except ImportError:
     HAS_SHAPELY = False
 
 logger = logging.getLogger("splitter")
+
+from cloud.server.services.geo import (
+    local_reference, parse_wgs84_geometry, project_to_local, to_feature,
+    unproject_from_local,
+)
 
 
 class SubParcel:
@@ -42,34 +47,23 @@ class ParcelSplitter:
         if count < 1:
             raise ValueError("split count must be >= 1")
 
-        polygon = self._parse_polygon(geojson)
-        if polygon is None or polygon.is_empty:
-            raise ValueError("invalid GeoJSON polygon")
+        polygon_wgs84 = parse_wgs84_geometry(geojson)
+        ref_lon, ref_lat = local_reference(polygon_wgs84)
+        polygon = project_to_local(polygon_wgs84, ref_lon, ref_lat)
 
         if count == 1:
             return [self._single_parcel(polygon, geojson, parcel_name, 0, machine_assignments)]
 
         if mode == "strip":
-            return self._strip_split(polygon, count, angle_deg, parcel_name, machine_assignments)
+            results = self._strip_split(polygon, count, angle_deg, parcel_name, machine_assignments)
         elif mode == "checkerboard":
-            return self._checkerboard_split(polygon, count, parcel_name, machine_assignments)
+            results = self._checkerboard_split(polygon, count, parcel_name, machine_assignments)
         else:
             raise ValueError(f"unknown split mode: {mode}")
-
-    def _parse_polygon(self, geojson: dict):
-        try:
-            geom = geojson.get("geometry", geojson)
-            coords = geom.get("coordinates")
-            if coords is None:
-                return None
-            poly_type = geom.get("type", "Polygon")
-            if poly_type == "Polygon":
-                return shape({"type": "Polygon", "coordinates": coords})
-            elif poly_type == "MultiPolygon":
-                return shape({"type": "MultiPolygon", "coordinates": coords})
-        except Exception:
-            return None
-        return None
+        for result in results:
+            local_geometry = parse_wgs84_geometry(result.geojson)
+            result.geojson = to_feature(unproject_from_local(local_geometry, ref_lon, ref_lat))
+        return results
 
     def _single_parcel(self, polygon, geojson, name, index, assignments=None) -> SubParcel:
         area_m2 = polygon.area
@@ -82,7 +76,11 @@ class ParcelSplitter:
 
     def _strip_split(self, polygon, count, angle_deg, name, assignments) -> List[SubParcel]:
         import math
-        min_rotated = polygon.minimum_rotated_rectangle
+        # Shapely 2.x may emit a harmless RuntimeWarning for coordinates close
+        # to the local ENU origin even though the oriented envelope is valid.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            min_rotated = polygon.minimum_rotated_rectangle
         coords = list(min_rotated.exterior.coords)
 
         edges = []
@@ -123,7 +121,7 @@ class ParcelSplitter:
                 continue
 
             simplified = cut_poly.simplify(0.01, preserve_topology=True)
-            geojson = self._to_geojson(simplified)
+            geojson = to_feature(simplified)
             area_ha = round(simplified.area / 10000, 4)
             machine = assignments.get(str(i)) if assignments else None
 
@@ -135,14 +133,16 @@ class ParcelSplitter:
         return results
 
     def _clip_strip(self, polygon, cut_dx, cut_dy, lo, hi):
-        x0 = lo * cut_dx - 1000 * cut_dy
-        y0 = lo * cut_dy + 1000 * cut_dx
-        x1 = hi * cut_dx - 1000 * cut_dy
-        y1 = hi * cut_dy + 1000 * cut_dx
-        x2 = hi * cut_dx + 1000 * cut_dy
-        y2 = hi * cut_dy - 1000 * cut_dx
-        x3 = lo * cut_dx + 1000 * cut_dy
-        y3 = lo * cut_dy - 1000 * cut_dx
+        min_x, min_y, max_x, max_y = polygon.bounds
+        extent = max(max_x - min_x, max_y - min_y, 1.0) * 4.0
+        x0 = lo * cut_dx - extent * cut_dy
+        y0 = lo * cut_dy + extent * cut_dx
+        x1 = hi * cut_dx - extent * cut_dy
+        y1 = hi * cut_dy + extent * cut_dx
+        x2 = hi * cut_dx + extent * cut_dy
+        y2 = hi * cut_dy - extent * cut_dx
+        x3 = lo * cut_dx + extent * cut_dy
+        y3 = lo * cut_dy - extent * cut_dx
 
         strip_box = Polygon([(x0, y0), (x1, y1), (x2, y2), (x3, y3), (x0, y0)])
 
@@ -180,7 +180,7 @@ class ParcelSplitter:
                 clipped = polygon.intersection(cell)
                 if not clipped.is_empty:
                     simplified = clipped.simplify(0.01, preserve_topology=True)
-                    geojson = self._to_geojson(simplified)
+                    geojson = to_feature(simplified)
                     area_ha = round(simplified.area / 10000, 4)
                     machine = assignments.get(str(idx)) if assignments else None
                     results.append(SubParcel(
@@ -190,7 +190,3 @@ class ParcelSplitter:
                 idx += 1
 
         return results
-
-    def _to_geojson(self, geom) -> dict:
-        m = mapping(geom)
-        return {"type": "Feature", "geometry": m, "properties": {}}

@@ -122,6 +122,10 @@ params:
     type: float
     default: 2.0
     description: "headland_turn 段按路径切线航向控制时的航向增益"
+  headland_turn_use_path_heading:
+    type: boolean
+    default: false
+    description: "兼容开关：使用旧的路径切线控制；默认追踪前瞻点"
   headland_turn_align_threshold_deg:
     type: float
     default: 35.0
@@ -130,3 +134,19 @@ params:
     type: float
     default: 0.25
     description: "headland_turn 段最大速度因子，用于低速掉头"
+  pose_timeout_s:
+    type: float
+    default: 0.5
+    description: "超过该时间未收到新位姿时强制输出零速度"
+  target_timeout_s:
+    type: float
+    default: 0.5
+    description: "超过该时间未收到新前瞻点时强制输出零速度"
+  progress_timeout_s:
+    type: float
+    default: 0.5
+    description: "路径进度过期后停止使用段航向和限速，回退到前瞻点控制"
+  pivot_timeout_s:
+    type: float
+    default: 8.0
+    description: "连续原地对齐超过该时间后锁定停车，直到目标或控制状态变化"

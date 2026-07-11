@@ -84,6 +84,8 @@ class VehicleConfig(BaseModel):
     pivot_turn: bool
     yaw_rate_max_deg_s: float
     min_turn_radius_m: float
+    work_min_turn_radius_m: Optional[float] = None
+    work_max_curvature_rate_1pm2: Optional[float] = None
 
 class TaskRequest(BaseModel):
     id: str
@@ -347,7 +349,9 @@ class SimOutputNode:
             "path_inset_m": self.params.get('path_inset_m', 1.0),
             "pivot_turn": self.params.get('pivot_turn', True),
             "yaw_rate_max_deg_s": self.params.get('yaw_rate_max_deg_s', 60.0),
-            "min_turn_radius_m": self.params.get('min_turn_radius_m', 2.0)
+            "min_turn_radius_m": self.params.get('min_turn_radius_m', 2.0),
+            "work_min_turn_radius_m": self.params.get('work_min_turn_radius_m', None),
+            "work_max_curvature_rate_1pm2": self.params.get('work_max_curvature_rate_1pm2', None),
         }
 
     def _build_task_request_legacy(self) -> dict:

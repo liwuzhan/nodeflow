@@ -413,6 +413,28 @@ class TestInputPortReceiving:
         SharedBufferLite.cleanup_all()
         print("✅ 序列号检查测试通过")
 
+    def test_recv_latest_drains_stale_notifications(self):
+        """多条通知对应同一个最新快照时只返回一次。"""
+        SharedBufferLite.cleanup_all()
+        zmq_addr = "ipc:///tmp/nodeflow/test_notification_backlog"
+
+        output = OutputPort(name="out", zmq_address=zmq_addr)
+        input_port = InputPort(name="in", zmq_address_or_source=zmq_addr)
+        time.sleep(0.1)
+
+        try:
+            for value in range(6):
+                output.send({"value": value})
+            time.sleep(0.1)
+
+            assert input_port.recv_latest() == {"value": 5}
+            for _ in range(6):
+                assert input_port.recv_latest() is None
+        finally:
+            output.close()
+            input_port.close()
+            SharedBufferLite.cleanup_all()
+
 
 class TestInputPortErrorHandling:
     """InputPort 错误处理测试"""

@@ -10,6 +10,7 @@ from cloud.server.database import SessionLocal
 from cloud.server.models.machine import Machine
 from cloud.server.models.edge_task import EdgeTask
 from cloud.server.services.sse_broker import SSEBroker
+from nodeflow_protocol.task import can_transition_task_state
 
 logger = logging.getLogger("mqtt_client")
 
@@ -41,6 +42,10 @@ class MQTTClient:
         self._client.disconnect()
         logger.info("MQTT disconnected")
 
+    @property
+    def is_connected(self) -> bool:
+        return bool(self._client.is_connected())
+
     def publish(self, machine_id: str, payload: dict, qos: int = 1):
         topic = f"nodeflow/{machine_id}/task/dispatch"
         msg = json.dumps(payload)
@@ -65,7 +70,7 @@ class MQTTClient:
             logger.info("MQTT connected OK")
             topics = [
                 ("nodeflow/+/heartbeat", 0),
-                ("nodeflow/+/status", 0),
+                ("nodeflow/+/status", 1),
                 ("nodeflow/+/task/ack", 1),
             ]
             client.subscribe(topics)
@@ -89,9 +94,9 @@ class MQTTClient:
             if msg_type == "heartbeat":
                 self._handle_heartbeat(payload, machine_id)
             elif msg_type == "task_status":
-                self._handle_task_status(payload)
+                self._handle_task_status(payload, machine_id)
             elif msg_type == "task_ack":
-                self._handle_task_ack(payload)
+                self._handle_task_ack(payload, machine_id)
 
             for cb in self._callbacks.get(msg_type, []):
                 try:
@@ -147,7 +152,7 @@ class MQTTClient:
         finally:
             db.close()
 
-    def _handle_task_status(self, payload: dict):
+    def _handle_task_status(self, payload: dict, machine_id: str | None = None):
         task_id = payload.get("task_id", "")
         if not task_id:
             return
@@ -156,8 +161,17 @@ class MQTTClient:
         try:
             t = db.query(EdgeTask).filter(EdgeTask.edge_task_id == task_id).first()
             if t:
-                t.state = payload.get("state", t.state)
-                t.progress_pct = payload.get("progress_pct", t.progress_pct)
+                source_machine = machine_id or payload.get("machine_id", "")
+                if source_machine != t.machine_id:
+                    logger.warning("Ignoring status for %s from machine %s", task_id, source_machine)
+                    return
+                incoming_state = payload.get("state", t.state)
+                if not can_transition_task_state(t.state, incoming_state):
+                    logger.warning("Ignoring invalid task transition %s: %s -> %s", task_id, t.state, incoming_state)
+                    return
+                t.state = incoming_state
+                incoming_progress = float(payload.get("progress_pct", t.progress_pct) or 0.0)
+                t.progress_pct = max(float(t.progress_pct or 0.0), incoming_progress)
                 t.current_node = payload.get("current_node")
                 t.error_code = payload.get("error_code")
                 t.error_detail = payload.get("error_detail")
@@ -167,7 +181,12 @@ class MQTTClient:
 
                 db.commit()
 
-                # 步骤自动推进: 当前 step 所有 task 完成后下发下一步
+                if t.state == "failed":
+                    self._mark_job_failed(db, t)
+                elif t.state == "cancelled":
+                    self._try_finalize_cancel(db, t)
+
+                # 当前 work unit 完成后先释放同机队列，再尝试推进步骤。
                 if t.state == "completed" and t.step_id:
                     self._try_advance_step(db, t)
 
@@ -177,12 +196,12 @@ class MQTTClient:
                         "state": t.state,
                         "progress_pct": t.progress_pct,
                         "current_node": t.current_node,
-                        "machine_id": payload.get("machine_id", ""),
+                        "machine_id": source_machine,
                     })
         finally:
             db.close()
 
-    def _handle_task_ack(self, payload: dict):
+    def _handle_task_ack(self, payload: dict, machine_id: str | None = None):
         dispatch_id = payload.get("dispatch_id", "")
         accepted = payload.get("accepted", False)
 
@@ -190,11 +209,19 @@ class MQTTClient:
         try:
             t = db.query(EdgeTask).filter(EdgeTask.dispatch_id == dispatch_id).first()
             if t:
+                source_machine = machine_id or payload.get("machine_id", "")
+                if source_machine != t.machine_id or payload.get("task_id") != t.edge_task_id:
+                    logger.warning("Ignoring mismatched ACK %s from %s", dispatch_id, source_machine)
+                    return
                 if accepted:
-                    t.state = "downloading"
+                    if can_transition_task_state(t.state, "downloading"):
+                        t.state = "downloading"
                     t.dispatched_at = time.time()
                 else:
-                    t.error_detail = payload.get("reject_reason", "rejected by edge")
+                    reason = payload.get("reject_reason", "rejected by edge")
+                    t.error_detail = reason
+                    if reason.startswith("machine_busy:"):
+                        t.state = "queued"
                 db.commit()
 
                 if self._sse:
@@ -208,12 +235,17 @@ class MQTTClient:
 
     def _try_advance_step(self, db, edge_task):
         """一个 step 的所有 task 完成后，自动下发下一步"""
-        from cloud.server.models.job import JobStep
+        from cloud.server.models.job import Job, JobStep
         from cloud.server.services.dispatcher import Dispatcher
 
         # 幂等守卫: step 已完成则跳过
         step = db.query(JobStep).filter(JobStep.id == edge_task.step_id).first()
         if not step or step.status == "completed":
+            return
+
+        dispatcher = Dispatcher(self)
+        if dispatcher.dispatch_queued_tasks(db, edge_task.step_id) > 0:
+            db.commit()
             return
 
         # 检查同 step 所有 task 是否都 completed
@@ -223,12 +255,48 @@ class MQTTClient:
         if not all(et.state == "completed" for et in step_tasks):
             return
 
-        # 先下发下一步，成功后再标记当前 step 完成
-        # 顺序: dispatch 失败时不写 completed，下一轮 task_status 事件会重试
-        logger.info(f"Step {step.seq_index} all tasks completed, dispatching next step for job {edge_task.job_id}")
-        dispatcher = Dispatcher(self)
-        dispatcher.dispatch_next_step(db, edge_task.job_id)
-
         step.status = "completed"
+        db.flush()
+        logger.info(
+            f"Step {step.seq_index} all tasks completed for job {edge_task.job_id}"
+        )
+
+        job = db.query(Job).filter(Job.id == edge_task.job_id).first()
+        result = dispatcher.dispatch_next_step(db, edge_task.job_id, commit=False)
+
         db.commit()
-        logger.info(f"Step {step.seq_index} marked completed")
+        if result.get("dispatched", 0) > 0:
+            logger.info(
+                f"Dispatched step {result.get('step_seq')} for job {edge_task.job_id}"
+            )
+        elif job and job.status == "completed":
+            logger.info(f"Job {edge_task.job_id} completed")
+
+    def _mark_job_failed(self, db, edge_task):
+        from cloud.server.models.job import Job, JobStep
+
+        step = db.query(JobStep).filter(JobStep.id == edge_task.step_id).first()
+        job = db.query(Job).filter(Job.id == edge_task.job_id).first()
+        if step:
+            step.status = "failed"
+        if job:
+            job.status = "failed"
+        db.commit()
+
+    def _try_finalize_cancel(self, db, edge_task):
+        from cloud.server.models.job import Job, JobStep
+
+        active = db.query(EdgeTask).filter(
+            EdgeTask.job_id == edge_task.job_id,
+            EdgeTask.state.in_(["pending", "downloading", "ready", "running",
+                                "cancel_requested", "communication_lost"]),
+        ).count()
+        if active:
+            return
+        job = db.query(Job).filter(Job.id == edge_task.job_id).first()
+        if job and job.status == "cancel_requested":
+            job.status = "cancelled"
+            for step in db.query(JobStep).filter(JobStep.job_id == job.id).all():
+                if step.status == "cancel_requested":
+                    step.status = "cancelled"
+            db.commit()

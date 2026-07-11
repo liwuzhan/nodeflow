@@ -1,4 +1,98 @@
 import math
+from typing import Any, Optional
+
+
+class ControlSafetyGuard:
+    """Track input freshness and stop an unrecoverable continuous pivot."""
+
+    PIVOT_STATUSES = {"pivot", "turn_align"}
+
+    def __init__(
+        self,
+        pose_timeout_s: float = 0.5,
+        target_timeout_s: float = 0.5,
+        pivot_timeout_s: float = 8.0,
+    ):
+        self.pose_timeout_s = max(0.0, float(pose_timeout_s))
+        self.target_timeout_s = max(0.0, float(target_timeout_s))
+        self.pivot_timeout_s = max(0.0, float(pivot_timeout_s))
+        self.last_pose_received_at: Optional[float] = None
+        self.last_target_received_at: Optional[float] = None
+        self._target_signature = None
+        self._pivot_started_at: Optional[float] = None
+        self._pivot_timed_out = False
+
+    @staticmethod
+    def _signature(target: dict) -> tuple[Any, ...]:
+        index = target.get("index")
+        if index is not None:
+            return ("index", index, bool(target.get("final")), target.get("zone"))
+        return (
+            "point",
+            round(float(target.get("x", 0.0)), 2),
+            round(float(target.get("y", 0.0)), 2),
+            bool(target.get("final")),
+        )
+
+    def note_pose(self, received_at: float) -> None:
+        self.last_pose_received_at = received_at
+
+    def note_target(self, target: dict, received_at: float) -> None:
+        signature = self._signature(target)
+        if signature != self._target_signature:
+            self._pivot_started_at = None
+            self._pivot_timed_out = False
+            self._target_signature = signature
+        self.last_target_received_at = received_at
+
+    @staticmethod
+    def _stop(timestamp: float, status: str, **details: Any) -> dict:
+        return {
+            "linear_velocity": 0.0,
+            "angular_velocity": 0.0,
+            "timestamp": timestamp,
+            "status": status,
+            "speed_factor": 0.0,
+            "safety_stop": True,
+            **details,
+        }
+
+    def apply(self, command: dict, now: float, timestamp: float) -> dict:
+        if self.last_pose_received_at is None:
+            return self._stop(timestamp, "waiting_for_pose")
+        pose_age = max(0.0, now - self.last_pose_received_at)
+        if self.pose_timeout_s > 0 and pose_age > self.pose_timeout_s:
+            self._pivot_started_at = None
+            self._pivot_timed_out = False
+            return self._stop(timestamp, "stale_pose", input_age_s=round(pose_age, 3))
+
+        if self.last_target_received_at is None:
+            return self._stop(timestamp, "waiting_for_target")
+        target_age = max(0.0, now - self.last_target_received_at)
+        if self.target_timeout_s > 0 and target_age > self.target_timeout_s:
+            self._pivot_started_at = None
+            self._pivot_timed_out = False
+            return self._stop(timestamp, "stale_target", input_age_s=round(target_age, 3))
+
+        status = command.get("status")
+        if status not in self.PIVOT_STATUSES:
+            self._pivot_started_at = None
+            self._pivot_timed_out = False
+            return command
+
+        if self._pivot_started_at is None:
+            self._pivot_started_at = now
+        pivot_elapsed = max(0.0, now - self._pivot_started_at)
+        if self.pivot_timeout_s > 0 and pivot_elapsed >= self.pivot_timeout_s:
+            self._pivot_timed_out = True
+
+        if self._pivot_timed_out:
+            return self._stop(
+                timestamp,
+                "pivot_timeout",
+                pivot_elapsed_s=round(pivot_elapsed, 3),
+            )
+        return command
 
 def normalize_angle(angle_rad: float) -> float:
     """
@@ -38,7 +132,8 @@ def compute_velocity_cmd(
     cross_track_recovery_factor: float = 0.15,
     headland_turn_heading_gain: float = 2.0,
     headland_turn_align_threshold_deg: float = 35.0,
-    headland_turn_min_speed_factor: float = 0.25
+    headland_turn_min_speed_factor: float = 0.25,
+    headland_turn_use_path_heading: bool = False,
 ) -> dict:
     """
     计算速度控制命令（ENU坐标系）
@@ -103,7 +198,8 @@ def compute_velocity_cmd(
     # 5. 计算航向角误差（数学坐标系，弧度）
     error_rad = normalize_angle(target_theta - current_theta)
     target_mode = "point"
-    if segment_type == "headland_turn" and path_heading_rad is not None:
+    is_headland_turn = segment_type == "headland_turn"
+    if is_headland_turn and headland_turn_use_path_heading and path_heading_rad is not None:
         try:
             path_heading = float(path_heading_rad)
             error_rad = normalize_angle(path_heading - current_theta)
@@ -182,7 +278,7 @@ def compute_velocity_cmd(
         speed_limit_factor = max(0.0, min(1.0, float(segment_speed_limit) / max_speed))
 
     speed_factor = min(view_factor, mode_factor, turn_factor, cte_factor, speed_limit_factor)
-    if target_mode == "path_heading":
+    if is_headland_turn:
         speed_factor = min(speed_factor, max(0.0, min(1.0, headland_turn_min_speed_factor)))
 
     if v > 0.0:
@@ -190,15 +286,14 @@ def compute_velocity_cmd(
         if v < min_speed:
             v = min_speed
 
-    # 普通跟踪在低速时保留至少一半角速度；headland_turn 使用路径航向
-    # 对齐，不能再削弱角速度，否则掉头段会转不够。
-    if speed_factor < 1.0 and target_mode != "path_heading":
+    # 边走边转时保留至少一半角速度；原地转向不能再被速度因子削弱。
+    if speed_factor < 1.0 and target_mode != "path_heading" and v > 0.0:
         w *= max(speed_factor, 0.5)
 
     status = None
     if error_deg >= active_pivot_threshold:
         status = "turn_align" if target_mode == "path_heading" else "pivot"
-    elif target_mode == "path_heading":
+    elif is_headland_turn:
         status = "headland_turn"
     elif speed_factor < 1.0:
         status = "slowdown"
@@ -216,7 +311,7 @@ def compute_velocity_cmd(
         "speed_limit_factor": speed_limit_factor,
         "target_mode": target_mode,
     }
-    if target_mode == "path_heading":
+    if is_headland_turn:
         result["headland_turn"] = True
         result["heading_error_deg"] = round(error_deg, 2)
         result["headland_turn_align_threshold_deg"] = float(active_pivot_threshold)

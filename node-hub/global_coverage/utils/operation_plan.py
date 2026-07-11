@@ -1,5 +1,5 @@
 import math
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .models import VehicleConfig
 
@@ -106,6 +106,7 @@ def build_segments_from_zones(
     vehicle: VehicleConfig,
     work_speed_mps: float = 1.2,
     turn_speed_mps: float = 0.5,
+    transit_segment_type: str = "headland_turn",
 ) -> List[Dict[str, Any]]:
     if not path:
         return []
@@ -116,7 +117,7 @@ def build_segments_from_zones(
     seg_counts = {"work": 0, "headland_turn": 0, "transit": 0}
 
     def segment_type_for_zone(zone: str) -> str:
-        return "work" if zone == "work" else "headland_turn"
+        return "work" if zone == "work" else transit_segment_type
 
     for i in range(1, len(path) + 1):
         at_end = i == len(path)
@@ -127,7 +128,12 @@ def build_segments_from_zones(
         zone = zones[start] if start < len(zones) else "work"
         seg_type = segment_type_for_zone(zone)
         seg_counts[seg_type] = seg_counts.get(seg_type, 0) + 1
-        seg_id = f"{'row' if seg_type == 'work' else 'turn'}_{seg_counts[seg_type]:03d}"
+        prefix = {
+            "work": "row",
+            "headland_turn": "turn",
+            "transit": "transit",
+        }.get(seg_type, "segment")
+        seg_id = f"{prefix}_{seg_counts[seg_type]:03d}"
         end = i - 1
         length = max(0.0, stations[end] - stations[start])
 
@@ -149,7 +155,11 @@ def build_segments_from_zones(
             "length_m": round(length, 3),
             "motion": {
                 "speed_limit_mps": speed_limit,
-                "preferred_tracker": "line" if seg_type == "work" else "turn",
+                "preferred_tracker": (
+                    "line" if seg_type == "work"
+                    else "turn" if seg_type == "headland_turn"
+                    else "path"
+                ),
             },
             "implement": implement,
         })
@@ -168,9 +178,25 @@ def build_operation_plan(
     turn_zone_radius_m: float = 4.0,
     work_speed_mps: float = 1.2,
     turn_speed_mps: float = 0.5,
+    path_zones: Optional[List[str]] = None,
+    planner_metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    zones = classify_path_zones(path, turn_angle_threshold_deg, turn_zone_radius_m)
-    segments = build_segments_from_zones(path, zones, vehicle, work_speed_mps, turn_speed_mps)
+    if path_zones is not None:
+        if len(path_zones) != len(path):
+            raise ValueError("path_zones must have the same length as path")
+        zones = list(path_zones)
+        transit_segment_type = "transit"
+    else:
+        zones = classify_path_zones(path, turn_angle_threshold_deg, turn_zone_radius_m)
+        transit_segment_type = "headland_turn"
+    segments = build_segments_from_zones(
+        path,
+        zones,
+        vehicle,
+        work_speed_mps,
+        turn_speed_mps,
+        transit_segment_type=transit_segment_type,
+    )
 
     return {
         "task_id": task_id,
@@ -185,6 +211,8 @@ def build_operation_plan(
             "overlap_ratio": vehicle.overlap_ratio,
             "path_inset_m": vehicle.path_inset_m,
             "min_turn_radius_m": vehicle.min_turn_radius_m,
+            "work_min_turn_radius_m": vehicle.effective_work_min_turn_radius_m,
+            "work_max_curvature_rate_1pm2": vehicle.work_max_curvature_rate_1pm2,
             "pivot_turn": vehicle.pivot_turn,
         },
         "summary": {
@@ -193,5 +221,7 @@ def build_operation_plan(
             "segment_count": len(segments),
             "work_segment_count": sum(1 for s in segments if s.get("type") == "work"),
             "turn_segment_count": sum(1 for s in segments if s.get("type") == "headland_turn"),
+            "transit_segment_count": sum(1 for s in segments if s.get("type") == "transit"),
+            "planner": dict(planner_metadata or {}),
         },
     }

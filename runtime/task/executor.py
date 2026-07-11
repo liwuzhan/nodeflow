@@ -2,6 +2,7 @@ import time
 import threading
 import os
 import subprocess
+import math
 from pathlib import Path
 from typing import Optional
 
@@ -55,6 +56,14 @@ class TaskExecutor:
         self._current_task_id: Optional[str] = None
         self._monitor_thread: Optional[threading.Thread] = None
         self._monitor_stop = threading.Event()
+        self._on_progress = None
+        self._on_completed = None
+        self._on_failed = None
+
+    def set_callbacks(self, on_progress=None, on_completed=None, on_failed=None):
+        self._on_progress = on_progress
+        self._on_completed = on_completed
+        self._on_failed = on_failed
 
     @property
     def current_task_id(self) -> Optional[str]:
@@ -83,6 +92,7 @@ class TaskExecutor:
         payload = {
             "command": "start_dataflow",
             "task_id": task.task_id,
+            "preset_yaml": task.preset_yaml,
             "node_params": task.node_params,
             "timestamp": time.time(),
         }
@@ -125,35 +135,122 @@ class TaskExecutor:
 
     def _stop_monitor(self):
         self._monitor_stop.set()
-        if self._monitor_thread and self._monitor_thread.is_alive():
+        if (
+            self._monitor_thread
+            and self._monitor_thread.is_alive()
+            and self._monitor_thread is not threading.current_thread()
+        ):
             self._monitor_thread.join(timeout=2)
 
     def _monitor_loop(self, task: Task):
-        interval = 60
+        interval = 1.0
+        report_ticks = 0
+        completion_ticks = 0
         while not self._monitor_stop.wait(interval):
             try:
                 progress = self._compute_progress(task)
-                logger.info(f"Task {task.task_id}: state={progress.state.value} "
-                            f"node={progress.current_node}")
+                report_ticks += 1
+                if report_ticks >= 10:
+                    report_ticks = 0
+                    if self._on_progress:
+                        self._on_progress(progress)
+                    logger.info(f"Task {task.task_id}: progress={progress.progress_pct:.1f}% "
+                                f"node={progress.current_node}")
+
+                runtime_status = self._read_buffer("runtime.status")
+                stored_task = self.store.get(task.task_id)
+                started_at = stored_task.started_at if stored_task else None
+                if (
+                    runtime_status
+                    and runtime_status.get("command_status") == "failed"
+                    and runtime_status.get("active_task_id", "") in ("", task.task_id)
+                    and float(runtime_status.get("timestamp", 0.0) or 0.0) >= float(started_at or 0.0)
+                ):
+                    error = runtime_status.get("error") or "runtime command failed"
+                    self.mark_failed(task.task_id, error)
+                    if self._on_failed:
+                        self._on_failed(task.task_id, error)
+                    return
+
+                if self._is_safely_completed():
+                    completion_ticks += 1
+                else:
+                    completion_ticks = 0
+                if completion_ticks >= 3:
+                    self._stop_dataflow(task.task_id)
+                    self.mark_completed(task.task_id)
+                    if self._on_completed:
+                        self._on_completed(task.task_id)
+                    return
             except Exception as e:
                 logger.error(f"Progress monitor error: {e}")
 
     def _compute_progress(self, task: Task) -> TaskProgress:
+        stored = self.store.get(task.task_id)
         progress = TaskProgress(
             task_id=task.task_id,
             machine_id=self.machine_id,
-            state=task.state,
+            state=stored.state if stored else task.state,
             progress_pct=0.0,
             current_node="unknown",
         )
+        next_point = self._read_buffer("waypoint_selector.next_point")
+        if next_point:
+            total = max(0, int(next_point.get("total", 0) or 0))
+            consumed = max(0, int(next_point.get("consumed", 0) or 0))
+            if total:
+                progress.progress_pct = min(100.0, consumed * 100.0 / total)
+            progress.current_node = "waypoint_selector"
+        else:
+            runtime_status = self._read_buffer("runtime.status")
+            if runtime_status and runtime_status.get("dataflow_running"):
+                progress.current_node = "dataflow"
+        return progress
+
+    @staticmethod
+    def _read_buffer(name: str) -> dict | None:
+        try:
+            buf = SharedBufferLite(name, create=False)
+            value = buf.read()
+            buf.close()
+            return value
+        except Exception:
+            return None
+
+    def _is_safely_completed(self) -> bool:
+        target = self._read_buffer("waypoint_selector.next_point")
+        pose = self._read_buffer("coord_transform.pose_enu")
+        velocity = self._read_buffer("track_controller.velocity_cmd")
+        tillage = self._read_buffer("tillage_controller.tillage_status")
+        if not target or not pose or not velocity or not tillage or not target.get("final"):
+            return False
+        distance = math.hypot(
+            float(pose.get("x", 0.0)) - float(target.get("x", 0.0)),
+            float(pose.get("y", 0.0)) - float(target.get("y", 0.0)),
+        )
+        stopped = (
+            abs(float(velocity.get("linear_velocity", 0.0))) <= 0.05
+            and abs(float(velocity.get("angular_velocity", 0.0))) <= 0.05
+        )
+        implement_safe = (
+            tillage.get("state") == "transport"
+            and not bool(tillage.get("pto_on", False))
+            and float(tillage.get("hitch_height", 0.0)) <= 0.05
+        )
+        return distance <= 1.5 and stopped and implement_safe
+
+    @staticmethod
+    def _stop_dataflow(task_id: str):
         try:
             buf = SharedBufferLite("runtime.control", create=False)
-            seq = buf.get_sequence()
-            if seq > 0:
-                progress.current_node = "dispatched"
-        except Exception:
-            pass
-        return progress
+            buf.write({
+                "command": "stop_dataflow",
+                "task_id": task_id,
+                "timestamp": time.time(),
+            })
+            buf.close()
+        except Exception as exc:
+            logger.warning(f"Failed to stop completed task {task_id}: {exc}")
 
     def mark_completed(self, task_id: str):
         self._stop_monitor()

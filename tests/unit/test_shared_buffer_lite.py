@@ -19,6 +19,8 @@ import multiprocessing
 from pathlib import Path
 from unittest import mock
 
+import pytest
+
 # 添加项目根目录到路径
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
@@ -29,6 +31,65 @@ try:
     HAS_NUMPY = True
 except ImportError:
     HAS_NUMPY = False
+
+
+class _PausingMmap:
+    def __init__(self, backing, write_started, finish_write):
+        self._backing = backing
+        self._write_started = write_started
+        self._finish_write = finish_write
+        self._paused = False
+
+    def __getitem__(self, key):
+        return self._backing[key]
+
+    def __setitem__(self, key, value):
+        if (
+            not self._paused
+            and isinstance(key, slice)
+            and key.start == SharedBufferLite.HEADER_SIZE
+            and len(value) > 1
+        ):
+            self._paused = True
+            midpoint = len(value) // 2
+            self._backing[key.start:key.start + midpoint] = value[:midpoint]
+            self._write_started.set()
+            self._finish_write.wait(timeout=5)
+            self._backing[key.start + midpoint:key.stop] = value[midpoint:]
+            return
+        self._backing[key] = value
+
+    def flush(self):
+        return self._backing.flush()
+
+
+class _FailingMmap:
+    def __init__(self, backing):
+        self._backing = backing
+
+    def __getitem__(self, key):
+        return self._backing[key]
+
+    def __setitem__(self, key, value):
+        if isinstance(key, slice) and key.start == SharedBufferLite.HEADER_SIZE:
+            midpoint = len(value) // 2
+            self._backing[key.start:key.start + midpoint] = value[:midpoint]
+            raise OSError("simulated writer failure")
+        self._backing[key] = value
+
+    def flush(self):
+        return self._backing.flush()
+
+
+def _write_with_pause(buffer_name, size, payload, write_started, finish_write):
+    buffer = SharedBufferLite(buffer_name, size=size, create=False)
+    backing = buffer.mmap
+    try:
+        buffer.mmap = _PausingMmap(backing, write_started, finish_write)
+        buffer.write(payload)
+    finally:
+        buffer.mmap = backing
+        buffer.close()
 
 
 # ========== 测试类 ==========
@@ -94,6 +155,7 @@ class TestSequenceNumberManagement:
         assert seq1 == 0xFFFFFFFE, f"预期 0xFFFFFFFE, 得到 {seq1:#x}"
         assert seq2 == 0xFFFFFFFF, f"预期 0xFFFFFFFF, 得到 {seq2:#x}"
         assert seq3 == 0, f"预期 0 (回绕), 得到 {seq3:#x}"
+        assert buffer.read() == data3, "回绕到序列号 0 后最新数据仍应可读"
 
         buffer.close()
         SharedBufferLite.cleanup_all()
@@ -329,6 +391,75 @@ class TestConcurrencySafety:
         buffer.close()
         SharedBufferLite.cleanup_all()
         print("✅ 并发读写测试通过")
+
+    @pytest.mark.skipif(os.name == "nt", reason="edge process locking uses POSIX flock")
+    def test_cross_process_reader_never_observes_partial_write(self):
+        SharedBufferLite.cleanup_all()
+        buffer_name = "test_cross_process_snapshot"
+        size = 2 * 1024 * 1024
+        initial = {"payload": b"A" * (512 * 1024)}
+        updated = {"payload": b"B" * (512 * 1024)}
+
+        writer_buffer = SharedBufferLite(buffer_name, size=size, create=True)
+        writer_buffer.write(initial)
+        reader_buffer = SharedBufferLite(buffer_name, size=size, create=False)
+
+        ctx = multiprocessing.get_context("spawn")
+        write_started = ctx.Event()
+        finish_write = ctx.Event()
+        process = ctx.Process(
+            target=_write_with_pause,
+            args=(buffer_name, size, updated, write_started, finish_write),
+        )
+        process.start()
+
+        read_done = threading.Event()
+        result = {}
+
+        def read_snapshot():
+            result["data"] = reader_buffer.read()
+            read_done.set()
+
+        try:
+            assert write_started.wait(timeout=5), "writer did not reach partial-write point"
+            reader_thread = threading.Thread(target=read_snapshot)
+            reader_thread.start()
+
+            assert not read_done.wait(timeout=0.1), "reader must wait for the write lock"
+            finish_write.set()
+
+            reader_thread.join(timeout=5)
+            process.join(timeout=5)
+            assert not reader_thread.is_alive()
+            assert process.exitcode == 0
+            assert result["data"] == updated
+        finally:
+            finish_write.set()
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=2)
+            reader_buffer.close()
+            writer_buffer.close()
+            SharedBufferLite.cleanup_all()
+
+    def test_failed_write_leaves_no_readable_partial_snapshot(self):
+        SharedBufferLite.cleanup_all()
+        buffer = SharedBufferLite("test_failed_snapshot", size=1024 * 1024, create=True)
+        buffer.write({"payload": b"A" * 1024})
+        backing = buffer.mmap
+
+        try:
+            buffer.mmap = _FailingMmap(backing)
+            with pytest.raises(OSError, match="simulated writer failure"):
+                buffer.write({"payload": b"B" * 1024})
+        finally:
+            buffer.mmap = backing
+
+        try:
+            assert buffer.read() is None
+        finally:
+            buffer.close()
+            SharedBufferLite.cleanup_all()
 
     def test_mmap_flush_consistency(self):
         """flush() 后数据立即可读"""

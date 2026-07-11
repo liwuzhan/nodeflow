@@ -69,33 +69,39 @@ class StartupCoordinator:
         logger.info(f"Starting {len(nodes)} nodes in {len(layers)} layers")
         logger.info("Using ZeroMQ IPC for inter-node communication")
 
-        # ========== 按层启动节点 ==========
-        for layer_idx, layer_nodes in enumerate(layers):
-            if should_cancel and should_cancel():
-                logger.info("Startup cancelled before next layer")
-                break
+        try:
+            # ========== 按层启动节点 ==========
+            for layer_idx, layer_nodes in enumerate(layers):
+                if should_cancel and should_cancel():
+                    logger.info("Startup cancelled before next layer")
+                    break
 
-            logger.info(f"=== Starting Layer {layer_idx} ({len(layer_nodes)} nodes) ===")
-            logger.info(f"Nodes: {layer_nodes}")
+                logger.info(f"=== Starting Layer {layer_idx} ({len(layer_nodes)} nodes) ===")
+                logger.info(f"Nodes: {layer_nodes}")
 
-            # 并行启动该层所有节点
-            layer_processes = self._start_layer(layer_nodes, nodes, should_cancel=should_cancel)
+                layer_processes = self._start_layer(
+                    layer_nodes, nodes, should_cancel=should_cancel
+                )
+                processes.update(layer_processes)
 
-            # 等待该层节点启动完成
-            self._wait_for_layer(layer_processes, startup_timeout, should_cancel=should_cancel)
+                self._wait_for_layer(
+                    layer_processes, startup_timeout, should_cancel=should_cancel
+                )
 
-            # 更新总进程字典
-            processes.update(layer_processes)
-
-            # 层之间延迟（给ZMQ SUB时间连接到PUB）
-            if layer_idx < len(layers) - 1:
-                logger.debug(f"Waiting {startup_delay}s before starting next layer (ZMQ connection setup)")
-                delay_deadline = time.time() + startup_delay
-                while time.time() < delay_deadline:
-                    if should_cancel and should_cancel():
-                        logger.info("Startup cancelled during layer delay")
-                        return processes
-                    time.sleep(min(0.1, delay_deadline - time.time()))
+                # 层之间延迟（给ZMQ SUB时间连接到PUB）
+                if layer_idx < len(layers) - 1:
+                    logger.debug(f"Waiting {startup_delay}s before starting next layer (ZMQ connection setup)")
+                    delay_deadline = time.time() + startup_delay
+                    while time.time() < delay_deadline:
+                        if should_cancel and should_cancel():
+                            logger.info("Startup cancelled during layer delay")
+                            return processes
+                        time.sleep(min(0.1, delay_deadline - time.time()))
+        except Exception:
+            if processes:
+                logger.info("Startup failed; rolling back started nodes")
+                self.shutdown_nodes(processes)
+            raise
 
         logger.info(f"All {len(processes)} nodes started successfully")
         return processes
@@ -120,31 +126,35 @@ class StartupCoordinator:
         - NodeStartupError: 节点启动失败
         """
         layer_processes = {}
+        node_id = "<unknown>"
 
-        for node_id in layer_nodes:
-            if should_cancel and should_cancel():
-                logger.info("Startup cancelled while starting layer")
-                break
+        try:
+            for node_id in layer_nodes:
+                if should_cancel and should_cancel():
+                    logger.info("Startup cancelled while starting layer")
+                    break
 
-            node = nodes[node_id]
-            manifest = self.registry.get_manifest(node.package)
+                node = nodes[node_id]
+                manifest = self.registry.get_manifest(node.package)
 
-            if not manifest:
-                raise NodeStartupError(
-                    node_id,
-                    f"Node package '{node.package}' not found in registry"
-                )
+                if not manifest:
+                    raise NodeStartupError(
+                        node_id,
+                        f"Node package '{node.package}' not found in registry"
+                    )
 
-            try:
                 # 启动节点
                 process = self.launcher.launch(node, manifest)
                 layer_processes[node_id] = process
 
                 logger.info(f"  ✓ Node '{node_id}' started (PID {process.pid})")
-
-            except Exception as e:
-                logger.error(f"  ✗ Node '{node_id}' failed to start: {e}")
-                raise NodeStartupError(node_id, str(e))
+        except Exception as e:
+            logger.error(f"  ✗ Node '{node_id}' failed to start: {e}")
+            if layer_processes:
+                self.shutdown_nodes(layer_processes)
+            if isinstance(e, NodeStartupError):
+                raise
+            raise NodeStartupError(node_id, str(e)) from e
 
         return layer_processes
 

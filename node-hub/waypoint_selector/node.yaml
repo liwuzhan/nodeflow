@@ -119,6 +119,11 @@ params:
     default: 2.5
     description: "path_progress 前瞻目标距离 (米)"
 
+  progress_target_turn_lookahead_m:
+    type: number
+    default: 1.5
+    description: "headland_turn 段的前瞻目标距离 (米)"
+
   progress_target_max_cross_track_m:
     type: number
     default: 12.0

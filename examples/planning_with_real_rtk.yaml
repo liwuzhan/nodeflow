@@ -61,7 +61,12 @@ nodes:
     package: global_coverage
     description: "根据地块和车辆配置生成全覆盖路径"
     params:
+      planning_strategy: contour_spiral
       path_point_spacing: 0.5
+      turn_angle_threshold_deg: 45.0
+      turn_zone_radius_m: 4.0
+      work_speed_limit_mps: 1.2
+      turn_speed_limit_mps: 0.5
 
   # ┌─────────────────────────────────────────────────────────────────────┐
   # │ RTK滤波器                                                            │
@@ -100,6 +105,19 @@ nodes:
       view_expand_factor: 2.0
       max_view_width: 12.0
       continuous_consume_distance: 1.5
+      progress_sync_max_cross_track_m: 12.0
+      progress_target_enabled: true
+      progress_target_lookahead_m: 2.5
+      progress_target_turn_lookahead_m: 1.5
+      progress_target_max_cross_track_m: 12.0
+
+  - id: path_progress
+    package: path_progress
+    description: "将实时位姿投影到 operation_plan，输出当前段和误差"
+    params:
+      search_window: 120
+      heading_match_weight_m: 2.0
+      publish_interval: 0.02
 
   # ┌─────────────────────────────────────────────────────────────────────┐
   # │ 轨迹控制器                                                           │
@@ -115,6 +133,18 @@ nodes:
       pivot_threshold_deg: 20.0
       decel_start_distance: 3.0
       final_stop_distance: 0.5
+
+  - id: tillage_controller
+    package: tillage_controller
+    description: "旋耕机具 PTO 与悬挂状态机"
+    params:
+      hitch_lower_time_s: 1.5
+      hitch_raise_time_s: 1.5
+      headland_width_m: 3.0
+      pto_engage_delay_s: 0.5
+      auto_zone_detect: true
+      hitch_working_height: 1.0
+      enable_verbose_log: false
 
   # ┌─────────────────────────────────────────────────────────────────────┐
   # │ PWM驱动节点 - 真机电机控制                                            │
@@ -215,9 +245,25 @@ edges:
     to: waypoint_selector.global_path
     description: "规划路径 (ENU坐标)"
 
+  - from: global_coverage.operation_plan
+    to: waypoint_selector.operation_plan
+    description: "作业计划与路径版本"
+
+  - from: global_coverage.operation_plan
+    to: path_progress.operation_plan
+    description: "作业计划 → 路径进度"
+
   - from: coord_transform.pose_enu
     to: waypoint_selector.pose_enu
     description: "ENU姿态 → 前瞻点选择"
+
+  - from: coord_transform.pose_enu
+    to: path_progress.pose_enu
+    description: "ENU姿态 → 路径进度"
+
+  - from: path_progress.progress_state
+    to: waypoint_selector.path_progress
+    description: "路径进度 → 前瞻点同步"
 
   # 前瞻点 + ENU姿态 → 轨迹控制
   - from: waypoint_selector.next_point
@@ -227,6 +273,26 @@ edges:
   - from: coord_transform.pose_enu
     to: track_controller.pose_enu
     description: "ENU姿态 → 轨迹控制"
+
+  - from: path_progress.progress_state
+    to: track_controller.path_progress
+    description: "路径进度 → 段限速和误差保护"
+
+  - from: coord_transform.pose_enu
+    to: tillage_controller.pose_enu
+    description: "ENU姿态 → 机具控制"
+
+  - from: waypoint_selector.next_point
+    to: tillage_controller.next_point
+    description: "终点与 zone → 机具控制"
+
+  - from: coord_transform.task_enu
+    to: tillage_controller.task_enu
+    description: "地块边界 → 机具控制"
+
+  - from: path_progress.progress_state
+    to: tillage_controller.path_progress
+    description: "作业段语义 → 机具控制"
 
   # 速度指令 → PWM驱动（真机电机）
   - from: track_controller.velocity_cmd
@@ -247,10 +313,34 @@ edges:
     to: trajectory_viz.global_path
     description: "规划的全局路径 (ENU坐标)"
 
+  - from: global_coverage.operation_plan
+    to: trajectory_viz.operation_plan
+    description: "作业计划 → 可视化"
+
   # ENU姿态 → 可视化
   - from: coord_transform.pose_enu
     to: trajectory_viz.pose_enu
     description: "实际轨迹 (ENU坐标)"
+
+  - from: path_progress.progress_state
+    to: trajectory_viz.path_progress
+    description: "路径进度 → 可视化"
+
+  - from: waypoint_selector.next_point
+    to: trajectory_viz.next_point
+    description: "前瞻点 → 可视化"
+
+  - from: track_controller.velocity_cmd
+    to: trajectory_viz.velocity_cmd
+    description: "速度指令 → 可视化"
+
+  - from: tillage_controller.tillage_cmd
+    to: trajectory_viz.tillage_cmd
+    description: "机具命令 → 可视化"
+
+  - from: tillage_controller.tillage_status
+    to: trajectory_viz.tillage_status
+    description: "机具状态 → 可视化"
 
   # ┌─────────────────────────────────────────────────────────────────────┐
   # │ 监测和日志数据流（暂时禁用）

@@ -47,6 +47,11 @@ params:
     default: 8.0
     description: "局部投影横向误差超过该值时触发全路径重捕获"
 
+  heading_match_weight_m:
+    type: number
+    default: 2.0
+    description: "路径候选航向相差180度时附加的等效距离惩罚，避免跳到相邻反向作业行"
+
   publish_interval:
     type: number
     default: 0.02

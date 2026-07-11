@@ -24,6 +24,7 @@ def project_pose_to_path(
     path: List[Tuple[float, float]],
     search_start_idx: int = 0,
     search_window: int = 80,
+    heading_match_weight_m: float = 2.0,
 ) -> Optional[Dict[str, Any]]:
     if not pose or len(path) < 2:
         return None
@@ -41,7 +42,13 @@ def project_pose_to_path(
 
     stations = _path_stations(path)
     best = None
-    best_dist_sq = float("inf")
+    best_score = float("inf")
+    pose_theta = pose.get("theta")
+    try:
+        pose_theta = float(pose_theta) if pose_theta is not None else None
+    except (TypeError, ValueError):
+        pose_theta = None
+    heading_weight = max(0.0, float(heading_match_weight_m))
 
     for i in range(start, end):
         x0, y0 = path[i]
@@ -59,13 +66,19 @@ def project_pose_to_path(
         ex = px - cx
         ey = py - cy
         dist_sq = ex * ex + ey * ey
+        heading = math.atan2(dy, dx)
+        heading_error = (
+            abs(normalize_angle(heading - pose_theta))
+            if pose_theta is not None
+            else 0.0
+        )
+        score = math.sqrt(dist_sq) + heading_weight * (heading_error / math.pi)
 
-        if dist_sq < best_dist_sq:
+        if score < best_score:
             seg_len = math.sqrt(seg_len_sq)
-            heading = math.atan2(dy, dx)
             station = stations[i] + t * seg_len
             signed_error = (dx * (py - y0) - dy * (px - x0)) / seg_len
-            best_dist_sq = dist_sq
+            best_score = score
             best = {
                 "path_index": i,
                 "segment_fraction": t,
@@ -122,6 +135,7 @@ def compute_progress(
     last_path_index: int = 0,
     search_window: int = 100,
     relocalize_error_m: float = 8.0,
+    heading_match_weight_m: float = 2.0,
 ) -> Optional[Dict[str, Any]]:
     if not operation_plan or not pose:
         return None
@@ -132,13 +146,25 @@ def compute_progress(
     if len(path) < 2:
         return None
 
-    projection = project_pose_to_path(pose, path, last_path_index, search_window)
+    projection = project_pose_to_path(
+        pose,
+        path,
+        last_path_index,
+        search_window,
+        heading_match_weight_m=heading_match_weight_m,
+    )
     if not projection:
         return None
 
     relocalized = False
     if abs(projection["cross_track_error_m"]) > relocalize_error_m:
-        full_projection = project_pose_to_path(pose, path, 0, len(path) - 1)
+        full_projection = project_pose_to_path(
+            pose,
+            path,
+            0,
+            len(path) - 1,
+            heading_match_weight_m=heading_match_weight_m,
+        )
         if full_projection and abs(full_projection["cross_track_error_m"]) < abs(projection["cross_track_error_m"]):
             projection = full_projection
             relocalized = True

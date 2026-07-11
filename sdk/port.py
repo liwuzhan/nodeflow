@@ -385,26 +385,21 @@ class InputPort:
             # 给socket时间建立连接
             time.sleep(0.1)
 
-            # 首次连接：从buffer读取历史数据（解决Late-Joiner问题）
+            # 首次连接：原子读取历史序列号和数据（解决Late-Joiner问题）
             if self.buffer:
-                current_seq = self.buffer.get_sequence()
-                if current_seq > 0:
-                    # 有历史数据，读取并缓存
-                    history_data = self.buffer.read()
-                    if history_data is not None:
-                        self._cached_history = history_data
-                        self.last_sequence = current_seq
-                        logger.info(
-                            f"InputPort '{self.name}' read history on first connection: "
-                            f"seq={current_seq} (Late-Joiner: data available)"
-                        )
-                    else:
-                        # Buffer中没有有效数据
-                        self.last_sequence = current_seq
-                        logger.debug(f"InputPort '{self.name}' synced to sequence={current_seq} (no data in buffer)")
+                current_seq, history_data = self.buffer.read_with_sequence()
+                self.last_sequence = current_seq
+                if history_data is not None:
+                    self._cached_history = history_data
+                    logger.info(
+                        f"InputPort '{self.name}' read history on first connection: "
+                        f"seq={current_seq} (Late-Joiner: data available)"
+                    )
                 else:
-                    # 还没有数据
-                    logger.debug(f"InputPort '{self.name}' waiting for first data (seq={current_seq})")
+                    logger.debug(
+                        f"InputPort '{self.name}' synced to sequence={current_seq} "
+                        "(no data in buffer)"
+                    )
 
         except Exception as e:
             logger.error(f"InputPort '{self.name}' connection error: {e}")
@@ -416,9 +411,9 @@ class InputPort:
 
         策略（混合方案）：
         1. 如果有缓存的历史数据，先返回（解决Late-Joiner）
-        2. 检查ZMQ是否有新通知（非阻塞）
-        3. 如果有通知，从Shared Buffer读取最新数据
-        4. 如果无通知但buffer有新数据（序列号增加），也读取
+        2. 清空当前ZMQ通知积压（非阻塞）
+        3. 检查buffer序列号是否增加
+        4. 原子读取序列号和对应最新值
 
         返回：
         - 最新的数据字典，如果无新数据返回None
@@ -441,28 +436,30 @@ class InputPort:
                 )
                 return cached_data
 
-            # 1. 检查ZMQ通知（非阻塞）
-            has_notification = False
-            try:
-                notification = self.socket.recv(zmq.NOBLOCK)
-                has_notification = True
-            except zmq.Again:
-                pass
+            # 1. 通知只负责唤醒。清理当前接收队列，循环有界以保持非阻塞。
+            for _ in range(100):
+                try:
+                    self.socket.recv(zmq.NOBLOCK)
+                except zmq.Again:
+                    break
 
-            # 2. 检查buffer序列号是否增加 (使用模运算处理回绕)
-            current_seq = self.buffer.get_sequence()
+            # 2. 没有新序列号时不复制和反序列化大块buffer。
+            observed_seq = self.buffer.get_sequence()
+            diff = (observed_seq - self.last_sequence) & 0xFFFFFFFF
+            if not (0 < diff < 0x80000000):
+                return None
+
+            # 3. 序列号与数据必须来自同一个加锁快照。
+            current_seq, data = self.buffer.read_with_sequence()
             diff = (current_seq - self.last_sequence) & 0xFFFFFFFF
             has_new_data = 0 < diff < 0x80000000
 
-            # 3. 如果有新数据，从buffer读取
-            if has_notification or has_new_data:
-                data = self.buffer.read()
-                if data is not None:
-                    self.last_sequence = current_seq
-                    logger.debug(
-                        f"InputPort '{self.name}' received data (seq={current_seq})"
-                    )
-                    return data
+            if has_new_data and data is not None:
+                self.last_sequence = current_seq
+                logger.debug(
+                    f"InputPort '{self.name}' received data (seq={current_seq})"
+                )
+                return data
 
             return None
 

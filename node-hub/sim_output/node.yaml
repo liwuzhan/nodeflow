@@ -142,3 +142,13 @@ params:
     type: float
     default: 2.0
     description: "最小转弯半径 (米)"
+
+  work_min_turn_radius_m:
+    type: float
+    default: null
+    description: "机具入土时的前进最小转弯半径；为空时沿用车辆最小转弯半径"
+
+  work_max_curvature_rate_1pm2:
+    type: float
+    default: null
+    description: "机具入土换层曲线的最大曲率变化率 (1/米²)"

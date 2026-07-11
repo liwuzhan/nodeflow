@@ -55,21 +55,7 @@ function colorFor(status: string): string {
 }
 
 function tasksForStep(seq: number): EdgeTaskSummary[] {
-  // EdgeTaskSummary doesn't carry seq_index, so match by:
-  // step N operation_type → tasks whose state suggests they belong to step N
-  // For single-step jobs all tasks go to step 0; for multi-step, tasks with
-  // matching operation_type + non-completed predecessor step are step N tasks
-  const step = props.steps.find(s => s.seq_index === seq)
-  if (!step) return []
-
-  // Filter: tasks that belong to this step based on dependency chain state
-  return props.tasks.filter(t => {
-    // Task is for this step if: (1) it's the first step, or (2) all previous steps are completed
-    if (seq === 0) return true
-    const prevSteps = props.steps.filter(s => s.seq_index < seq)
-    const allPrevDone = prevSteps.every(s => s.status === 'completed')
-    return allPrevDone
-  })
+  return props.tasks.filter(t => t.seq_index === seq)
 }
 </script>
 

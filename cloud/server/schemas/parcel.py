@@ -11,15 +11,19 @@ class VehicleConfig(BaseModel):
 
 
 class RefPoint(BaseModel):
-    lon: float = 120.037328
-    lat: float = 28.91685
+    lon: float = Field(..., ge=-180.0, le=180.0)
+    lat: float = Field(..., ge=-90.0, le=90.0)
+    alt: Optional[float] = None
+    frame_id: Optional[str] = None
+    origin_source: Optional[str] = None
+    revision: Optional[int] = None
 
 
 class ParcelCreate(BaseModel):
     name: str = Field(..., max_length=128)
     geojson: dict
     vehicle_cfg: VehicleConfig = Field(default_factory=VehicleConfig)
-    ref_point: RefPoint = Field(default_factory=RefPoint)
+    ref_point: Optional[RefPoint] = None
 
 
 class ParcelUpdate(BaseModel):

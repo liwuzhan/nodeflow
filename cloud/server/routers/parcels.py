@@ -9,6 +9,8 @@ from cloud.server.schemas.parcel import (
     SplitPreviewRequest, SplitPreviewResponse, SubParcel,
 )
 from cloud.server.services.splitter import ParcelSplitter
+from cloud.server.services.geo import area_hectares
+from cloud.server.models.coordinate_frame import CoordinateFrame
 
 logger = logging.getLogger("routers.parcels")
 router = APIRouter(prefix="/parcels", tags=["parcels"])
@@ -24,19 +26,18 @@ def create_parcel(body: ParcelCreate, db: Session = Depends(get_db)):
     existing = db.query(Parcel).filter(Parcel.name == body.name).first()
     if existing:
         raise HTTPException(409, f"Parcel '{body.name}' already exists")
+    frame = db.query(CoordinateFrame).filter(CoordinateFrame.id == "farm").first()
+    ref_point = body.ref_point.model_dump() if body.ref_point else (frame.snapshot() if frame else {})
     parcel = Parcel(
         name=body.name,
         geojson=body.geojson,
         vehicle_cfg=body.vehicle_cfg.model_dump(),
-        ref_point=body.ref_point.model_dump(),
+        ref_point=ref_point,
     )
     try:
-        from shapely.geometry import shape
-        geom = body.geojson.get("geometry", body.geojson)
-        poly = shape({"type": geom.get("type", "Polygon"), "coordinates": geom["coordinates"]})
-        parcel.area_ha = round(poly.area / 10000, 4)
-    except Exception:
-        parcel.area_ha = 0.0
+        parcel.area_ha = area_hectares(body.geojson)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     db.add(parcel)
     db.commit()
     db.refresh(parcel)
@@ -59,14 +60,12 @@ def update_parcel(parcel_id: str, body: ParcelUpdate, db: Session = Depends(get_
     if body.name is not None:
         parcel.name = body.name
     if body.geojson is not None:
-        parcel.geojson = body.geojson
         try:
-            from shapely.geometry import shape
-            geom = body.geojson.get("geometry", body.geojson)
-            poly = shape({"type": geom.get("type", "Polygon"), "coordinates": geom["coordinates"]})
-            parcel.area_ha = round(poly.area / 10000, 4)
-        except Exception:
-            pass
+            parcel.area_ha = area_hectares(body.geojson)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        parcel.geojson = body.geojson
+        parcel.revision = (parcel.revision or 1) + 1
     if body.vehicle_cfg is not None:
         parcel.vehicle_cfg = body.vehicle_cfg.model_dump()
     if body.ref_point is not None:

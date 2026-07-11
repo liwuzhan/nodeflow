@@ -53,6 +53,7 @@ class StatusReporter:
     def _publish(self, subtopic: str, payload: dict):
         try:
             topic = f"nodeflow/{self._machine_id}/{subtopic}"
-            self._mqtt.publish(topic, json.dumps(payload), qos=0 if subtopic not in ("task/ack",) else 1)
+            qos = 0 if subtopic == "heartbeat" else 1
+            self._mqtt.publish(topic, json.dumps(payload), qos=qos)
         except Exception as e:
             logger.error(f"Failed to publish to {subtopic}: {e}")

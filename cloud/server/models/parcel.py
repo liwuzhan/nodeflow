@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, String, Float, JSON, DateTime, ForeignKey
+from sqlalchemy import Column, String, Float, JSON, DateTime, ForeignKey, Integer, UniqueConstraint
 from sqlalchemy.dialects.sqlite import CHAR
 from sqlalchemy.orm import relationship
 
@@ -25,6 +25,7 @@ class Parcel(Base):
     area_ha = Column(Float, default=0.0)
     vehicle_cfg = Column(JSON, default=dict)
     ref_point = Column(JSON, default=dict)
+    revision = Column(Integer, nullable=False, default=1)
     created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
@@ -33,11 +34,12 @@ class Parcel(Base):
 
 class ParcelSplit(Base):
     __tablename__ = "parcel_splits"
+    __table_args__ = (UniqueConstraint("job_id", "index", name="uq_parcel_split_job_index"),)
 
     id = Column(CHAR(36), primary_key=True, default=_uuid)
     parcel_id = Column(CHAR(36), ForeignKey("parcels.id"), nullable=False, index=True)
-    job_id = Column(String(128), nullable=True, index=True)
-    index = Column(Float, nullable=False, default=0)
+    job_id = Column(String(128), ForeignKey("jobs.id"), nullable=True, index=True)
+    index = Column(Integer, nullable=False, default=0)
     name = Column(String(256))
     geojson = Column(JSON, nullable=False)
     area_ha = Column(Float, default=0.0)

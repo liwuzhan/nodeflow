@@ -1,6 +1,6 @@
 name: global_coverage
 version: 0.1.0
-description: 全局全覆盖路径规划节点 - 基于往复式扫描算法
+description: 全局全覆盖路径规划节点 - 支持平行扫描和轮廓螺旋策略
 
 metadata:
   coordinate_system: ENU          # 坐标系: ENU局部笛卡尔坐标
@@ -44,6 +44,12 @@ ports:
       conflate: true
 
 params:
+  planning_strategy:
+    type: string
+    default: parallel
+    enum: [parallel, contour_spiral]
+    description: "规划策略：parallel 用于平行作业行，contour_spiral 用于带作业半径约束的旋耕轮廓/混合收尾覆盖"
+
   path_point_spacing:
     type: number
     default: 0.5

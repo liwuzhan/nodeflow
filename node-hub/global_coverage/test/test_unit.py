@@ -47,6 +47,17 @@ class TestVehicleConfig:
         config = VehicleConfig(implement_width_m=3.0, overlap_ratio=0.2)
         assert abs(config.effective_row_spacing - 2.4) < 0.001
 
+    def test_work_turn_radius_prefers_engaged_override(self):
+        config = VehicleConfig(
+            implement_width_m=3.0,
+            min_turn_radius_m=2.0,
+            work_min_turn_radius_m=4.5,
+        )
+        assert config.effective_work_min_turn_radius_m == 4.5
+
+        fallback = VehicleConfig(min_turn_radius_m=2.5)
+        assert fallback.effective_work_min_turn_radius_m == 2.5
+
     def test_vehicle_from_dict(self):
         """测试从字典创建车辆配置"""
         data = {

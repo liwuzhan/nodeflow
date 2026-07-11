@@ -27,8 +27,22 @@
               <el-option label="planning_with_real_rtk" value="planning_with_real_rtk" />
               <el-option label="trajectory_playback" value="trajectory_playback" />
             </el-select>
+            <el-select v-model="step.planning_mode" style="width:170px"
+                       @change="onPlanningModeChange(step)">
+              <el-option label="边侧规划" value="edge" />
+              <el-option label="云端规划" value="cloud" />
+              <el-option label="云端优先" value="cloud_preferred" />
+            </el-select>
             <el-button type="danger" :icon="Delete" circle size="small"
                        @click="removeStep(i)" :disabled="form.steps.length <= 1" />
+            <div v-if="step.operation_type === 'tillage'" class="operation-params">
+              <el-input-number v-model="step.operation_config.implement_width_m" :min="0.5" :max="20" :step="0.1" />
+              <span>幅宽 m</span>
+              <el-input-number v-model="step.operation_config.overlap_ratio" :min="0" :max="0.8" :step="0.01" />
+              <span>重叠率</span>
+              <el-input-number v-model="step.operation_config.work_min_turn_radius_m" :min="0.5" :max="30" :step="0.5" />
+              <span>作业转弯半径 m</span>
+            </div>
           </div>
           <el-button @click="addStep">+ 添加步骤</el-button>
         </el-form-item>
@@ -53,12 +67,18 @@
             预览分割
           </el-button>
         </el-form-item>
-        <el-form-item v-if="previewSplits.length" label="机器分配">
-          <div v-for="sp in previewSplits" :key="sp.index" style="margin-bottom:8px">
-            <span style="display:inline-block;width:200px">{{ sp.name }} ({{ sp.area_ha?.toFixed(2) }} ha)</span>
-            <el-select v-model="form.machineAssignments[String(sp.index)]" placeholder="选择机器" style="width:180px">
-              <el-option v-for="m in machines" :key="m.id" :label="m.name" :value="m.id" />
-            </el-select>
+        <el-form-item v-if="previewSplits.length" label="步骤级机器分配">
+          <div class="assignment-grid">
+            <section v-for="(step, stepIndex) in form.steps" :key="stepIndex" class="assignment-step">
+              <h4>Step {{ stepIndex + 1 }} · {{ step.operation_type }}</h4>
+              <div v-for="sp in previewSplits" :key="sp.index" class="assignment-row">
+                <span>{{ sp.name }} ({{ sp.area_ha?.toFixed(2) }} ha)</span>
+                <el-select v-model="form.stepMachineAssignments[String(stepIndex)][String(sp.index)]"
+                           placeholder="选择机器" style="width:180px">
+                  <el-option v-for="m in availableMachines" :key="m.id" :label="m.name" :value="m.id" />
+                </el-select>
+              </div>
+            </section>
           </div>
         </el-form-item>
       </el-form>
@@ -117,22 +137,49 @@ const form = reactive({
   splitMode: 'strip' as string,
   splitCount: 1,
   steps: [
-    { operation_type: 'tillage', preset_yaml: 'tillage_operation', seq_index: 0 },
-  ] as { operation_type: string; preset_yaml: string; seq_index: number; depends_on?: number | null }[],
-  machineAssignments: {} as Record<string, string>,
+    { operation_type: 'tillage', preset_yaml: 'planning_with_real_rtk', seq_index: 0,
+      planning_mode: 'edge', fallback_policy: 'deny',
+      operation_config: { planning_strategy: 'contour_spiral', implement_width_m: 3.0,
+        overlap_ratio: 0.1, path_inset_m: 1.0, work_min_turn_radius_m: 4.0,
+        work_max_curvature_rate_1pm2: 0.08, path_point_spacing: 0.5 } },
+  ] as { operation_type: string; preset_yaml: string; seq_index: number; depends_on?: number | null;
+         planning_mode: string; fallback_policy: string; operation_config: Record<string, any> }[],
+  stepMachineAssignments: { '0': {} } as Record<string, Record<string, string>>,
 })
 
 const selectedParcel = computed(() => parcels.value.find(p => p.id === form.parcelId))
-const assignedMachineCount = computed(() => new Set(Object.values(form.machineAssignments)).size)
+const availableMachines = computed(() => machines.value.filter(m => m.status === 'online'))
+const assignedMachineCount = computed(() => new Set(
+  Object.values(form.stepMachineAssignments).flatMap(assignments => Object.values(assignments))
+).size)
 
 function addStep() {
   const idx = form.steps.length
-  form.steps.push({ operation_type: 'seeding', preset_yaml: 'tillage_operation', seq_index: idx, depends_on: idx - 1 })
+  form.steps.push({ operation_type: 'seeding', preset_yaml: 'planning_with_real_rtk',
+                    seq_index: idx, depends_on: idx - 1,
+                    planning_mode: 'edge', fallback_policy: 'deny', operation_config: {} })
+  form.stepMachineAssignments[String(idx)] = {}
 }
 
 function removeStep(i: number) {
   form.steps.splice(i, 1)
-  form.steps.forEach((s, j) => { s.seq_index = j })
+  const previous = { ...form.stepMachineAssignments }
+  for (const key of Object.keys(form.stepMachineAssignments)) delete form.stepMachineAssignments[key]
+  form.steps.forEach((s, j) => {
+    s.seq_index = j
+    s.depends_on = j > 0 ? j - 1 : null
+    form.stepMachineAssignments[String(j)] = previous[String(j < i ? j : j + 1)] || {}
+  })
+}
+
+function onPlanningModeChange(step: typeof form.steps[number]) {
+  if (step.planning_mode === 'edge') {
+    step.preset_yaml = 'planning_with_real_rtk'
+    step.fallback_policy = 'deny'
+  } else {
+    step.preset_yaml = 'tillage_operation'
+    step.fallback_policy = step.planning_mode === 'cloud_preferred' ? 'allow_edge_replan' : 'deny'
+  }
 }
 
 async function handlePreviewSplit() {
@@ -161,8 +208,12 @@ async function handleConfirm() {
         preset_yaml: s.preset_yaml,
         seq_index: i,
         depends_on: s.depends_on ?? (i > 0 ? i - 1 : null),
+        planning_mode: s.planning_mode,
+        fallback_policy: s.fallback_policy,
+        operation_config: s.operation_config,
+        machine_assignments: form.stepMachineAssignments[String(i)] || {},
       })),
-      machine_assignments: form.machineAssignments,
+      machine_assignments: form.stepMachineAssignments['0'] || {},
     })
     await jobStore.dispatch(job.id)
     router.push(`/jobs/${job.id}`)
@@ -178,6 +229,12 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.step-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.step-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+.operation-params { display: flex; gap: 6px; align-items: center; width: 100%; font-size: 12px; color: #606266; }
+.operation-params :deep(.el-input-number) { width: 130px; }
+.assignment-grid { display: grid; gap: 16px; width: 100%; }
+.assignment-step { border-left: 3px solid #409eff; padding-left: 12px; }
+.assignment-step h4 { margin: 0 0 8px; font-size: 14px; }
+.assignment-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 8px; }
 .step-actions { margin-top: 24px; display: flex; gap: 12px; }
 </style>

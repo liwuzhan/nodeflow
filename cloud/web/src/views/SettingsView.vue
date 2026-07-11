@@ -47,25 +47,43 @@
     </el-card>
 
     <el-card>
-      <template #header><span>农场参考点</span></template>
-      <el-form label-width="120px">
+      <template #header>
+        <div class="section-header">
+          <span>农场 ENU 参考系</span>
+          <el-tag :type="frame.ready ? 'success' : 'warning'">
+            {{ frame.ready ? `已配置 · v${frame.revision}` : '未配置' }}
+          </el-tag>
+        </div>
+      </template>
+      <el-form label-width="120px" :model="frameForm">
+        <el-form-item label="参考系 ID">
+          <el-input v-model="frameForm.frame_id" placeholder="如 farm-base-01" />
+        </el-form-item>
         <el-form-item label="经度">
-          <el-input :model-value="farmRef.lon" disabled />
+          <el-input-number v-model="frameForm.ref_lon" :precision="8" :step="0.000001" :min="-180" :max="180" />
         </el-form-item>
         <el-form-item label="纬度">
-          <el-input :model-value="farmRef.lat" disabled />
+          <el-input-number v-model="frameForm.ref_lat" :precision="8" :step="0.000001" :min="-90" :max="90" />
+        </el-form-item>
+        <el-form-item label="高程(m)">
+          <el-input-number v-model="frameForm.ref_alt" :precision="3" :step="0.01" />
+        </el-form-item>
+        <el-form-item>
+          <el-button type="primary" :loading="savingFrame" @click="handleSaveFrame">保存固定站坐标</el-button>
         </el-form-item>
       </el-form>
-      <el-text type="info" size="small">参考点用于 GPS ↔ ENU 坐标转换，在创建地块时设置</el-text>
     </el-card>
   </div>
 </template>
 
 <script setup lang="ts">
-import { reactive, ref as vRef } from 'vue'
+import { onMounted, reactive, ref as vRef } from 'vue'
 import { ElMessage } from 'element-plus'
 import { createMachine } from '@/services/machineApi'
 import { useMachineStore } from '@/stores/machineStore'
+import {
+  getCoordinateFrame, updateCoordinateFrame, type CoordinateFrame,
+} from '@/services/settingsApi'
 
 const machineStore = useMachineStore()
 const registering = vRef(false)
@@ -83,7 +101,54 @@ const machineForm = reactive({
   implement_width_m: 2.0,
 })
 
-const farmRef = { lon: 120.037328, lat: 28.91685 }
+const savingFrame = vRef(false)
+const frame = reactive<CoordinateFrame>({
+  ready: false,
+  type: 'ENU',
+  frame_id: null,
+  origin_source: null,
+  ref_lon: null,
+  ref_lat: null,
+  ref_alt: null,
+  revision: null,
+  updated_at: null,
+})
+const frameForm = reactive({
+  frame_id: 'farm-base',
+  ref_lon: null as number | null,
+  ref_lat: null as number | null,
+  ref_alt: null as number | null,
+})
+
+function applyFrame(value: CoordinateFrame) {
+  Object.assign(frame, value)
+  if (value.frame_id) frameForm.frame_id = value.frame_id
+  frameForm.ref_lon = value.ref_lon
+  frameForm.ref_lat = value.ref_lat
+  frameForm.ref_alt = value.ref_alt
+}
+
+async function handleSaveFrame() {
+  if (frameForm.ref_lon == null || frameForm.ref_lat == null || !frameForm.frame_id.trim()) {
+    ElMessage.warning('请填写固定站参考系 ID、经度和纬度')
+    return
+  }
+  savingFrame.value = true
+  try {
+    applyFrame(await updateCoordinateFrame({
+      frame_id: frameForm.frame_id.trim(),
+      origin_source: 'rtk_base_manual',
+      ref_lon: frameForm.ref_lon,
+      ref_lat: frameForm.ref_lat,
+      ref_alt: frameForm.ref_alt,
+    }))
+    ElMessage.success('农场参考系已保存')
+  } catch (e: unknown) {
+    ElMessage.error('保存失败: ' + (e instanceof Error ? e.message : 'unknown'))
+  } finally {
+    savingFrame.value = false
+  }
+}
 
 async function handleRegister() {
   if (!machineForm.id || !machineForm.name) {
@@ -108,4 +173,16 @@ async function handleRegister() {
     registering.value = false
   }
 }
+
+onMounted(async () => {
+  try {
+    applyFrame(await getCoordinateFrame())
+  } catch (e: unknown) {
+    ElMessage.error('参考系加载失败: ' + (e instanceof Error ? e.message : 'unknown'))
+  }
+})
 </script>
+
+<style scoped>
+.section-header { display: flex; align-items: center; justify-content: space-between; }
+</style>

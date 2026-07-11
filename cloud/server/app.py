@@ -4,16 +4,21 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from cloud.server.config import settings
 from cloud.server.database import engine, Base
-from cloud.server.models import Parcel, ParcelSplit, Machine, Job, JobStep, EdgeTask
+from cloud.server.models import (
+    CoordinateFrame, EdgeTask, Job, JobStep, Machine, Parcel, ParcelSplit, PathArtifact,
+)
 from cloud.server.routers import api_router
 from cloud.server.services.mqtt_client import MQTTClient
 from cloud.server.services.heartbeat_monitor import HeartbeatMonitor
 from cloud.server.services.sse_broker import SSEBroker
+from cloud.server.migrations import migrate_schema
+from cloud.server.services.dispatch_reconciler import DispatchReconciler
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
+    migrate_schema(engine)
 
     sse = SSEBroker()
     app.state.sse = sse
@@ -29,8 +34,16 @@ async def lifespan(app: FastAPI):
     monitor.start()
     app.state.monitor = monitor
 
+    reconciler = DispatchReconciler(mqtt)
+    reconciler.start()
+    app.state.reconciler = reconciler
+
     yield
 
+    try:
+        reconciler.stop()
+    except Exception:
+        pass
     try:
         monitor.stop()
     except Exception:
@@ -59,7 +72,11 @@ def create_app() -> FastAPI:
 
     @app.get("/api/v1/health")
     def health():
-        return {"status": "ok", "sse_subscribers": app.state.sse.subscriber_count}
+        return {
+            "status": "ok",
+            "sse_subscribers": app.state.sse.subscriber_count,
+            "mqtt_connected": app.state.mqtt.is_connected,
+        }
 
     return app
 

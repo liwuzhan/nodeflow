@@ -7,3 +7,4 @@ pydantic-settings>=2.0.0
 shapely>=2.0.0
 msgpack>=1.0.0
 python-multipart>=0.0.9
+pyclothoids>=0.2,<0.3

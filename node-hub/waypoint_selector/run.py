@@ -48,6 +48,7 @@ class OperationPlan(BaseModel):
 
 class PathProgress(BaseModel):
     task_id: str | None = None
+    segment_type: str | None = None
     path_index: int = 0
     segment_fraction: float = 0.0
     cross_track_error_m: float = 0.0
@@ -106,6 +107,9 @@ def main():
         progress_sync_fraction_threshold = float(sdk.params.get("progress_sync_fraction_threshold", 0.2))
         progress_target_enabled = bool(sdk.params.get("progress_target_enabled", True))
         progress_target_lookahead_m = float(sdk.params.get("progress_target_lookahead_m", view_distance))
+        progress_target_turn_lookahead_m = float(
+            sdk.params.get("progress_target_turn_lookahead_m", 1.5)
+        )
         progress_target_max_cross_track_m = float(
             sdk.params.get("progress_target_max_cross_track_m", progress_sync_max_cross_track_m)
         )
@@ -121,6 +125,7 @@ def main():
         sdk.logger.info(
             f"路径进度前瞻: enabled={progress_target_enabled}, "
             f"lookahead={progress_target_lookahead_m}m, "
+            f"turn_lookahead={progress_target_turn_lookahead_m}m, "
             f"横向误差<={progress_target_max_cross_track_m}m"
         )
 
@@ -142,6 +147,7 @@ def main():
             progress_sync_fraction_threshold=progress_sync_fraction_threshold,
             progress_target_enabled=progress_target_enabled,
             progress_target_lookahead_m=progress_target_lookahead_m,
+            progress_target_turn_lookahead_m=progress_target_turn_lookahead_m,
             progress_target_max_cross_track_m=progress_target_max_cross_track_m
         )
         selector = WaypointSelector(config)
@@ -176,6 +182,7 @@ def main():
                     plan_path = plan_path.get("points", [])
                 path_pkt = {
                     "task_id": plan_pkt.get("task_id"),
+                    "plan_revision": plan_pkt.get("plan_revision", 0),
                     "timestamp": plan_pkt.get("timestamp"),
                     "path": plan_path,
                     "path_zones": plan_pkt.get("path_zones", []),

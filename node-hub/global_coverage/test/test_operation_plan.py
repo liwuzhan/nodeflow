@@ -71,3 +71,24 @@ def test_classify_path_zones_marks_smoothed_turn_as_transit():
 
     assert len(zones) == len(path)
     assert "transit" in zones[3:-3]
+
+
+def test_build_operation_plan_preserves_explicit_transit_segments():
+    path = [(0.0, 0.0), (5.0, 0.0), (6.0, 1.0), (6.0, 6.0)]
+    zones = ["work", "transit", "transit", "work"]
+    vehicle = VehicleConfig(implement_width_m=2.0)
+
+    plan = build_operation_plan(
+        task_id="spiral_001",
+        path=path,
+        path_zones=zones,
+        vehicle=vehicle,
+        timestamp=123.0,
+        planner_metadata={"strategy": "contour_spiral"},
+    )
+
+    transit = next(segment for segment in plan["segments"] if segment["type"] == "transit")
+    assert transit["implement"]["pto"] == "off"
+    assert transit["implement"]["hitch"] == "up"
+    assert plan["summary"]["transit_segment_count"] == 1
+    assert plan["summary"]["planner"]["strategy"] == "contour_spiral"

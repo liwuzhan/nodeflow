@@ -21,6 +21,10 @@ export interface JobStep {
   preset_yaml: string
   depends_on: number | null
   status: string
+  planning_mode: string
+  fallback_policy: string
+  operation_config: Record<string, unknown>
+  machine_assignments: Record<string, string>
 }
 
 export interface JobStepCreate {
@@ -28,6 +32,10 @@ export interface JobStepCreate {
   preset_yaml: string
   seq_index: number
   depends_on?: number | null
+  planning_mode?: string
+  fallback_policy?: string
+  operation_config?: Record<string, unknown>
+  machine_assignments?: Record<string, string>
 }
 
 export interface JobCreate {
@@ -47,10 +55,13 @@ export interface SubParcelInfo {
 }
 
 export interface EdgeTaskSummary {
-  id: string
-  edge_task_id: string
-  machine_id: string
-  state: string
+    id: string
+    edge_task_id: string
+    machine_id: string
+    step_id: string | null
+    seq_index: number
+    operation_type: string
+    state: string
   progress_pct: number
   error_code: string | null
 }

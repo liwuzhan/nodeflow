@@ -20,6 +20,7 @@ class Settings(BaseSettings):
 
     HTTP_SERVER_HOST: str = "0.0.0.0"
     HTTP_SERVER_PORT: int = 8080
+    HTTP_PUBLIC_BASE_URL: str = "http://localhost:8080"
 
     model_config = {"env_prefix": "NF_CLOUD_", "case_sensitive": False}
 

@@ -45,6 +45,7 @@ def main():
 
         search_window = int(sdk.get_param("search_window", 120))
         relocalize_error_m = float(sdk.get_param("relocalize_error_m", 8.0))
+        heading_match_weight_m = float(sdk.get_param("heading_match_weight_m", 2.0))
         publish_interval = float(sdk.get_param("publish_interval", 0.02))
 
         in_plan = sdk.create_input_port("operation_plan")
@@ -55,6 +56,7 @@ def main():
         last_pose = None
         last_path_index = 0
         last_task_id = None
+        last_plan_revision = 0
 
         while True:
             plan = in_plan.recv_latest()
@@ -63,11 +65,14 @@ def main():
             if plan:
                 last_plan = plan
                 task_id = plan.get("task_id")
-                if task_id != last_task_id:
+                plan_revision = int(plan.get("plan_revision", 0) or 0)
+                if task_id != last_task_id or plan_revision != last_plan_revision:
                     last_path_index = 0
                     last_task_id = task_id
+                    last_plan_revision = plan_revision
                     sdk.logger.info(
-                        f"[计划更新] task={task_id}, points={len(plan.get('path', []))}, "
+                        f"[计划更新] task={task_id}, revision={plan_revision}, "
+                        f"points={len(plan.get('path', []))}, "
                         f"segments={len(plan.get('segments', []))}"
                     )
 
@@ -81,6 +86,7 @@ def main():
                     last_path_index=last_path_index,
                     search_window=search_window,
                     relocalize_error_m=relocalize_error_m,
+                    heading_match_weight_m=heading_match_weight_m,
                 )
                 if progress:
                     progress["timestamp"] = time.time()

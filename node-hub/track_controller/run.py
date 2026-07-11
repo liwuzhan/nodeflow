@@ -16,7 +16,7 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from sdk.nodeflow_sdk import NodeFlowSDK
-from atom import compute_velocity_cmd
+from atom import ControlSafetyGuard, compute_velocity_cmd
 
 # --- Schema Definitions ---
 
@@ -101,6 +101,13 @@ def main():
         headland_turn_heading_gain = float(sdk.params.get("headland_turn_heading_gain", 2.0))
         headland_turn_align_threshold_deg = float(sdk.params.get("headland_turn_align_threshold_deg", 35.0))
         headland_turn_min_speed_factor = float(sdk.params.get("headland_turn_min_speed_factor", 0.25))
+        headland_turn_use_path_heading = str(
+            sdk.params.get("headland_turn_use_path_heading", False)
+        ).lower() in {"1", "true", "yes", "on"}
+        pose_timeout_s = float(sdk.params.get("pose_timeout_s", 0.5))
+        target_timeout_s = float(sdk.params.get("target_timeout_s", 0.5))
+        progress_timeout_s = float(sdk.params.get("progress_timeout_s", 0.5))
+        pivot_timeout_s = float(sdk.params.get("pivot_timeout_s", 8.0))
 
         sdk.logger.info(f"参数: max_speed={max_speed}, kp={kp}, max_w={max_w}, pivot_th={pivot_th}°")
         sdk.logger.info(
@@ -117,9 +124,14 @@ def main():
             f"sharp>={sharp_turn_angle_deg}°->{sharp_turn_speed_factor}"
         )
         sdk.logger.info(
-            f"掉头控制: heading_gain={headland_turn_heading_gain}, "
+            f"掉头控制: use_path_heading={headland_turn_use_path_heading}, "
+            f"heading_gain={headland_turn_heading_gain}, "
             f"align_threshold={headland_turn_align_threshold_deg}°, "
             f"speed_factor<={headland_turn_min_speed_factor}"
+        )
+        sdk.logger.info(
+            f"控制保护: pose_timeout={pose_timeout_s}s, target_timeout={target_timeout_s}s, "
+            f"progress_timeout={progress_timeout_s}s, pivot_timeout={pivot_timeout_s}s"
         )
 
         # 使用ENU坐标
@@ -132,20 +144,40 @@ def main():
         last_pose = None
         last_np = None
         last_progress = None
+        last_progress_received_at = None
+        safety_guard = ControlSafetyGuard(
+            pose_timeout_s=pose_timeout_s,
+            target_timeout_s=target_timeout_s,
+            pivot_timeout_s=pivot_timeout_s,
+        )
 
         while True:
             # 尝试读取新数据
             pose = in_pose.recv_latest()
             npkt = in_np.recv_latest()
             progress = in_progress.recv_latest()
+            received_at = time.monotonic()
 
             # 更新本地缓存
             if pose:
                 last_pose = pose
+                safety_guard.note_pose(received_at)
             if npkt:
                 last_np = npkt
+                safety_guard.note_target(npkt, received_at)
             if progress:
                 last_progress = progress
+                last_progress_received_at = received_at
+
+            active_progress = last_progress
+            if (
+                last_progress_received_at is None
+                or (
+                    progress_timeout_s > 0
+                    and received_at - last_progress_received_at > progress_timeout_s
+                )
+            ):
+                active_progress = None
 
             # 计算控制命令
             now = time.time()
@@ -171,14 +203,16 @@ def main():
                 sharp_turn_angle_deg,
                 turn_speed_factor,
                 sharp_turn_speed_factor,
-                last_progress,
+                active_progress,
                 cross_track_slowdown_error_m,
                 cross_track_stop_error_m,
                 cross_track_recovery_factor,
                 headland_turn_heading_gain,
                 headland_turn_align_threshold_deg,
-                headland_turn_min_speed_factor
+                headland_turn_min_speed_factor,
+                headland_turn_use_path_heading,
             )
+            cmd = safety_guard.apply(cmd, now=received_at, timestamp=now)
             out.send(cmd)
             time.sleep(0.005)  # 200Hz
 

@@ -1,6 +1,9 @@
 import subprocess
 
+import pytest
+
 from runtime.orchestrator.startup_coordinator import StartupCoordinator
+from runtime.utils.errors import NodeStartupError
 
 
 class DummyLauncher:
@@ -18,6 +21,25 @@ class DummyLauncher:
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait(timeout=1.0)
+
+
+class FailingLauncher(DummyLauncher):
+    def __init__(self, fail_node):
+        super().__init__()
+        self.fail_node = fail_node
+        self.processes = {}
+        self.terminated = []
+
+    def launch(self, node, manifest):
+        if node.id == self.fail_node:
+            raise RuntimeError("launch failed")
+        process = super().launch(node, manifest)
+        self.processes[node.id] = process
+        return process
+
+    def terminate_process(self, process, node_id, timeout=5.0):
+        self.terminated.append(node_id)
+        super().terminate_process(process, node_id, timeout)
 
 
 class DummyRegistry:
@@ -53,3 +75,19 @@ def test_startup_nodes_stops_before_next_layer_when_cancelled():
         assert list(processes) == ["a"]
     finally:
         coordinator.shutdown_nodes(processes, shutdown_timeout=1.0)
+
+
+def test_startup_failure_rolls_back_nodes_started_in_same_layer():
+    launcher = FailingLauncher(fail_node="b")
+    coordinator = StartupCoordinator(launcher, DummyRegistry())
+
+    with pytest.raises(NodeStartupError):
+        coordinator.startup_nodes(
+            [["a", "b"]],
+            {"a": DummyNode("a"), "b": DummyNode("b")},
+            startup_timeout=0.01,
+            startup_delay=0,
+        )
+
+    assert launcher.terminated == ["a"]
+    assert launcher.processes["a"].poll() is not None

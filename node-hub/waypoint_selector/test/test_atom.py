@@ -399,6 +399,29 @@ def test_progress_lookahead_selects_target_from_projection():
     print(f"✓ 前瞻目标: ({result['x']:.2f}, {result['y']:.2f}), index={result['index']}")
 
 
+def test_progress_lookahead_uses_shorter_distance_in_headland_turn():
+    selector = WaypointSelector(ViewConfig(
+        progress_target_lookahead_m=2.5,
+        progress_target_turn_lookahead_m=1.5,
+    ))
+    path = [(float(i), 0.0) for i in range(10)]
+    selector.set_path({"path": path, "task_id": "turn_target"})
+
+    result = selector.select(
+        {"x": 4.0, "y": 0.0, "theta": 0.0},
+        progress={
+            "task_id": "turn_target",
+            "segment_type": "headland_turn",
+            "path_index": 4,
+            "segment_fraction": 0.0,
+            "cross_track_error_m": 0.0,
+        },
+    )
+
+    assert result["index"] == 5
+    assert math.isclose(result["x"], 5.5)
+
+
 def run_all_tests():
     """运行所有测试"""
     print("=" * 60)
@@ -416,6 +439,7 @@ def run_all_tests():
         test_sync_progress_advances_consumed_index()
         test_sync_progress_ignores_backward_or_untrusted_updates()
         test_progress_lookahead_selects_target_from_projection()
+        test_progress_lookahead_uses_shorter_distance_in_headland_turn()
 
         print("\n" + "=" * 60)
         print("✅ 所有测试通过!")
@@ -435,3 +459,20 @@ def run_all_tests():
 if __name__ == "__main__":
     success = run_all_tests()
     sys.exit(0 if success else 1)
+def test_same_task_replan_uses_plan_revision():
+    selector = WaypointSelector()
+    first = selector.set_path({
+        "task_id": "task-1", "plan_revision": 1, "path": [(0, 0), (1, 0)],
+    })
+    duplicate = selector.set_path({
+        "task_id": "task-1", "plan_revision": 1, "path": [(0, 0), (1, 0)],
+    })
+    replanned = selector.set_path({
+        "task_id": "task-1", "plan_revision": 2, "path": [(0, 0), (0, 1)],
+    })
+
+    assert first is not None
+    assert duplicate is None
+    assert replanned is not None
+    assert selector.state.path == [(0, 0), (0, 1)]
+    assert selector.state.plan_revision == 2

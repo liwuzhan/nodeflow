@@ -11,6 +11,7 @@ import time
 import os
 import atexit
 import subprocess
+import copy
 from pathlib import Path
 
 from runtime.config.yaml_parser import YAMLParser
@@ -52,6 +53,7 @@ class NodeFlowRuntime:
         self.registry = None
         self.topology_layers = None
         self.nodes_dict = None
+        self._base_node_params = {}
 
         # 数据流组件（可重复初始化）
         self.socket_manager = None
@@ -289,6 +291,10 @@ class NodeFlowRuntime:
 
             # 6. 构建节点字典（用于重启回调）
             self.nodes_dict = {n.id: n for n in self.config.nodes}
+            self._base_node_params = {
+                node_id: copy.deepcopy(node.params)
+                for node_id, node in self.nodes_dict.items()
+            }
 
             logger.info("Framework initialization complete")
             self._framework_initialized = True
@@ -311,6 +317,37 @@ class NodeFlowRuntime:
                 logger.info(f"Task params injected into node '{node_id}': {params}")
             else:
                 logger.warning(f"Task params target unknown node '{node_id}', skipped")
+
+    def _reset_node_params(self):
+        for node_id, node in self.nodes_dict.items():
+            node.params = copy.deepcopy(self._base_node_params.get(node_id, {}))
+
+    def _switch_task_preset(self, preset_yaml: str) -> bool:
+        if not preset_yaml:
+            return True
+        if Path(preset_yaml).name != preset_yaml or preset_yaml in (".", ".."):
+            raise ValueError("preset_yaml must be an allowlisted example name")
+        filename = preset_yaml if preset_yaml.endswith(".yaml") else f"{preset_yaml}.yaml"
+        root = Path(os.getenv("NODEFLOW_ROOT", Path.cwd())).resolve()
+        candidate = (root / "examples" / filename).resolve()
+        examples_root = (root / "examples").resolve()
+        if candidate.parent != examples_root or not candidate.is_file():
+            raise ValueError(f"Unknown task preset: {preset_yaml}")
+        current = Path(self.config_path).resolve()
+        if current == candidate:
+            return True
+        if self.dataflow_running:
+            raise RuntimeError("Cannot switch task preset while dataflow is running")
+
+        logger.info("Switching task preset: %s -> %s", current.name, candidate.name)
+        self.config_path = str(candidate)
+        self.config = None
+        self.registry = None
+        self.topology_layers = None
+        self.nodes_dict = None
+        self._base_node_params = {}
+        self._framework_initialized = False
+        return self._initialize_framework() == 0
 
     def start_dataflow(self):
         """
@@ -635,15 +672,32 @@ class NodeFlowRuntime:
 
             # 创建或打开控制缓冲区
             control_buf = None
+            status_buf = None
             try:
                 from sdk.shared_buffer_lite import SharedBufferLite
                 control_buf = SharedBufferLite("runtime.control", create=True, size=1024)
+                status_buf = SharedBufferLite("runtime.status", create=True, size=4096)
                 logger.info("Control buffer ready: runtime.control")
             except Exception as e:
                 logger.error(f"Failed to create control buffer: {e}")
                 return 1
 
             last_command_timestamp = 0
+            active_task_id = ""
+
+            def publish_status(command_status="idle", error=""):
+                status_buf.write({
+                    "runtime_running": self.running,
+                    "dataflow_running": self.dataflow_running,
+                    "active_task_id": active_task_id,
+                    "graph_id": self.config.graph_id if self.config else "",
+                    "config_path": self.config_path,
+                    "command_status": command_status,
+                    "error": error,
+                    "timestamp": time.time(),
+                })
+
+            publish_status()
 
             try:
                 while self.running:
@@ -668,6 +722,12 @@ class NodeFlowRuntime:
                         if command == "start_dataflow":
                             node_params = cmd_pkt.get("node_params", {})
                             task_id = cmd_pkt.get("task_id", "")
+                            preset_yaml = cmd_pkt.get("preset_yaml", "")
+                            if preset_yaml and not self._switch_task_preset(preset_yaml):
+                                logger.error(f"Task {task_id} preset initialization failed")
+                                publish_status("failed", "preset initialization failed")
+                                continue
+                            self._reset_node_params()
                             if node_params:
                                 self._apply_node_params(node_params)
                             if task_id:
@@ -676,22 +736,32 @@ class NodeFlowRuntime:
                                 try:
                                     started = self.start_dataflow()
                                     if started:
+                                        active_task_id = task_id
+                                        publish_status("started")
                                         logger.info("✓ Dataflow started by CLI command")
                                     else:
+                                        publish_status("failed", "dataflow startup cancelled")
                                         logger.info("Dataflow startup cancelled")
                                 except Exception as e:
+                                    publish_status("failed", str(e))
                                     logger.error(f"Failed to start dataflow: {e}")
                             else:
+                                publish_status("rejected", "dataflow already running")
                                 logger.warning("Dataflow already running, ignoring start command")
 
                         elif command == "stop_dataflow":
                             if self.dataflow_running:
                                 try:
                                     self.stop_dataflow()
+                                    active_task_id = ""
+                                    publish_status("stopped")
                                     logger.info("✓ Dataflow stopped by CLI command")
                                 except Exception as e:
+                                    publish_status("failed", str(e))
                                     logger.error(f"Failed to stop dataflow: {e}")
                             else:
+                                active_task_id = ""
+                                publish_status("stopped")
                                 logger.warning("Dataflow not running, ignoring stop command")
 
                         elif command == "shutdown":
@@ -703,6 +773,7 @@ class NodeFlowRuntime:
                             logger.warning(f"Unknown command: {command}")
 
                     except Exception as e:
+                        publish_status("failed", str(e))
                         logger.error(f"Error processing control command: {e}")
 
             except KeyboardInterrupt:
@@ -717,6 +788,11 @@ class NodeFlowRuntime:
 
             # 清理 PID 文件
             self._cleanup_pid_file()
+            if status_buf:
+                publish_status("shutdown")
+                status_buf.close()
+            if control_buf:
+                control_buf.close()
 
             logger.info("=" * 60)
             logger.info("Daemon mode stopped")

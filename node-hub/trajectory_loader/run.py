@@ -12,6 +12,7 @@
 import sys
 import time
 import uuid
+import msgpack
 from pathlib import Path
 
 # 添加项目根路径
@@ -38,6 +39,7 @@ class TrajectoryLoaderNode:
 
         # 读取参数
         self.trajectory_file = sdk.get_param('trajectory_file', '')
+        self.operation_plan_file = sdk.get_param('operation_plan_file', '')
         self.records_dir = sdk.get_param('records_dir', DEFAULT_RECORDS_DIR)
         self.ref_lon = sdk.get_param('ref_lon', None)
         self.ref_lat = sdk.get_param('ref_lat', None)
@@ -67,6 +69,8 @@ class TrajectoryLoaderNode:
         sdk.logger.info("=" * 60)
         sdk.logger.info("轨迹加载器节点启动")
         sdk.logger.info(f"  轨迹文件: {self.trajectory_file or '(自动选择最新)'}")
+        if self.operation_plan_file:
+            sdk.logger.info(f"  作业计划制品: {self.operation_plan_file}")
         sdk.logger.info(f"  记录目录: {self.records_dir}")
         if self.ref_lon is not None and self.ref_lat is not None:
             sdk.logger.info(f"  参考点: ({self.ref_lon:.6f}, {self.ref_lat:.6f})")
@@ -81,6 +85,9 @@ class TrajectoryLoaderNode:
 
     def load(self) -> bool:
         """加载轨迹文件并转换坐标"""
+
+        if self.operation_plan_file:
+            return self._load_operation_plan_artifact()
 
         # 1. 确定轨迹文件路径
         filepath = self.trajectory_file
@@ -165,6 +172,46 @@ class TrajectoryLoaderNode:
             )
 
         return True
+
+    def _load_operation_plan_artifact(self) -> bool:
+        try:
+            with open(self.operation_plan_file, 'rb') as file:
+                envelope = msgpack.unpackb(file.read(), raw=False)
+            plan = envelope.get('operation_plan') or {}
+            path = [tuple(point) for point in plan.get('path', [])]
+            if len(path) < 2:
+                raise ValueError('operation plan path is empty')
+            frame = envelope.get('coordinate_frame') or {}
+            ref_lon = frame.get('ref_lon')
+            ref_lat = frame.get('ref_lat')
+            if ref_lon is None or ref_lat is None:
+                raise ValueError('operation plan coordinate frame is incomplete')
+
+            self.task_id = envelope.get('task_id') or plan.get('task_id') or self.task_id
+            plan['task_id'] = self.task_id
+            plan['plan_id'] = envelope.get('plan_id')
+            plan['plan_revision'] = envelope.get('plan_revision', 0)
+            plan['coordinate_frame'] = frame
+            self.operation_plan_msg = plan
+            self.loaded_path = atom.build_global_path(
+                path,
+                self.task_id,
+                plan.get('path_zones', []),
+            )
+            self.loaded_path['segments'] = plan.get('segments', [])
+            self.loaded_path['plan_id'] = envelope.get('plan_id')
+            self.loaded_path['plan_revision'] = envelope.get('plan_revision', 0)
+            self.task_enu_msg = envelope.get('task_enu') or atom.build_task_enu(
+                float(ref_lon), float(ref_lat), self.task_id,
+            )
+            self.sdk.logger.info(
+                f"已加载云端作业计划: task={self.task_id}, "
+                f"revision={envelope.get('plan_revision')}, points={len(path)}"
+            )
+            return True
+        except Exception as e:
+            self.sdk.logger.error(f"读取作业计划制品失败: {e}")
+            return False
 
     def run(self):
         """主循环：持续发布路径"""

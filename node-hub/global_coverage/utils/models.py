@@ -10,12 +10,23 @@ class VehicleConfig:
     pivot_turn: bool = True
     yaw_rate_max_deg_s: float = 60.0
     min_turn_radius_m: Optional[float] = None
+    work_min_turn_radius_m: Optional[float] = None
+    work_max_curvature_rate_1pm2: Optional[float] = None
     pivot_radius_m: Optional[float] = None
 
     @property
     def effective_row_spacing(self) -> float:
         """有效行距（考虑重叠率）"""
         return self.implement_width_m * (1.0 - self.overlap_ratio)
+
+    @property
+    def effective_work_min_turn_radius_m(self) -> float:
+        """Forward-only radius used while the implement remains engaged."""
+        if self.work_min_turn_radius_m is not None:
+            return float(self.work_min_turn_radius_m)
+        if self.min_turn_radius_m is not None:
+            return float(self.min_turn_radius_m)
+        return max(1.0, self.implement_width_m * 0.75)
 
     @classmethod
     def from_dict(cls, data: Dict) -> 'VehicleConfig':

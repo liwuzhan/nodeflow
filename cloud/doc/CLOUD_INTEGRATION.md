@@ -69,7 +69,7 @@ NF_HTTP_SERVER_URL=http://cloud-api:8080
 
 | Topic | QoS | 消息体 | 说明 |
 |-------|-----|--------|------|
-| `nodeflow/{machine_id}/status` | 0 | [TaskStatus](#35-taskstatus---状态上报) | 任务状态变更/进度 |
+| `nodeflow/{machine_id}/status` | 1 | [TaskStatus](#35-taskstatus---状态上报) | 任务状态变更/进度 |
 | `nodeflow/{machine_id}/heartbeat` | 0 | [Heartbeat](#36-heartbeat---机器心跳) | 机器心跳（30s 间隔） |
 | `nodeflow/{machine_id}/task/ack` | 1 | [TaskAck](#37-taskack---任务确认) | 任务接收确认 |
 
@@ -94,16 +94,33 @@ nodeflow/+/status       # 所有机器状态
 ```json
 {
   "type": "task_dispatch",
+  "protocol_version": "1.0",
   "task_id": "550e8400-e29b-41d4-a716-446655440000",
   "job_id": "job-20260427-001",
   "dispatch_id": "dispatch-uuid-unique-per-attempt",
+  "command_id": "dispatch-uuid-unique-per-attempt",
   "preset_yaml": "tillage_operation",
   "operation_type": "tillage",
   "sequence_index": 0,
   "machine_id": "tractor-01",
+  "planning_mode": "cloud_preferred",
+  "fallback_policy": "allow_edge_replan",
   "parcel_ref": "field_A_east_section_3",
   "parcel_url": "http://cloud-api:8080/api/v1/parcels/field_A_east_section_3.json",
-  "path_url": "http://cloud-api:8080/api/v1/paths/550e8400-....bin",
+  "field_revision": 3,
+  "field_checksum": "sha256...",
+  "coordinate_frame": {
+    "type": "ENU",
+    "frame_id": "farm-base-01",
+    "origin_source": "rtk_base_manual",
+    "ref_lon": 120.037328,
+    "ref_lat": 28.916850,
+    "revision": 2
+  },
+  "plan_id": "550e8400-e29b-41d4-a716-446655440000",
+  "plan_revision": 1,
+  "path_url": "http://cloud-api:8080/api/v1/download/paths/550e8400-....bin",
+  "path_checksum": "sha256...",
   "node_params": {
     "parcel_planner": {
       "parcel_name": "field_A_east"
@@ -128,6 +145,8 @@ nodeflow/+/status       # 所有机器状态
 | `task_id` | string | ✓ | 任务唯一 ID（UUID） |
 | `job_id` | string | ✓ | 父 Job ID，用于编排和多机关联 |
 | `dispatch_id` | string | ✓ | 本次下发唯一 ID，重试时变化，端侧用于去重 |
+| `planning_mode` | string | ✓ | `edge` / `cloud` / `cloud_preferred` |
+| `fallback_policy` | string | ✓ | `deny` / `allow_edge_replan` |
 | `preset_yaml` | string | ✓ | 预设配置名，对应端侧 `examples/{name}.yaml` |
 | `operation_type` | string | ✓ | 作业类型: `tillage` / `seeding` / `spraying` |
 | `sequence_index` | int | ✓ | 在 Job 操作链中的位置，从 0 开始 |
@@ -135,6 +154,8 @@ nodeflow/+/status       # 所有机器状态
 | `parcel_ref` | string | | 地块引用名（人类可读） |
 | `parcel_url` | string | | 地块数据 HTTP URL（GeoJSON），< 100KB |
 | `path_url` | string | | 路径数据 HTTP URL（MsgPack 二进制），可达 10MB |
+| `plan_revision` | int | ✓ | 同一任务的路径版本，replan 时递增 |
+| `coordinate_frame` | object | ✓ | 本计划使用的动态 ENU 参考系快照 |
 | `node_params` | object | ✓ | 节点参数覆盖，格式: `{"node_id": {"param": val}}` |
 | `timestamp` | float | ✓ | Unix 时间戳（秒） |
 
@@ -162,10 +183,10 @@ nodeflow/+/status       # 所有机器状态
 #### 2.3.3 TaskStatus — 状态上报
 
 **Topic**: `nodeflow/{machine_id}/status`  
-**QoS**: 0（best-effort，非实时）  
+**QoS**: 1（至少一次送达，状态机按单调迁移去重）
 **上报频率**:
 - 状态变更（PENDING→READY→RUNNING→COMPLETED/FAILED）：立即上报
-- 进度更新：每 60 秒上报一次
+- 进度更新：每 10 秒上报一次
 
 ```json
 {
@@ -186,19 +207,21 @@ nodeflow/+/status       # 所有机器状态
 **state 状态机**:
 
 ```
-PENDING → DOWNLOADING → READY → RUNNING → COMPLETED
-                                             ↓
-PENDING → DOWNLOADING → READY → RUNNING → FAILED
-                       ↓
-                    CANCELLED（任意阶段）
+QUEUED → PENDING → DOWNLOADING → READY → RUNNING → COMPLETED
+                                             ├→ FAILED
+                                             ├→ CANCEL_REQUESTED → CANCELLED
+                                             └→ COMMUNICATION_LOST → RUNNING/终态
 ```
 
 | state | 含义 |
 |-------|------|
 | `pending` | 已接收任务，等待确认/开始 |
+| `queued` | 云端已建立 work unit，等待目标机器空闲 |
 | `downloading` | 正在从 HTTP 下载大文件（parcel/path） |
 | `ready` | 所有数据就绪，等待执行 |
 | `running` | 数据流执行中（农机作业中） |
+| `cancel_requested` | 云端已请求取消，等待边侧完成安全停止 |
+| `communication_lost` | 心跳丢失，实际执行状态未知，不等同于失败 |
 | `completed` | 任务成功完成 |
 | `failed` | 任务失败（见 error_detail） |
 | `cancelled` | 已被云端或操作员取消 |
@@ -355,11 +378,11 @@ Cloud                              Edge
   │                                  ├─ 若 path_url 存在: HTTP GET 流式下载路径
   │                                  ├─ 写入 runtime.control buffer
   │                                  │
-  │←── MQTT status (DOWNLOADING) ──│ QoS 0
-  │←── MQTT status (READY) ────────│ QoS 0
-  │←── MQTT status (RUNNING) ──────│ QoS 0
+  │←── MQTT status (DOWNLOADING) ──│ QoS 1
+  │←── MQTT status (READY) ────────│ QoS 1
+  │←── MQTT status (RUNNING) ──────│ QoS 1
   │         ... (每60s 进度) ...     │
-  │←── MQTT status (COMPLETED) ────│ QoS 0
+  │←── MQTT status (COMPLETED) ────│ QoS 1
 ```
 
 ### 4.3 多机分割 + 任务链（旋耕 → 播种）

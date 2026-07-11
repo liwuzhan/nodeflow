@@ -5,7 +5,7 @@
 与完整版SharedBuffer的区别：
 - 只存储一个值（最新值）
 - 配合ZMQ使用，不单独作为IPC机制
-- 更简单的实现，无需复杂的同步
+- 文件锁保护跨线程、跨进程快照完整性
 
 序列化格式: MsgPack (支持 dict, list, bytes, numpy.ndarray)
 """
@@ -13,8 +13,15 @@
 import mmap
 import msgpack
 import struct
+import threading
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - edge deployments use Linux
+    fcntl = None
 
 try:
     import numpy as np
@@ -26,6 +33,16 @@ except ImportError:
 # [0-3]   序列号 (uint32)
 # [4-7]   数据长度 (uint32)
 # [8-N]   数据内容 (MsgPack)
+
+_PROCESS_LOCKS: dict[str, threading.RLock] = {}
+_PROCESS_LOCKS_GUARD = threading.Lock()
+
+
+def _get_process_lock(buffer_path: Path) -> threading.RLock:
+    key = str(buffer_path.resolve())
+    with _PROCESS_LOCKS_GUARD:
+        return _PROCESS_LOCKS.setdefault(key, threading.RLock())
+
 
 class SharedBufferLite:
     """轻量级共享缓冲区"""
@@ -62,6 +79,20 @@ class SharedBufferLite:
         # 打开mmap
         self.file = open(self.buffer_path, 'r+b')
         self.mmap = mmap.mmap(self.file.fileno(), self.size)
+        self._process_lock = _get_process_lock(self.buffer_path)
+
+    @contextmanager
+    def _locked(self, exclusive: bool):
+        """Serialize access across threads and processes without changing the file format."""
+        with self._process_lock:
+            if fcntl is not None:
+                mode = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
+                fcntl.flock(self.file.fileno(), mode)
+            try:
+                yield
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(self.file.fileno(), fcntl.LOCK_UN)
 
     @staticmethod
     def _encode_numpy(obj):
@@ -111,64 +142,49 @@ class SharedBufferLite:
         if data_length > (self.size - self.HEADER_SIZE):
             raise ValueError(f"Data too large: {data_length} bytes (max {self.size - self.HEADER_SIZE})")
 
-        # 读取当前序列号并递增
-        current_seq = struct.unpack('<I', self.mmap[0:4])[0]
-        new_seq = (current_seq + 1) & 0xFFFFFFFF
+        with self._locked(exclusive=True):
+            current_seq = struct.unpack('<I', self.mmap[0:4])[0]
+            new_seq = (current_seq + 1) & 0xFFFFFFFF
 
-        # 写入新数据 (顺序很重要：先数据，后长度，最后序列号)
-        # 这样可以避免读取端读到不完整的数据
-        self.mmap[8:8+data_length] = serialized  # 1. 先写数据
-        self.mmap[4:8] = struct.pack('<I', data_length)  # 2. 再写长度
-        self.mmap.flush()  # 3. 确保数据和长度可见
-        self.mmap[0:4] = struct.pack('<I', new_seq)  # 4. 最后更新序列号
-        self.mmap.flush()  # 5. 确保序列号可见
+            # 长度为 0 表示当前没有可提交快照，写进程异常退出时读者不会解析半写数据。
+            self.mmap[4:8] = struct.pack('<I', 0)
+            self.mmap.flush()
+            self.mmap[8:8+data_length] = serialized
+            self.mmap[0:4] = struct.pack('<I', new_seq)
+            self.mmap[4:8] = struct.pack('<I', data_length)
+            self.mmap.flush()
 
         return new_seq
 
-    def read(self, max_retries: int = 3) -> Optional[Dict[str, Any]]:
+    def read_with_sequence(self, max_retries: int = 3) -> Tuple[int, Optional[Dict[str, Any]]]:
         """
-        读取最新数据 (使用 Optimistic Read 模式确保数据一致性)
+        原子读取序列号和对应数据。
 
-        采用双重序列号验证：读取前后序列号一致才返回数据，
-        避免读取到写入过程中的不完整数据。
-
-        Args:
-            max_retries: 最大重试次数 (当检测到写入冲突时)
-
-        Returns:
-            数据字典，如果无数据返回None
+        max_retries 为兼容旧 API 保留；文件锁已经保证快照完整性。
         """
-        for _ in range(max_retries):
-            # 1. 读取序列号 (读前)
-            seq_before = struct.unpack('<I', self.mmap[0:4])[0]
-            if seq_before == 0:
-                return None  # 还没有写入过数据
-
-            # 2. 读取数据长度
+        del max_retries
+        with self._locked(exclusive=False):
+            sequence = struct.unpack('<I', self.mmap[0:4])[0]
             length = struct.unpack('<I', self.mmap[4:8])[0]
             if length == 0 or length > (self.size - self.HEADER_SIZE):
-                return None  # 数据无效
-
-            # 3. 读取数据
+                return sequence, None
             serialized = bytes(self.mmap[8:8+length])
 
-            # 4. 再次读取序列号 (读后)
-            seq_after = struct.unpack('<I', self.mmap[0:4])[0]
+        try:
+            data = msgpack.unpackb(serialized, object_hook=self._decode_numpy, raw=False)
+            return sequence, data
+        except Exception:
+            return sequence, None
 
-            # 5. 验证：两次序列号一致才说明数据完整
-            if seq_before == seq_after:
-                try:
-                    return msgpack.unpackb(serialized, object_hook=self._decode_numpy, raw=False)
-                except Exception:
-                    return None
-            # 序列号不一致，说明读取期间有写入，重试
-
-        # 重试多次仍然失败，返回 None
-        return None
+    def read(self, max_retries: int = 3) -> Optional[Dict[str, Any]]:
+        """读取一个完整的最新值快照。"""
+        _, data = self.read_with_sequence(max_retries=max_retries)
+        return data
 
     def get_sequence(self) -> int:
         """获取当前序列号"""
-        return struct.unpack('<I', self.mmap[0:4])[0]
+        with self._locked(exclusive=False):
+            return struct.unpack('<I', self.mmap[0:4])[0]
 
     def close(self):
         """关闭缓冲区"""

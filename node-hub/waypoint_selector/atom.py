@@ -38,6 +38,7 @@ class ViewConfig:
     progress_sync_fraction_threshold: float = 0.2  # 投影超过该比例后消费当前路径点
     progress_target_enabled: bool = True  # 使用 path_progress 直接生成前瞻目标
     progress_target_lookahead_m: float = 2.5  # 沿路径投影点向前的目标距离
+    progress_target_turn_lookahead_m: float = 1.5  # 掉头段使用更短前瞻，避免切过窄弯
     progress_target_max_cross_track_m: float = 12.0  # 横向误差过大时回退到视野算法
 
 
@@ -46,6 +47,7 @@ class SelectorState:
     """选择器内部状态"""
     path: List[Tuple[float, float]] = field(default_factory=list)
     task_id: Optional[str] = None
+    plan_revision: int = 0
     first_unconsumed_idx: int = 0  # 第一个未消费点的索引
     in_view_indices: List[int] = field(default_factory=list)  # 当前视野内的点索引
     path_zones: List[str] = field(default_factory=list)  # 每个路径点的 zone 标注
@@ -144,14 +146,19 @@ class WaypointSelector:
             return None
 
         task_id = path_data.get("task_id")
+        plan_revision = int(path_data.get("plan_revision", 0) or 0)
 
-        # 检查是否是同一个任务
-        if task_id and task_id == self.state.task_id:
+        # 同一任务只有同一计划版本才是重复发布；replan 必须被加载。
+        if (
+            task_id and task_id == self.state.task_id
+            and plan_revision == self.state.plan_revision
+        ):
             return None
 
         # 更新路径
         self.state.path = path_data["path"]
         self.state.task_id = task_id
+        self.state.plan_revision = plan_revision
         self.state.first_unconsumed_idx = 0
         self.state.in_view_indices = []
         self.state.path_zones = path_data.get("path_zones", [])
@@ -547,7 +554,10 @@ class WaypointSelector:
 
         path_index = min(path_index, len(path) - 2)
         segment_fraction = max(0.0, min(1.0, segment_fraction))
-        remaining = max(0.0, self.config.progress_target_lookahead_m)
+        lookahead_m = self.config.progress_target_lookahead_m
+        if progress.get("segment_type") == "headland_turn":
+            lookahead_m = self.config.progress_target_turn_lookahead_m
+        remaining = max(0.0, lookahead_m)
         target_idx = path_index
 
         for idx in range(path_index, len(path) - 1):

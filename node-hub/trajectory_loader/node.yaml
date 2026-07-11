@@ -58,6 +58,11 @@ ports:
       conflate: true        # 覆盖模式
 
 params:
+  operation_plan_file:
+    type: string
+    default: ""
+    description: "云端生成的版本化 MsgPack 作业计划；设置后优先于 trajectory_file"
+
   trajectory_file:
     type: string
     default: ""

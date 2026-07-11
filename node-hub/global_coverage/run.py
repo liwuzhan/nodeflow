@@ -42,6 +42,7 @@ class TaskENU(BaseModel):
     ref_lon: float
     ref_lat: float
     timestamp: float
+    plan_revision: int = 0
 
 class GlobalPath(BaseModel):
     task_id: str
@@ -49,6 +50,7 @@ class GlobalPath(BaseModel):
     path: List[Tuple[float, float]]
     status: str
     message: str
+    plan_revision: int = 0
 
 class OperationPlan(BaseModel):
     task_id: str
@@ -59,6 +61,7 @@ class OperationPlan(BaseModel):
     segments: List[Dict[str, Any]]
     status: str
     summary: Dict[str, Any]
+    plan_revision: int = 0
 
 # --- End Schema Definitions ---
 
@@ -133,6 +136,7 @@ def main():
 
             # 读取参数
             path_point_spacing = float(sdk.params.get('path_point_spacing', 0.5))
+            planning_strategy = str(sdk.params.get('planning_strategy', 'parallel'))
             turn_angle_threshold_deg = float(sdk.params.get('turn_angle_threshold_deg', 45.0))
             turn_zone_radius_m = float(sdk.params.get('turn_zone_radius_m', 4.0))
             work_speed_limit_mps = float(sdk.params.get('work_speed_limit_mps', 1.2))
@@ -143,6 +147,7 @@ def main():
                 turn_smoothing_radius_m = float(turn_smoothing_radius_m)
             turn_smoothing_min_angle_deg = float(sdk.params.get('turn_smoothing_min_angle_deg', 35.0))
             sdk.logger.info(f"路径点间距: {path_point_spacing}m")
+            sdk.logger.info(f"规划策略: {planning_strategy}")
             sdk.logger.info(
                 f"作业语义: 转角阈值={turn_angle_threshold_deg}°, "
                 f"掉头半径={turn_zone_radius_m}m, "
@@ -162,7 +167,7 @@ def main():
             output_port = sdk.create_output_port('global_path', schema=GlobalPath)
             operation_plan_port = sdk.create_output_port('operation_plan', schema=OperationPlan)
 
-            last_task_id = None
+            last_task_identity = None
             task_count = 0
 
             sdk.logger.info("等待任务数据...")
@@ -185,16 +190,20 @@ def main():
                         # ===== 数据验证日志结束 =====
 
                         task_id = task_data.get('id')
+                        plan_revision = int(task_data.get('plan_revision', 0) or 0)
+                        task_identity = (task_id, plan_revision)
 
                         # 仅处理新任务
-                        if task_id and task_id != last_task_id:
+                        if task_id and task_identity != last_task_identity:
                             task_count += 1
                             # 显示任务的参考点信息（从task_enu获取）
                             ref_lon = task_data.get('ref_lon')
                             ref_lat = task_data.get('ref_lat')
 
                             sdk.logger.info("-" * 70)
-                            sdk.logger.info(f"[任务#{task_count}] 收到新任务: {task_id}")
+                            sdk.logger.info(
+                                f"[任务#{task_count}] 收到新任务: {task_id} v{plan_revision}"
+                            )
                             if ref_lon and ref_lat:
                                 sdk.logger.info(f"  GPS参考点: ({ref_lon:.6f}°, {ref_lat:.6f}°)")
                             else:
@@ -228,6 +237,7 @@ def main():
                                     smooth_turns=smooth_turns,
                                     turn_smoothing_radius_m=turn_smoothing_radius_m,
                                     turn_smoothing_min_angle_deg=turn_smoothing_min_angle_deg,
+                                    planning_strategy=planning_strategy,
                                 )
 
                                 duration = time.time() - start_time
@@ -248,20 +258,25 @@ def main():
                                     turn_zone_radius_m=turn_zone_radius_m,
                                     work_speed_mps=work_speed_limit_mps,
                                     turn_speed_mps=turn_speed_limit_mps,
+                                    path_zones=planner.last_path_zones,
+                                    planner_metadata=planner.last_plan_metadata,
                                 )
+                                operation_plan['plan_revision'] = plan_revision
                                 result = {
                                     'task_id': task_id,
                                     'timestamp': timestamp,
                                     'path': path_points,
                                     'path_zones': operation_plan.get('path_zones', []),
                                     'segments': operation_plan.get('segments', []),
+                                    'planner': planner.last_plan_metadata,
                                     'status': 'success' if path_points else 'failed',
-                                    'message': 'Path found' if path_points else 'No path found'
+                                    'message': 'Path found' if path_points else 'No path found',
+                                    'plan_revision': plan_revision,
                                 }
 
                                 # ===== 持续发送路径 (确保下游随时可接收) =====
                                 sdk.logger.info(f"开始持续发送规划结果: {len(path_points)}个路径点 @ 10Hz频率")
-                                last_task_id = task_id
+                                last_task_identity = task_identity
                                 send_count = 0
 
                                 while True:
@@ -281,8 +296,12 @@ def main():
                                     new_task = input_port.recv_latest()
                                     if new_task and isinstance(new_task, dict):
                                         new_task_id = new_task.get('id')
-                                        if new_task_id and new_task_id != last_task_id:
-                                            sdk.logger.info(f"接收到新任务，停止发送当前路径: {new_task_id}")
+                                        new_revision = int(new_task.get('plan_revision', 0) or 0)
+                                        if new_task_id and (new_task_id, new_revision) != last_task_identity:
+                                            sdk.logger.info(
+                                                f"接收到新任务/计划版本，停止发送当前路径: "
+                                                f"{new_task_id} v{new_revision}"
+                                            )
                                             break  # 退出循环，重新规划新任务
 
                                     time.sleep(0.1)  # 10Hz发送频率，与RTK发送频率协调

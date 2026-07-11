@@ -5,6 +5,7 @@ import math
 from shapely.geometry import LineString, Polygon, MultiPolygon
 
 from .models import VehicleConfig, ParcelData
+from .contour_spiral import build_contour_spiral
 from .safe_area import (
     build_safe_area,
     compute_job_direction
@@ -166,6 +167,8 @@ class GlobalCoveragePlanner:
         self.output_enu = output_enu
         self.logger = logger or logging.getLogger(__name__)
         self.last_keypoints = []  # 保存最近一次规划的关键转折点（密化前）
+        self.last_path_zones: Optional[List[str]] = None
+        self.last_plan_metadata: Dict[str, object] = {}
 
     def plan(
         self,
@@ -175,6 +178,7 @@ class GlobalCoveragePlanner:
         smooth_turns: bool = False,
         turn_smoothing_radius_m: Optional[float] = None,
         turn_smoothing_min_angle_deg: float = 35.0,
+        planning_strategy: str = "parallel",
     ) -> List[Tuple[float, float]]:
         """
         执行全覆盖路径规划
@@ -191,6 +195,20 @@ class GlobalCoveragePlanner:
         """
         plan_start = time.time()
         parcel_dict = parcel_data.to_dict()
+        strategy = str(planning_strategy or "parallel").strip().lower()
+        strategy_aliases = {
+            "boustrophedon": "parallel",
+            "parallel_coverage": "parallel",
+            "rotary_tillage": "contour_spiral",
+            "spiral": "contour_spiral",
+        }
+        strategy = strategy_aliases.get(strategy, strategy)
+        if strategy not in {"parallel", "contour_spiral"}:
+            raise ValueError(f"Unsupported planning strategy: {planning_strategy}")
+
+        self.last_keypoints = []
+        self.last_path_zones = None
+        self.last_plan_metadata = {"strategy": strategy}
 
         self.logger.info("=" * 60)
         self.logger.info("开始全覆盖路径规划")
@@ -211,6 +229,79 @@ class GlobalCoveragePlanner:
 
         if isinstance(work_area, MultiPolygon):
             self.logger.info(f"  多边形组件: {len(list(work_area.geoms))}个")
+
+        if strategy == "contour_spiral":
+            entry_point = None
+            for entry in parcel_data.entries:
+                if entry.get("type") == "entry" and entry.get("point"):
+                    point = entry["point"]
+                    entry_point = (float(point[0]), float(point[1]))
+                    break
+
+            self.logger.info(
+                f"[轮廓螺旋] 幅宽={vehicle_config.implement_width_m:.2f}m, "
+                f"有效间距={vehicle_config.effective_row_spacing:.2f}m, "
+                f"作业最小转弯半径={vehicle_config.effective_work_min_turn_radius_m:.2f}m"
+            )
+            spiral = build_contour_spiral(
+                work_area=work_area,
+                implement_width_m=vehicle_config.implement_width_m,
+                overlap_ratio=vehicle_config.overlap_ratio,
+                path_point_spacing_m=path_point_spacing,
+                entry_point=entry_point,
+                min_turn_radius_m=vehicle_config.effective_work_min_turn_radius_m,
+                max_curvature_rate_1pm2=vehicle_config.work_max_curvature_rate_1pm2,
+            )
+            if spiral.unsafe_work_area_m2 > 0.05:
+                raise ValueError(
+                    "Contour spiral work sweep exceeds the safe work area by "
+                    f"{spiral.unsafe_work_area_m2:.3f} m2"
+                )
+
+            self.last_path_zones = spiral.path_zones
+            self.last_plan_metadata = {
+                "strategy": strategy,
+                "spiral_mode": "bounded_curvature_inward",
+                "contour_count": spiral.contour_count,
+                "layer_count": spiral.layer_count,
+                "chain_count": spiral.chain_count,
+                "component_count": spiral.component_count,
+                "work_connector_count": spiral.work_connector_count,
+                "transit_connector_count": spiral.transit_connector_count,
+                "terminal_pass_count": spiral.terminal_pass_count,
+                "contour_spacing_m": round(spiral.contour_spacing_m, 6),
+                "effective_overlap_ratio": round(
+                    spiral.effective_overlap_ratio,
+                    6,
+                ),
+                "coverage_ratio": round(spiral.coverage_ratio, 6),
+                "unsafe_work_area_m2": round(spiral.unsafe_work_area_m2, 6),
+                "overlap_area_m2": round(spiral.overlap_area_m2, 6),
+                "overlap_ratio": round(spiral.overlap_ratio, 6),
+                "work_min_turn_radius_m": vehicle_config.effective_work_min_turn_radius_m,
+                "max_curvature_1pm": round(spiral.max_curvature_1pm, 6),
+                "achieved_min_turn_radius_m": round(
+                    spiral.achieved_min_turn_radius_m,
+                    6,
+                ),
+                "connector_max_curvature_rate_1pm2": round(
+                    spiral.connector_max_curvature_rate_1pm2,
+                    6,
+                ),
+                "curvature_constrained": spiral.curvature_constrained,
+            }
+            self.logger.info(
+                f"[轮廓螺旋] 轮廓={spiral.contour_count}, 链={spiral.chain_count}, "
+                f"作业连接={spiral.work_connector_count}, "
+                f"非作业连接={spiral.transit_connector_count}, "
+                f"覆盖率={spiral.coverage_ratio * 100:.1f}%, "
+                f"路径点={len(spiral.path)}"
+            )
+            if spiral.coverage_ratio < 0.9:
+                self.logger.warning(
+                    f"[轮廓螺旋] 覆盖率偏低: {spiral.coverage_ratio * 100:.1f}%"
+                )
+            return spiral.path
 
         # 2. 计算作业方向
         step_start = time.time()

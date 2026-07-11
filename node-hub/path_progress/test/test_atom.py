@@ -26,6 +26,22 @@ def test_project_pose_to_path_returns_cross_track_error():
     assert projection["cross_track_error_m"] == 1.5
 
 
+def test_project_pose_to_path_prefers_heading_consistent_parallel_row():
+    path = [(0.0, 0.0), (10.0, 0.0), (10.0, 1.0), (0.0, 1.0)]
+    pose = {"x": 5.0, "y": 0.6, "theta": 0.0}
+
+    geometric_only = project_pose_to_path(
+        pose, path, heading_match_weight_m=0.0
+    )
+    heading_aware = project_pose_to_path(
+        pose, path, heading_match_weight_m=2.0
+    )
+
+    assert geometric_only["path_index"] == 2
+    assert heading_aware["path_index"] == 0
+    assert heading_aware["path_heading_rad"] == 0.0
+
+
 def test_compute_progress_maps_pose_to_segment_and_intent():
     plan = {
         "task_id": "task_001",

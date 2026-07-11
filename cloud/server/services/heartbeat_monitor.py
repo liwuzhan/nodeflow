@@ -15,22 +15,24 @@ class HeartbeatMonitor:
     def __init__(self):
         self._running = False
         self._thread: threading.Thread | None = None
+        self._stop_event = threading.Event()
 
     def start(self):
         self._running = True
+        self._stop_event.clear()
         self._thread = threading.Thread(target=self._loop, daemon=True, name="heartbeat-monitor")
         self._thread.start()
         logger.info("Heartbeat monitor started")
 
     def stop(self):
         self._running = False
+        self._stop_event.set()
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=5)
         logger.info("Heartbeat monitor stopped")
 
     def _loop(self):
-        while self._running:
-            time.sleep(30)
+        while not self._stop_event.wait(30):
             try:
                 self._check()
             except Exception as e:
@@ -56,12 +58,11 @@ class HeartbeatMonitor:
 
                     db.query(EdgeTask).filter(
                         EdgeTask.machine_id == m.id,
-                        EdgeTask.state.in_(["pending", "downloading", "ready", "running"]),
+                        EdgeTask.state.in_(["running", "cancel_requested"]),
                     ).update({
-                        "state": "failed",
-                        "error_code": "MACHINE_OFFLINE",
-                        "error_detail": f"Machine offline for {age:.0f}s",
-                        "completed_at": time.time(),
+                        "state": "communication_lost",
+                        "error_code": "COMMUNICATION_LOST",
+                        "error_detail": f"No heartbeat for {age:.0f}s; execution state unknown",
                     }, synchronize_session=False)
 
             db.commit()
