@@ -148,6 +148,17 @@ def create_parser() -> argparse.ArgumentParser:
     )
     _add_json_argument(buffer_inspect_parser)
 
+    buffer_read_parser = buffer_subparsers.add_parser(
+        'read',
+        help='读取缓冲区数据（使用tombstone协议）',
+        description='通过SharedBufferLite.read()读取缓冲区内容，自动处理tombstone协议'
+    )
+    buffer_read_parser.add_argument(
+        'name',
+        help='缓冲区名称 (例如 sim_output.rtk_fix)'
+    )
+    _add_json_argument(buffer_read_parser)
+
     # ========== health 命令组 ==========
     health_parser = subparsers.add_parser(
         'health',
@@ -183,6 +194,23 @@ def create_parser() -> argparse.ArgumentParser:
         help='采样间隔秒数 (默认: 0.1)'
     )
     health_check_parser.add_argument(
+        '--json',
+        action='store_true',
+        default=argparse.SUPPRESS,
+        help='以 JSON 格式输出'
+    )
+
+    # health status
+    health_status_parser = health_subparsers.add_parser(
+        'status',
+        help='查询节点健康状态',
+        description='读取节点的 .health 缓冲区并显示健康状态'
+    )
+    health_status_parser.add_argument(
+        'node_id',
+        help='要查询的节点 ID'
+    )
+    health_status_parser.add_argument(
         '--json',
         action='store_true',
         default=argparse.SUPPRESS,

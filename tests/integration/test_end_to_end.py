@@ -127,7 +127,6 @@ def test_complete_workflow():
             # 关闭节点
             print("\n[关闭] 清理资源...")
             coordinator.shutdown_nodes(processes, shutdown_timeout=2.0)
-            socket_manager.cleanup()
 
             print("✓ 清理完成")
 

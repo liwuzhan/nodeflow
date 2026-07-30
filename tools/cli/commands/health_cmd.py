@@ -6,7 +6,7 @@ from typing import Dict, List, Tuple, Any
 
 from runtime.config.yaml_parser import YAMLParser
 from sdk.shared_buffer_lite import SharedBufferLite
-from tools.cli.utils.output import print_error, redirect_library_stdout_when_json
+from tools.cli.utils.output import print_error, print_json, redirect_library_stdout_when_json
 from tools.cli.commands.runtime_cmd import is_runtime_running
 
 try:
@@ -23,6 +23,8 @@ def handle_health_command(args) -> int:
         return _handle_health_check(args)
     elif subcommand == "flow" or subcommand is None: # Default to flow for backward compatibility
         return _handle_health_flow(args)
+    elif subcommand == "status":
+        return handle_health_status(args)
     else:
         print_error(f"Unknown subcommand '{subcommand}'", as_json=as_json)
         return 1
@@ -302,3 +304,46 @@ def _sample_buffers(names: List[str], buffer_dir: Path, interval: float) -> Dict
             results[name]["status"] = "ERROR"
 
     return results
+
+
+def handle_health_status(args) -> int:
+    """查询节点健康状态"""
+    node_id = args.node_id
+    as_json = bool(getattr(args, "json", False))
+
+    buffer_name = f"{node_id}.health"
+
+    try:
+        buf = SharedBufferLite(buffer_name, create=False)
+        health_data = buf.read()
+        buf.close()
+    except FileNotFoundError:
+        print_error(
+            f"Health buffer not found for node '{node_id}'",
+            as_json=as_json,
+            code="not_found",
+        )
+        return 1
+    except Exception as e:
+        print_error(f"Error reading health data: {e}", as_json=as_json)
+        return 1
+
+    if not health_data:
+        print_error(
+            f"No health data available for node '{node_id}'",
+            as_json=as_json,
+            code="empty",
+        )
+        return 1
+
+    if as_json:
+        print_json({"status": "ok", "node_id": node_id, "health": health_data})
+    else:
+        print(f"\nHealth Status for '{node_id}':")
+        print(f"  Status: {health_data.get('status', 'unknown')}")
+        print(f"  Timestamp: {health_data.get('timestamp', 'N/A')}")
+        print(f"  Inputs: {json.dumps(health_data.get('inputs', {}), indent=4)}")
+        print(f"  Outputs: {json.dumps(health_data.get('outputs', {}), indent=4)}")
+        print()
+
+    return 0

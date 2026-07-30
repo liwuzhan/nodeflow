@@ -10,18 +10,13 @@
 L3 职责: 只负责数据收发，不负责算法逻辑
 """
 
-import sys
 import time
-from pathlib import Path
 
 try:
     from pydantic import BaseModel, Field
 except ImportError:
     class BaseModel: pass
     def Field(*args, **kwargs): return None
-
-project_root = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(project_root))
 
 from sdk.nodeflow_sdk import NodeFlowSDK
 from atom import TillageController, TillageConfig

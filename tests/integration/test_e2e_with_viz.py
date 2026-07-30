@@ -41,23 +41,10 @@ class TestE2EWithVisualization:
         with tempfile.TemporaryDirectory() as tmpdir:
             print(f"  临时目录: {tmpdir}")
 
-            # ========== 创建所有端口 ==========
-            # 仿真器输出
-            sim_task_addr = "ipc:///tmp/nodeflow/sim_task"
-            sim_gps_addr = "ipc:///tmp/nodeflow/sim_gps"
-            sim_state_addr = "ipc:///tmp/nodeflow/sim_state"
-
-            # 规划器输出
-            planner_output_addr = "ipc:///tmp/nodeflow/global_path"
-
-            # 控制器输出
-            controller_output_addr = "ipc:///tmp/nodeflow/velocity_cmd"
-
             print("\n[步骤 1] 创建仿真器输出端口")
-            sim_task_out = OutputPort(name="sim_task", zmq_address=sim_task_addr)
-            sim_gps_out = OutputPort(name="sim_gps", zmq_address=sim_gps_addr)
-            sim_state_out = OutputPort(name="sim_state", zmq_address=sim_state_addr)
-            time.sleep(0.2)
+            sim_task_out = OutputPort(name="sim_task", buffer_name="sim_task")
+            sim_gps_out = OutputPort(name="sim_gps", buffer_name="sim_gps")
+            sim_state_out = OutputPort(name="sim_state", buffer_name="sim_state")
 
             # ========== 仿真器发送初始任务和GPS数据 ==========
             print("\n[步骤 2] 仿真器发送任务和GPS数据")
@@ -88,21 +75,17 @@ class TestE2EWithVisualization:
             sim_gps_out.send(initial_gps)
             print(f"  ✓ 发送初始GPS: ({initial_gps['latitude']}, {initial_gps['longitude']})")
 
-            time.sleep(0.2)
-
             # ========== 路径规划器接收任务并生成路径 ==========
             print("\n[步骤 3] 路径规划器生成路径")
 
-            planner_task_in = InputPort(name="planner_task", zmq_address_or_source=sim_task_addr)
-            time.sleep(0.1)
+            planner_task_in = InputPort(name="planner_task", buffer_name="sim_task")
 
             received_task = planner_task_in.recv_latest()
             assert received_task is not None, "规划器应该接收到任务"
             print(f"  ✓ 规划器接收任务: {len(received_task['field_boundary'])} 个边界点")
 
             # 生成规划路径（往复式覆盖）
-            planner_output = OutputPort(name="global_path", zmq_address=planner_output_addr)
-            time.sleep(0.1)
+            planner_output = OutputPort(name="global_path", buffer_name="global_path")
 
             path_data = {
                 "waypoints": [
@@ -133,14 +116,11 @@ class TestE2EWithVisualization:
             planner_output.send(path_data)
             print(f"  ✓ 规划器生成路径: {len(path_data['waypoints'])} 个路径点, {path_data['total_distance']}m")
 
-            time.sleep(0.2)
-
             # ========== 速度控制器接收GPS和路径 ==========
             print("\n[步骤 4] 速度控制器生成控制命令")
 
-            controller_gps_in = InputPort(name="ctrl_gps", zmq_address_or_source=sim_gps_addr)
-            controller_path_in = InputPort(name="ctrl_path", zmq_address_or_source=planner_output_addr)
-            time.sleep(0.1)
+            controller_gps_in = InputPort(name="ctrl_gps", buffer_name="sim_gps")
+            controller_path_in = InputPort(name="ctrl_path", buffer_name="global_path")
 
             received_gps = controller_gps_in.recv_latest()
             received_path = controller_path_in.recv_latest()
@@ -150,8 +130,7 @@ class TestE2EWithVisualization:
             print(f"  ✓ 控制器接收GPS: lat={received_gps['latitude']}")
             print(f"  ✓ 控制器接收路径: {len(received_path['waypoints'])} 个点")
 
-            controller_output = OutputPort(name="velocity_cmd", zmq_address=controller_output_addr)
-            time.sleep(0.1)
+            controller_output = OutputPort(name="velocity_cmd", buffer_name="velocity_cmd")
 
             cmd_data = {
                 "linear_velocity": 1.5,
@@ -161,16 +140,13 @@ class TestE2EWithVisualization:
             controller_output.send(cmd_data)
             print(f"  ✓ 控制器发送命令: v={cmd_data['linear_velocity']}m/s")
 
-            time.sleep(0.2)
-
             # ========== 可视化节点接收所有数据 ==========
             print("\n[步骤 5] 可视化节点收集数据")
 
             # 可视化节点订阅
-            viz_task_in = InputPort(name="viz_task", zmq_address_or_source=sim_task_addr)
-            viz_path_in = InputPort(name="viz_path", zmq_address_or_source=planner_output_addr)
-            viz_gps_in = InputPort(name="viz_gps", zmq_address_or_source=sim_gps_addr)
-            time.sleep(0.2)
+            viz_task_in = InputPort(name="viz_task", buffer_name="sim_task")
+            viz_path_in = InputPort(name="viz_path", buffer_name="global_path")
+            viz_gps_in = InputPort(name="viz_gps", buffer_name="sim_gps")
 
             # 验证可视化节点接收数据
             viz_task = viz_task_in.recv_latest()
@@ -310,9 +286,7 @@ class TestE2EWithVisualization:
             from run import TrajectoryCollector, TrajectoryVisualizer
 
             # 创建GPS输出
-            gps_addr = "ipc:///tmp/nodeflow/continuous_gps"
-            gps_out = OutputPort(name="gps", zmq_address=gps_addr)
-            time.sleep(0.1)
+            gps_out = OutputPort(name="gps", buffer_name="continuous_gps")
 
             # 初始化收集器
             collector = TrajectoryCollector()

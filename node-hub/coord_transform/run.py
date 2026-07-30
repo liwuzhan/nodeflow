@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-import sys
-import os
 import time
-from pathlib import Path
 from typing import Optional, Dict, Any
 
 # Pydantic 导入
@@ -11,14 +8,6 @@ try:
 except ImportError:
     class BaseModel: pass
     def Field(*args, **kwargs): return None
-
-project_root = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(project_root))
-
-# 添加当前节点目录到sys.path以支持直接import utils
-coord_dir = Path(__file__).parent
-if str(coord_dir) not in sys.path:
-    sys.path.insert(0, str(coord_dir))
 
 from sdk.nodeflow_sdk import NodeFlowSDK
 from atom import transform_pose

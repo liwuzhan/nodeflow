@@ -7,6 +7,7 @@ import struct
 import json
 from pathlib import Path
 
+from sdk.shared_buffer_lite import SharedBufferLite
 from tools.cli.utils.output import print_error, print_json
 
 
@@ -22,6 +23,8 @@ def handle_buffer_command(args) -> int:
             return handle_buffer_list(args)
         elif args.subcommand == 'inspect':
             return handle_buffer_inspect(args)
+        elif args.subcommand == 'read':
+            return handle_buffer_read(args)
         else:
             print(f"Error: Unknown buffer subcommand '{args.subcommand}'", file=sys.stderr)
             return 1
@@ -188,3 +191,39 @@ def _read_header(buf_path: Path) -> tuple[int, int]:
         seq = struct.unpack("<I", header[0:4])[0]
         length = struct.unpack("<I", header[4:8])[0]
         return seq, length
+
+
+def handle_buffer_read(args) -> int:
+    """使用SharedBufferLite.read()读取缓冲区数据（tombstone-aware）"""
+    buf_name = args.name
+    as_json = bool(getattr(args, "json", False))
+
+    try:
+        buf = SharedBufferLite(buf_name, create=False)
+    except FileNotFoundError:
+        print_error(f"Buffer not found: {buf_name}", as_json=as_json, code="not_found")
+        return 1
+    except Exception as e:
+        print_error(f"Error opening buffer: {e}", as_json=as_json)
+        return 1
+
+    try:
+        data = buf.read()
+        buf.close()
+    except Exception as e:
+        print_error(f"Error reading buffer: {e}", as_json=as_json)
+        return 1
+
+    if data is None:
+        if as_json:
+            print_json({"status": "empty", "name": buf_name, "data": None})
+        else:
+            print(f"No data in buffer: {buf_name}")
+        return 0
+
+    if as_json:
+        print_json({"status": "ok", "name": buf_name, "data": data})
+    else:
+        print(json.dumps(data, ensure_ascii=False, indent=2, default=str))
+
+    return 0

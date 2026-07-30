@@ -190,13 +190,11 @@ def test_outputport_reads_env_config():
     from sdk.port import OutputPort
 
     # 创建OutputPort
-    output = OutputPort(name="test_port", zmq_address="ipc:///tmp/nodeflow/test.test_port")
+    output = OutputPort(name="test_port", buffer_name="test.test_port")
 
     # 验证配置
     assert output.buffer_size == 2 * 1024 * 1024, \
         f"Expected 2MB, got {output.buffer_size}"
-    assert output.conflate == False, \
-        f"Expected conflate=False, got {output.conflate}"
 
     # 验证buffer实际大小
     assert output.buffer.size == 2 * 1024 * 1024, \
@@ -230,13 +228,11 @@ def test_outputport_uses_defaults():
     from sdk.port import OutputPort
 
     # 创建OutputPort
-    output = OutputPort(name="default_test", zmq_address="ipc:///tmp/nodeflow/test.default_test")
+    output = OutputPort(name="default_test", buffer_name="test.default_test")
 
     # 验证默认配置
     assert output.buffer_size == 1024 * 1024, \
         f"Expected default 1MB, got {output.buffer_size}"
-    assert output.conflate == True, \
-        f"Expected default conflate=True, got {output.conflate}"
 
     # 验证buffer实际大小
     assert output.buffer.size == 1024 * 1024, \
@@ -246,7 +242,7 @@ def test_outputport_uses_defaults():
     output.close()
     SharedBufferLite.cleanup_all()
 
-    print(f"✅ OutputPort正确使用默认值: buffer_size=1MB, conflate=True")
+    print(f"✅ OutputPort正确使用默认值: buffer_size=1MB")
 
 
 def main():

@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
-import sys
 import time
 import math
-from pathlib import Path
 from typing import Optional, Any
 
 # Pydantic 导入
@@ -11,9 +9,6 @@ try:
 except ImportError:
     class BaseModel: pass
     def Field(*args, **kwargs): return None
-
-project_root = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(project_root))
 
 from sdk.nodeflow_sdk import NodeFlowSDK
 from atom import ControlSafetyGuard, compute_velocity_cmd
@@ -101,9 +96,7 @@ def main():
         headland_turn_heading_gain = float(sdk.params.get("headland_turn_heading_gain", 2.0))
         headland_turn_align_threshold_deg = float(sdk.params.get("headland_turn_align_threshold_deg", 35.0))
         headland_turn_min_speed_factor = float(sdk.params.get("headland_turn_min_speed_factor", 0.25))
-        headland_turn_use_path_heading = str(
-            sdk.params.get("headland_turn_use_path_heading", False)
-        ).lower() in {"1", "true", "yes", "on"}
+        headland_turn_use_path_heading = bool(sdk.params.get("headland_turn_use_path_heading", False))
         pose_timeout_s = float(sdk.params.get("pose_timeout_s", 0.5))
         target_timeout_s = float(sdk.params.get("target_timeout_s", 0.5))
         progress_timeout_s = float(sdk.params.get("progress_timeout_s", 0.5))

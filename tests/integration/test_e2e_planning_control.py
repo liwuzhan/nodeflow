@@ -120,13 +120,10 @@ class TestE2EDataFlow:
         SharedBufferLite.cleanup_all()
 
         # 仿真：sim_output生成GPS数据
-        zmq_addr = "ipc:///tmp/nodeflow/test_gps_flow"
-        output = OutputPort(name="sim_output", zmq_address=zmq_addr)
-        time.sleep(0.1)
+        output = OutputPort(name="sim_output", buffer_name="test_gps_flow")
 
         # 仿真：velocity_controller接收GPS数据
-        input_port = InputPort(name="velocity_controller", zmq_address_or_source=zmq_addr)
-        time.sleep(0.1)
+        input_port = InputPort(name="velocity_controller", buffer_name="test_gps_flow")
 
         # 生成GPS数据
         gps_data = {
@@ -138,7 +135,6 @@ class TestE2EDataFlow:
         }
 
         output.send(gps_data)
-        time.sleep(0.1)
 
         # 验证接收
         received = input_port.recv_latest()
@@ -161,13 +157,10 @@ class TestE2EDataFlow:
         SharedBufferLite.cleanup_all()
 
         # 仿真：global_coverage生成路径
-        zmq_addr = "ipc:///tmp/nodeflow/test_path_flow"
-        output = OutputPort(name="global_coverage", zmq_address=zmq_addr)
-        time.sleep(0.1)
+        output = OutputPort(name="global_coverage", buffer_name="test_path_flow")
 
         # 仿真：velocity_controller接收路径
-        input_port = InputPort(name="velocity_controller", zmq_address_or_source=zmq_addr)
-        time.sleep(0.1)
+        input_port = InputPort(name="velocity_controller", buffer_name="test_path_flow")
 
         # 生成路径数据（农业应用典型的来回覆盖路径）
         path_data = {
@@ -182,7 +175,6 @@ class TestE2EDataFlow:
         }
 
         output.send(path_data)
-        time.sleep(0.1)
 
         # 验证接收
         received = input_port.recv_latest()
@@ -205,13 +197,10 @@ class TestE2EDataFlow:
         SharedBufferLite.cleanup_all()
 
         # 仿真：velocity_controller生成控制命令
-        zmq_addr = "ipc:///tmp/nodeflow/test_cmd_flow"
-        output = OutputPort(name="velocity_controller", zmq_address=zmq_addr)
-        time.sleep(0.1)
+        output = OutputPort(name="velocity_controller", buffer_name="test_cmd_flow")
 
         # 仿真：sim_input接收控制命令
-        input_port = InputPort(name="sim_input", zmq_address_or_source=zmq_addr)
-        time.sleep(0.1)
+        input_port = InputPort(name="sim_input", buffer_name="test_cmd_flow")
 
         # 生成控制命令（使用纯追踪算法）
         cmd_data = {
@@ -223,7 +212,6 @@ class TestE2EDataFlow:
         }
 
         output.send(cmd_data)
-        time.sleep(0.1)
 
         # 验证接收
         received = input_port.recv_latest()
@@ -251,17 +239,10 @@ class TestE2EClosedLoop:
         print("\n=== 测试单个控制周期 ===")
         SharedBufferLite.cleanup_all()
 
-        # 创建端口
-        sim_gps_addr = "ipc:///tmp/nodeflow/sim_gps"
-        task_addr = "ipc:///tmp/nodeflow/task_request"
-        planner_output_addr = "ipc:///tmp/nodeflow/global_coverage"
-        controller_output_addr = "ipc:///tmp/nodeflow/velocity_controller"
-
         # Stage 1: 仿真器输出GPS和任务
         print("  [Stage 1] 仿真器输出GPS和任务")
-        gps_sender = OutputPort(name="sim_gps", zmq_address=sim_gps_addr)
-        task_sender = OutputPort(name="sim_task", zmq_address=task_addr)
-        time.sleep(0.1)
+        gps_sender = OutputPort(name="sim_gps", buffer_name="sim_gps")
+        task_sender = OutputPort(name="sim_task", buffer_name="task_request")
 
         gps_data = {
             "latitude": 40.1234,
@@ -282,19 +263,16 @@ class TestE2EClosedLoop:
 
         gps_sender.send(gps_data)
         task_sender.send(task_data)
-        time.sleep(0.05)
 
         # Stage 2: 路径规划
         print("  [Stage 2] 路径规划器生成路径")
-        planner_input = InputPort(name="planner_in", zmq_address_or_source=task_addr)
-        time.sleep(0.1)
+        planner_input = InputPort(name="planner_in", buffer_name="task_request")
 
         received_task = planner_input.recv_latest()
         assert received_task is not None, "规划器应该接收到任务"
         print(f"    规划器接收到任务: {len(received_task['field_boundary'])} 边界点")
 
-        planner_output = OutputPort(name="global_coverage", zmq_address=planner_output_addr)
-        time.sleep(0.05)
+        planner_output = OutputPort(name="global_coverage", buffer_name="global_coverage")
 
         path_data = {
             "waypoints": [
@@ -306,13 +284,11 @@ class TestE2EClosedLoop:
             "total_distance": 250.0
         }
         planner_output.send(path_data)
-        time.sleep(0.05)
 
         # Stage 3: 速度控制
         print("  [Stage 3] 速度控制器生成命令")
-        controller_gps_input = InputPort(name="ctrl_gps", zmq_address_or_source=sim_gps_addr)
-        controller_path_input = InputPort(name="ctrl_path", zmq_address_or_source=planner_output_addr)
-        time.sleep(0.1)
+        controller_gps_input = InputPort(name="ctrl_gps", buffer_name="sim_gps")
+        controller_path_input = InputPort(name="ctrl_path", buffer_name="global_coverage")
 
         received_gps = controller_gps_input.recv_latest()
         received_path = controller_path_input.recv_latest()
@@ -322,8 +298,7 @@ class TestE2EClosedLoop:
         print(f"    控制器接收GPS: lat={received_gps['latitude']}")
         print(f"    控制器接收路径: {len(received_path['waypoints'])} 个点")
 
-        controller_output = OutputPort(name="velocity_controller", zmq_address=controller_output_addr)
-        time.sleep(0.05)
+        controller_output = OutputPort(name="velocity_controller", buffer_name="velocity_controller")
 
         cmd_data = {
             "linear_velocity": 1.5,
@@ -331,12 +306,10 @@ class TestE2EClosedLoop:
             "timestamp": time.time()
         }
         controller_output.send(cmd_data)
-        time.sleep(0.05)
 
         # Stage 4: 仿真器执行
         print("  [Stage 4] 仿真器执行命令")
-        sim_input = InputPort(name="sim_input", zmq_address_or_source=controller_output_addr)
-        time.sleep(0.1)
+        sim_input = InputPort(name="sim_input", buffer_name="velocity_controller")
 
         received_cmd = sim_input.recv_latest()
         assert received_cmd is not None, "仿真器应该接收到命令"
@@ -360,12 +333,9 @@ class TestE2EClosedLoop:
         print("\n=== 测试多个控制周期 ===")
         SharedBufferLite.cleanup_all()
 
-        zmq_addr = "ipc:///tmp/nodeflow/control_loop"
-
         # 创建环路
-        sensor = OutputPort(name="sensor", zmq_address=zmq_addr)
-        controller = InputPort(name="controller", zmq_address_or_source=zmq_addr)
-        time.sleep(0.1)
+        sensor = OutputPort(name="sensor", buffer_name="control_loop")
+        controller = InputPort(name="controller", buffer_name="control_loop")
 
         # 运行10个控制周期
         cycle_count = 10
@@ -405,11 +375,8 @@ class TestE2EThroughput:
         print("\n=== 测试控制循环吞吐量 ===")
         SharedBufferLite.cleanup_all()
 
-        zmq_addr = "ipc:///tmp/nodeflow/throughput_test"
-
-        sender = OutputPort(name="sender", zmq_address=zmq_addr)
-        receiver = InputPort(name="receiver", zmq_address_or_source=zmq_addr)
-        time.sleep(0.1)
+        sender = OutputPort(name="sender", buffer_name="throughput_test")
+        receiver = InputPort(name="receiver", buffer_name="throughput_test")
 
         # 快速发送50条消息
         msg_count = 50
@@ -432,7 +399,6 @@ class TestE2EThroughput:
         print(f"  吞吐量: {throughput:.1f} msg/s")
 
         # 验证最后一条消息
-        time.sleep(0.1)
         received = receiver.recv_latest()
         assert received is not None, "应该接收到消息"
         assert received["sequence"] >= msg_count - 5, "应该接收到最后几条消息之一"
@@ -454,11 +420,8 @@ class TestE2EErrorHandling:
         print("\n=== 测试缺失数据处理 ===")
         SharedBufferLite.cleanup_all()
 
-        zmq_addr = "ipc:///tmp/nodeflow/error_test"
-
-        sender = OutputPort(name="sender", zmq_address=zmq_addr)
-        receiver = InputPort(name="receiver", zmq_address_or_source=zmq_addr)
-        time.sleep(0.1)
+        sender = OutputPort(name="sender", buffer_name="error_test")
+        receiver = InputPort(name="receiver", buffer_name="error_test")
 
         # 接收器在无数据时应该返回None
         received = receiver.recv_latest()
@@ -468,7 +431,6 @@ class TestE2EErrorHandling:
         # 发送数据
         data = {"test": "data"}
         sender.send(data)
-        time.sleep(0.1)
 
         # 接收数据
         received = receiver.recv_latest()

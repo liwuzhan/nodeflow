@@ -10,9 +10,7 @@ Waypoint Selector 节点 (L3 分子层)
 L3 职责: 只负责数据收发，不负责算法逻辑
 """
 
-import sys
 import time
-from pathlib import Path
 from typing import Tuple
 
 # Pydantic 导入
@@ -21,10 +19,6 @@ try:
 except ImportError:
     class BaseModel: pass
     def Field(*args, **kwargs): return None
-
-# 添加项目根路径
-project_root = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(project_root))
 
 from sdk.nodeflow_sdk import NodeFlowSDK
 from atom import WaypointSelector, ViewConfig

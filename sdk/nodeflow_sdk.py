@@ -250,19 +250,18 @@ class NodeFlowSDK:
         - ValueError: 端口未配置
         """
         env_var_name = f'NODE_IN_{port_name}'
-        zmq_address = os.getenv(env_var_name)
+        buffer_name = os.getenv(env_var_name)
 
-        if not zmq_address:
+        if not buffer_name:
             raise ValueError(
                 f"Input port '{port_name}' not configured. "
                 f"Environment variable '{env_var_name}' not found."
             )
 
-        # 创建InputPort，传入zmq_address（ZeroMQ版本）
-        port = InputPort(port_name, zmq_address)
+        port = InputPort(port_name, buffer_name)
         self.inputs[port_name] = port
 
-        self.logger.info(f"Created input port: {port_name}")
+        self.logger.info(f"Created input port: {port_name} (buffer={buffer_name})")
         return port
 
     def _publish_metadata(self):
@@ -299,38 +298,58 @@ class NodeFlowSDK:
         except Exception as e:
             self.logger.warning(f"Failed to publish node metadata: {e}")
 
+    def report_health(self):
+        """
+        报告节点健康状态到共享缓冲区
+
+        创建/写入 {node_id}.health 缓冲区，包含状态、时间戳、端口连接状态
+        """
+        try:
+            buffer_name = f"{self.node_id}.health"
+
+            health_data = {
+                "status": "ok",
+                "node_id": self.node_id,
+                "timestamp": time.time(),
+                "inputs": {
+                    port_name: port.is_connected()
+                    for port_name, port in self.inputs.items()
+                },
+                "outputs": {
+                    port_name: True
+                    for port_name in self.outputs
+                },
+            }
+
+            health_buffer = SharedBufferLite(buffer_name, size=64*1024, create=True)
+            health_buffer.write(health_data)
+            health_buffer.close()
+
+            self.logger.info(f"Reported health to {buffer_name}")
+        except Exception as e:
+            self.logger.warning(f"Failed to report health: {e}")
+
     def create_output_port(self, port_name: str, schema: Optional[Type['BaseModel']] = None) -> OutputPort:
         """
         创建输出端口
-        
-        注意：创建完所有端口后，建议在用户代码中显式调用 publish_metadata()，
-        或者在 run() 方法开始时自动调用（如果框架支持生命周期钩子）。
-        目前我们在 create_output_port 后不自动更新 metadata，避免频繁 IO。
-        为了简化，我们假设用户在初始化所有端口后会进入 run 循环，
-        我们可以在第一次 send 或者提供一个显式的 start 方法。
-        
-        但为了保证 Metadata 尽早可用，我们采用简单的策略：
-        每次创建 OutputPort 后，如果提供了 Schema，更新一次 Metadata。
-        虽然有少许性能损耗（初始化阶段），但保证了正确性。
+
+        每次创建 OutputPort 后自动发布 metadata，保证 schema 信息尽早可用。
         """
         env_var_name = f'NODE_OUT_{port_name}'
-        zmq_address = os.getenv(env_var_name)
+        buffer_name = os.getenv(env_var_name)
 
-        if not zmq_address:
+        if not buffer_name:
             raise ValueError(
                 f"Output port '{port_name}' not configured. "
                 f"Environment variable '{env_var_name}' not found."
             )
 
-        # 创建OutputPort，传入zmq_address（ZeroMQ版本）
-        port = OutputPort(port_name, zmq_address, schema=schema)
+        port = OutputPort(port_name, buffer_name, schema=schema)
         self.outputs[port_name] = port
 
-        self.logger.info(f"Created output port: {port_name} (schema={schema.__name__ if schema else 'None'})")
+        self.logger.info(f"Created output port: {port_name} (buffer={buffer_name}, schema={schema.__name__ if schema else 'None'})")
         
-        # 更新元数据
         self._publish_metadata()
-        
         return port
 
     def get_input_port(self, port_name: str) -> Optional[InputPort]:

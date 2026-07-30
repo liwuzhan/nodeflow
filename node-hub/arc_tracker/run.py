@@ -13,15 +13,7 @@
 import math
 import sys
 import time
-from pathlib import Path
 from typing import Optional
-
-# 添加项目根路径
-project_root = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(project_root))
-
-# 添加当前节点目录
-sys.path.insert(0, str(Path(__file__).parent))
 
 from pydantic import BaseModel
 from sdk.nodeflow_sdk import NodeFlowSDK

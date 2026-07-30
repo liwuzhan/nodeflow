@@ -37,24 +37,18 @@ class TestMultipleSubscribers:
         print("\n=== 测试一对多订阅 ===")
         SharedBufferLite.cleanup_all()
 
-        zmq_addr = "ipc:///tmp/nodeflow/test_multi_sub"
-
         # 创建1个发布者
-        output = OutputPort(name="publisher", zmq_address=zmq_addr)
-        time.sleep(0.1)
+        output = OutputPort(name="publisher", buffer_name="test_multi_sub")
 
         # 创建3个订阅者
         subscribers = []
         for i in range(3):
-            sub = InputPort(name=f"subscriber_{i}", zmq_address_or_source=zmq_addr)
+            sub = InputPort(name=f"subscriber_{i}", buffer_name="test_multi_sub")
             subscribers.append(sub)
-
-        time.sleep(0.2)
 
         # 发布者发送数据
         test_data = {"message": "broadcast", "timestamp": time.time()}
         output.send(test_data)
-        time.sleep(0.2)
 
         # 所有订阅者都应该收到
         received_count = 0
@@ -79,17 +73,14 @@ class TestMultipleSubscribers:
         print("\n=== 测试分批 Late-Joiner ===")
         SharedBufferLite.cleanup_all()
 
-        zmq_addr = "ipc:///tmp/nodeflow/test_late_mixed"
-
         # T=0s: 发布者启动并发送第一条
-        output = OutputPort(name="pub", zmq_address=zmq_addr)
+        output = OutputPort(name="pub", buffer_name="test_late_mixed")
         msg1 = {"seq": 1, "time": 0}
         output.send(msg1)
         print("  T=0s: 发送 msg1")
 
         # T=0s: 第一批订阅者启动（应该读到 msg1）
-        sub1 = InputPort(name="sub1", zmq_address_or_source=zmq_addr)
-        time.sleep(0.1)
+        sub1 = InputPort(name="sub1", buffer_name="test_late_mixed")
 
         # T=0.5s: 发送第二条
         time.sleep(0.5)
@@ -98,8 +89,7 @@ class TestMultipleSubscribers:
         print("  T=0.5s: 发送 msg2")
 
         # T=0.5s: 第二批订阅者启动（应该读到 msg2，Late-Joiner）
-        sub2 = InputPort(name="sub2", zmq_address_or_source=zmq_addr)
-        time.sleep(0.1)
+        sub2 = InputPort(name="sub2", buffer_name="test_late_mixed")
 
         # T=1s: 发送第三条
         time.sleep(0.5)
@@ -108,8 +98,7 @@ class TestMultipleSubscribers:
         print("  T=1s: 发送 msg3")
 
         # T=1s: 第三批订阅者启动（应该读到 msg3，Late-Joiner）
-        sub3 = InputPort(name="sub3", zmq_address_or_source=zmq_addr)
-        time.sleep(0.2)
+        sub3 = InputPort(name="sub3", buffer_name="test_late_mixed")
 
         # 验证各订阅者读取的数据
         data1 = sub1.recv_latest()  # 应该读到 msg3（最新）
@@ -137,18 +126,14 @@ class TestMultipleSubscribers:
         print("\n=== 测试订阅者断开重连 ===")
         SharedBufferLite.cleanup_all()
 
-        zmq_addr = "ipc:///tmp/nodeflow/test_dropout"
-
         # 发布者
-        output = OutputPort(name="pub", zmq_address=zmq_addr)
+        output = OutputPort(name="pub", buffer_name="test_dropout")
 
         # 订阅者1连接
-        sub = InputPort(name="sub", zmq_address_or_source=zmq_addr)
-        time.sleep(0.1)
+        sub = InputPort(name="sub", buffer_name="test_dropout")
 
         # 发送第一条
         output.send({"msg": 1})
-        time.sleep(0.1)
         data1 = sub.recv_latest()
         assert data1 is not None and data1["msg"] == 1, "应该收到第一条"
         print("  ✓ 收到第一条消息")
@@ -156,16 +141,13 @@ class TestMultipleSubscribers:
         # 订阅者断开
         sub.close()
         print("  订阅者断开")
-        time.sleep(0.2)
 
         # 发布者继续发送（订阅者离线）
         output.send({"msg": 2})
         output.send({"msg": 3})
-        time.sleep(0.2)
 
         # 订阅者重连（Late-Joiner，应该读到 msg3）
-        sub = InputPort(name="sub", zmq_address_or_source=zmq_addr)
-        time.sleep(0.1)
+        sub = InputPort(name="sub", buffer_name="test_dropout")
 
         data3 = sub.recv_latest()
         assert data3 is not None and data3["msg"] == 3, "重连后应该读到最新值 (Late-Joiner)"
@@ -189,11 +171,8 @@ class TestHighFrequencyData:
         print("\n=== 测试高频发送 (1000 msg/s) ===")
         SharedBufferLite.cleanup_all()
 
-        zmq_addr = "ipc:///tmp/nodeflow/test_high_freq"
-
-        output = OutputPort(name="fast_pub", zmq_address=zmq_addr)
-        input_port = InputPort(name="fast_sub", zmq_address_or_source=zmq_addr)
-        time.sleep(0.1)
+        output = OutputPort(name="fast_pub", buffer_name="test_high_freq")
+        input_port = InputPort(name="fast_sub", buffer_name="test_high_freq")
 
         # 发送1000条消息，间隔1ms
         num_messages = 1000
@@ -215,7 +194,6 @@ class TestHighFrequencyData:
         assert final_seq == num_messages, f"序列号应该是 {num_messages}, 得到 {final_seq}"
 
         # 读取最新值
-        time.sleep(0.1)
         latest = input_port.recv_latest()
         assert latest is not None, "应该能读到最新数据"
         assert latest["index"] >= num_messages - 10, "应该是最近的消息"
@@ -234,18 +212,13 @@ class TestHighFrequencyData:
         print("\n=== 测试消息丢失检测 ===")
         SharedBufferLite.cleanup_all()
 
-        zmq_addr = "ipc:///tmp/nodeflow/test_loss_detect"
-
-        output = OutputPort(name="pub", zmq_address=zmq_addr)
-        input_port = InputPort(name="sub", zmq_address_or_source=zmq_addr)
-        time.sleep(0.1)
+        output = OutputPort(name="pub", buffer_name="test_loss_detect")
+        input_port = InputPort(name="sub", buffer_name="test_loss_detect")
 
         # 快速发送100条
         for i in range(100):
             output.send({"index": i})
             time.sleep(0.001)
-
-        time.sleep(0.1)
 
         # 检查最终序列号连续性
         final_seq = output.buffer.get_sequence()
@@ -265,13 +238,10 @@ class TestHighFrequencyData:
         print("\n=== 测试 Conflate 模式 ===")
         SharedBufferLite.cleanup_all()
 
-        zmq_addr = "ipc:///tmp/nodeflow/test_conflate"
-
         # 设置 conflate 环境变量
         os.environ['NODE_OUT_test_conflate_CONFLATE'] = 'true'
 
-        output = OutputPort(name="test_conflate", zmq_address=zmq_addr)
-        time.sleep(0.1)
+        output = OutputPort(name="test_conflate", buffer_name="test_conflate")
 
         # 快速发送多条
         for i in range(10):
@@ -279,8 +249,7 @@ class TestHighFrequencyData:
             time.sleep(0.01)
 
         # 订阅者晚启动（Late-Joiner）
-        input_port = InputPort(name="sub", zmq_address_or_source=zmq_addr)
-        time.sleep(0.1)
+        input_port = InputPort(name="sub", buffer_name="test_conflate")
 
         # 应该只读到最新值（Latest-Value）
         data = input_port.recv_latest()
@@ -308,16 +277,12 @@ class TestLargeDataTransfer:
         print("\n=== 测试大数据传输 ===")
         SharedBufferLite.cleanup_all()
 
-        zmq_addr = "ipc:///tmp/nodeflow/test_large_data"
-
         # 创建大 buffer (20MB)
         os.environ['NODE_OUT_large_BUFFER_SIZE'] = str(20 * 1024 * 1024)
 
         # 先创建发布者和订阅者
-        output = OutputPort(name="large", zmq_address=zmq_addr)
-        time.sleep(0.1)
-        input_port = InputPort(name="sub", zmq_address_or_source=zmq_addr)
-        time.sleep(0.1)
+        output = OutputPort(name="large", buffer_name="test_large_data")
+        input_port = InputPort(name="sub", buffer_name="test_large_data")
 
         # 创建2MB的字符串数据
         large_string = "x" * (2 * 1024 * 1024)
@@ -326,12 +291,6 @@ class TestLargeDataTransfer:
 
         # 发送
         output.send({"payload": large_string, "meta": "large data"})
-
-        # 等待传播
-        time.sleep(0.2)
-
-        # 等待接收
-        time.sleep(0.1)
 
         # 接收
         received = input_port.recv_latest()
@@ -356,19 +315,15 @@ class TestLargeDataTransfer:
         print("\n=== 测试接近 Buffer 限制 ===")
         SharedBufferLite.cleanup_all()
 
-        zmq_addr = "ipc:///tmp/nodeflow/test_near_limit"
-
         # 小 buffer (100KB)
         os.environ['NODE_OUT_limit_BUFFER_SIZE'] = str(100 * 1024)
-        output = OutputPort(name="limit", zmq_address=zmq_addr)
-        input_port = InputPort(name="sub", zmq_address_or_source=zmq_addr)
-        time.sleep(0.1)
+        output = OutputPort(name="limit", buffer_name="test_near_limit")
+        input_port = InputPort(name="sub", buffer_name="test_near_limit")
 
         # 发送接近限制的数据 (80KB)
         large_payload = "x" * (80 * 1024)
         output.send({"payload": large_payload})
 
-        time.sleep(0.1)
         received = input_port.recv_latest()
 
         assert received is not None, "接近限制的数据应该成功发送"
@@ -389,12 +344,9 @@ class TestLargeDataTransfer:
         print("\n=== 测试 Buffer 溢出 ===")
         SharedBufferLite.cleanup_all()
 
-        zmq_addr = "ipc:///tmp/nodeflow/test_overflow"
-
         # 小 buffer (10KB)
         os.environ['NODE_OUT_overflow_BUFFER_SIZE'] = str(10 * 1024)
-        output = OutputPort(name="overflow", zmq_address=zmq_addr)
-        time.sleep(0.1)
+        output = OutputPort(name="overflow", buffer_name="test_overflow")
 
         # 尝试发送超大数据 (20KB)
         huge_payload = "x" * (20 * 1024)
@@ -423,10 +375,8 @@ class TestEdgeCases:
         print("\n=== 测试快速启停 ===")
         SharedBufferLite.cleanup_all()
 
-        zmq_addr = "ipc:///tmp/nodeflow/test_rapid"
-
         for i in range(10):
-            output = OutputPort(name="rapid", zmq_address=zmq_addr)
+            output = OutputPort(name="rapid", buffer_name="test_rapid")
             output.send({"iteration": i})
             time.sleep(0.05)
             output.close()
@@ -442,18 +392,12 @@ class TestEdgeCases:
         print("\n=== 测试同时启动 ===")
         SharedBufferLite.cleanup_all()
 
-        zmq_addr = "ipc:///tmp/nodeflow/test_zero_delay"
-
         # 同时启动（几乎无延迟）
-        output = OutputPort(name="out", zmq_address=zmq_addr)
-        input_port = InputPort(name="in", zmq_address_or_source=zmq_addr)
-
-        # 短暂等待连接建立
-        time.sleep(0.2)
+        output = OutputPort(name="out", buffer_name="test_zero_delay")
+        input_port = InputPort(name="in", buffer_name="test_zero_delay")
 
         # 发送数据
         output.send({"test": "simultaneous"})
-        time.sleep(0.1)
 
         # 应该能收到
         data = input_port.recv_latest()
@@ -473,15 +417,12 @@ class TestEdgeCases:
         print("\n=== 测试 OutputPort 重启 ===")
         SharedBufferLite.cleanup_all()
 
-        zmq_addr = "ipc:///tmp/nodeflow/test_restart"
-
         # 第一次：发布者启动并发送
-        output1 = OutputPort(name="out", zmq_address=zmq_addr)
+        output1 = OutputPort(name="out", buffer_name="test_restart")
         output1.send({"version": 1})
-        time.sleep(0.1)
 
         # 订阅者启动
-        input_port = InputPort(name="in", zmq_address_or_source=zmq_addr)
+        input_port = InputPort(name="in", buffer_name="test_restart")
         data1 = input_port.recv_latest()
         assert data1 is not None and data1["version"] == 1, "应该收到第一版"
         print("  ✓ 收到第一版数据")
@@ -489,12 +430,10 @@ class TestEdgeCases:
         # 发布者关闭
         output1.close()
         print("  发布者关闭")
-        time.sleep(0.2)
 
         # 发布者重启
-        output2 = OutputPort(name="out", zmq_address=zmq_addr)
+        output2 = OutputPort(name="out", buffer_name="test_restart")
         output2.send({"version": 2})
-        time.sleep(0.2)
 
         # 订阅者应该能收到新数据
         data2 = input_port.recv_latest()

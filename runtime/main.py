@@ -325,8 +325,8 @@ class NodeFlowRuntime:
     def _switch_task_preset(self, preset_yaml: str) -> bool:
         if not preset_yaml:
             return True
-        if Path(preset_yaml).name != preset_yaml or preset_yaml in (".", ".."):
-            raise ValueError("preset_yaml must be an allowlisted example name")
+        if "/" in preset_yaml or "\\" in preset_yaml or preset_yaml in (".", ".."):
+            raise ValueError(f"preset_yaml must be a simple filename, got: {preset_yaml}")
         filename = preset_yaml if preset_yaml.endswith(".yaml") else f"{preset_yaml}.yaml"
         root = Path(os.getenv("NODEFLOW_ROOT", Path.cwd())).resolve()
         candidate = (root / "examples" / filename).resolve()

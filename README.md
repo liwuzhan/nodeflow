@@ -13,9 +13,9 @@
 
 - 🎯 **声明式配置**: 通过 YAML 定义节点拓扑和数据流，无需编写管道代码
 - 🔌 **节点化架构**: 进程隔离的节点设计，独立开发、测试和部署
-- 🚀 **混合 IPC 架构**: 基于 SharedBuffer + ZeroMQ 的高性能进程间通信，解决传统 Socket 的数据丢失问题
-- 📦 **灵活缓冲区配置**: 支持按需配置输出端口缓冲区大小，适应各类传感器（RTK/IMU 默认 1MB，LiDAR/4K 相机可配置 5-50MB+）
-- 🧠 **AI 辅助调试**: 集成 MCP (Model Context Protocol) 服务，支持智能故障诊断
+- 🚀 **纯 SharedBuffer IPC**: 基于 mmap 的进程间通信，无 fcntl 文件锁，无 ZMQ 依赖，单写者多读者模型，tombstone 协议保原子性
+- 🔍 **实时数据诊断**: CLI `buffer read` 读取任意端口当前值，`health status` 检查节点连通性
+- 🧠 **AI 辅助调试**: MCP Server 提供 9 个工具（buffer-read、node-health、get-node-info、validate-yaml、edit-yaml、run-runtime、stop-runtime、read-logs、get-runtime-status），支持智能故障诊断
 - 📊 **拓扑分析**: 自动检测循环依赖、端口类型匹配和启动顺序优化
 - 🛡️ **安全加固**: 路径边界验证、参数类型检查、异常隔离机制
 - 📜 **数据契约**: 基于 Pydantic 的 Schema 定义，支持离线合规性检查（Health Check）

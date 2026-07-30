@@ -392,8 +392,8 @@ class TestConcurrencySafety:
         SharedBufferLite.cleanup_all()
         print("✅ 并发读写测试通过")
 
-    @pytest.mark.skipif(os.name == "nt", reason="edge process locking uses POSIX flock")
     def test_cross_process_reader_never_observes_partial_write(self):
+        """Tombstone 协议（length=0）防止读者读到半写数据"""
         SharedBufferLite.cleanup_all()
         buffer_name = "test_cross_process_snapshot"
         size = 2 * 1024 * 1024
@@ -425,14 +425,20 @@ class TestConcurrencySafety:
             reader_thread = threading.Thread(target=read_snapshot)
             reader_thread.start()
 
-            assert not read_done.wait(timeout=0.1), "reader must wait for the write lock"
+            # tombstone 协议：写进程在写数据前已设 length=0，
+            # 因此读者应能立即返回 None（而不是读到半写数据）
+            assert read_done.wait(timeout=1.0), "reader should return immediately (tombstone protection)"
+            assert result["data"] is None, "reader should see None during partial write (tombstone)"
             finish_write.set()
 
             reader_thread.join(timeout=5)
             process.join(timeout=5)
             assert not reader_thread.is_alive()
             assert process.exitcode == 0
-            assert result["data"] == updated
+
+            # 写完成后，读者应能读到完整的最新数据
+            final_data = reader_buffer.read()
+            assert final_data == updated, f"reader should get full data after write completes"
         finally:
             finish_write.set()
             if process.is_alive():

@@ -6,14 +6,7 @@ PWM Driver Node - 香橙派5 Ultra电机PWM驱动 (L3 分子层)
 """
 
 import os
-import sys
 import time
-from pathlib import Path
-
-# 添加项目根路径
-project_root = Path(__file__).parent.parent.parent
-if str(project_root) not in sys.path:
-    sys.path.insert(0, str(project_root))
 
 from sdk.nodeflow_sdk import NodeFlowSDK
 

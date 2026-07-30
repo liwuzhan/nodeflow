@@ -11,7 +11,6 @@ import time
 import zmq
 import json
 import logging
-from pathlib import Path
 import math
 from typing import List, Optional, Tuple, Dict, Any
 
@@ -22,10 +21,6 @@ except ImportError:
     # 简单的兼容性处理，实际运行时应确保安装了pydantic
     class BaseModel: pass
     def Field(*args, **kwargs): return None
-
-# 添加项目根路径
-project_root = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(project_root))
 
 from sdk.nodeflow_sdk import NodeFlowSDK
 
@@ -116,10 +111,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("sim_output")
 
-
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent / 'coord_transform'))
 from utils.geo import local_to_wgs84, wgs84_to_local
 
 

@@ -15,6 +15,8 @@ import subprocess
 import sys
 import os
 
+from runtime.node_hub.scanner import NodeHubScanner
+
 # 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -87,31 +89,12 @@ async def list_nodes():
         ]
     }
     """
-    if not NODE_HUB_PATH.exists():
-        raise HTTPException(
-            status_code=500, detail=f"Node hub directory not found: {NODE_HUB_PATH}"
-        )
-
-    packages = []
-
     try:
-        # 递归扫描node-hub目录（支持嵌套节点包）
-        import os
-
-        for root, dirs, files in os.walk(NODE_HUB_PATH):
-            if "node.yaml" in files:
-                # 找到node.yaml，计算相对路径作为package_name
-                package_path = Path(root)
-                relative_path = package_path.relative_to(NODE_HUB_PATH)
-                package_name = str(relative_path)
-
-                packages.append(
-                    {"name": package_name, "path": f"node-hub/{package_name}"}
-                )
-                logger.info(f"Found node package: {package_name}")
-
-                # 找到node.yaml后不再向下遍历该目录
-                dirs.clear()
+        scanner = NodeHubScanner(str(NODE_HUB_PATH))
+        package_names = scanner.scan()
+        packages = []
+        for name in package_names:
+            packages.append({"name": name, "path": f"node-hub/{name}"})
 
         logger.info(f"Total packages found: {len(packages)}")
         return {"packages": packages}

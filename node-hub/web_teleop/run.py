@@ -6,7 +6,6 @@ Web Teleop Node - Web远程控制节点
 """
 
 import os
-import sys
 import json
 import time
 import threading
@@ -14,11 +13,6 @@ from pathlib import Path
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from socketserver import ThreadingMixIn
 import urllib.parse
-
-# 添加项目根路径
-project_root = Path(__file__).parent.parent.parent
-if str(project_root) not in sys.path:
-    sys.path.insert(0, str(project_root))
 
 from sdk.nodeflow_sdk import NodeFlowSDK
 

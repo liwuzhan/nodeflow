@@ -15,13 +15,6 @@ import uuid
 import msgpack
 from pathlib import Path
 
-# 添加项目根路径
-project_root = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(project_root))
-
-# 添加当前节点目录
-sys.path.insert(0, str(Path(__file__).parent))
-
 from sdk.nodeflow_sdk import NodeFlowSDK
 import atom
 

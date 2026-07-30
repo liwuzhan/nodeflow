@@ -33,11 +33,8 @@ class TestTrajectoryVizCollection:
         print("\n=== 测试地块边界收集 ===")
         SharedBufferLite.cleanup_all()
 
-        zmq_addr = "ipc:///tmp/nodeflow/test_boundary"
-
         # 模拟规划器发送task_request
-        output = OutputPort(name="sim_output", zmq_address=zmq_addr)
-        time.sleep(0.1)
+        output = OutputPort(name="sim_output", buffer_name="test_boundary")
 
         # 地块边界数据
         task_data = {
@@ -51,11 +48,9 @@ class TestTrajectoryVizCollection:
         }
 
         output.send(task_data)
-        time.sleep(0.1)
 
         # 验证接收
-        input_port = InputPort(name="viz_task", zmq_address_or_source=zmq_addr)
-        time.sleep(0.1)
+        input_port = InputPort(name="viz_task", buffer_name="test_boundary")
 
         received = input_port.recv_latest()
         assert received is not None, "应该接收到task_request"
@@ -76,11 +71,8 @@ class TestTrajectoryVizCollection:
         print("\n=== 测试规划路径收集 ===")
         SharedBufferLite.cleanup_all()
 
-        zmq_addr = "ipc:///tmp/nodeflow/test_path"
-
         # 模拟规划器发送global_path
-        output = OutputPort(name="global_coverage", zmq_address=zmq_addr)
-        time.sleep(0.1)
+        output = OutputPort(name="global_coverage", buffer_name="test_path")
 
         # 规划路径数据
         path_data = {
@@ -94,11 +86,9 @@ class TestTrajectoryVizCollection:
         }
 
         output.send(path_data)
-        time.sleep(0.1)
 
         # 验证接收
-        input_port = InputPort(name="viz_path", zmq_address_or_source=zmq_addr)
-        time.sleep(0.1)
+        input_port = InputPort(name="viz_path", buffer_name="test_path")
 
         received = input_port.recv_latest()
         assert received is not None, "应该接收到global_path"
@@ -118,14 +108,10 @@ class TestTrajectoryVizCollection:
         print("\n=== 测试GPS轨迹收集 ===")
         SharedBufferLite.cleanup_all()
 
-        zmq_addr = "ipc:///tmp/nodeflow/test_gps"
-
         # 模拟GPS发送器
-        output = OutputPort(name="sim_output", zmq_address=zmq_addr)
-        time.sleep(0.1)
+        output = OutputPort(name="sim_output", buffer_name="test_gps")
 
-        input_port = InputPort(name="viz_gps", zmq_address_or_source=zmq_addr)
-        time.sleep(0.1)
+        input_port = InputPort(name="viz_gps", buffer_name="test_gps")
 
         # 发送多个GPS点
         gps_points = [
@@ -139,8 +125,6 @@ class TestTrajectoryVizCollection:
         for gps_data in gps_points:
             output.send(gps_data)
             time.sleep(0.05)
-
-        time.sleep(0.1)
 
         # 验证接收最后一个点
         received = input_port.recv_latest()

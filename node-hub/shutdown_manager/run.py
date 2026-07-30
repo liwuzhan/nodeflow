@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
-import sys
 import time
-from pathlib import Path
 from typing import Optional
 
 # Pydantic 导入
@@ -10,9 +8,6 @@ try:
 except ImportError:
     class BaseModel: pass
     def Field(*args, **kwargs): return None
-
-project_root = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(project_root))
 
 from sdk.nodeflow_sdk import NodeFlowSDK
 from sdk.shared_buffer_lite import SharedBufferLite

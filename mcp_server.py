@@ -280,6 +280,34 @@ async def list_tools() -> ListToolsResult:
                 },
             },
         ),
+        Tool(
+            name="nodeflow/buffer-read",
+            description="读取共享缓冲区的实时数据",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "buffer_name": {
+                        "type": "string",
+                        "description": "缓冲区名称，例如 sim_output.rtk_fix",
+                    },
+                },
+                "required": ["buffer_name"],
+            },
+        ),
+        Tool(
+            name="nodeflow/node-health",
+            description="查询节点的健康状态",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "node_id": {
+                        "type": "string",
+                        "description": "节点 ID",
+                    },
+                },
+                "required": ["node_id"],
+            },
+        ),
     ]
 
     return ListToolsResult(tools=tools)
@@ -296,6 +324,8 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> CallToolResult:
         "nodeflow/stop-runtime": handle_stop_runtime,
         "nodeflow/read-logs": handle_read_logs,
         "nodeflow/get-runtime-status": handle_get_runtime_status,
+        "nodeflow/buffer-read": handle_buffer_read,
+        "nodeflow/node-health": handle_node_health,
     }
 
     if name not in handlers:
@@ -646,6 +676,13 @@ async def handle_edit_yaml(arguments: Dict[str, Any]) -> List[TextContent]:
                 current = current[key]
             current[keys[-1]] = value
 
+        # 创建备份
+        from datetime import datetime
+        import shutil
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = yaml_path_abs.with_name(f"{yaml_path_abs.name}.{timestamp}.bak")
+        shutil.copy2(yaml_path_abs, backup_path)
+
         # 写回文件
         with open(yaml_path_abs, "w", encoding="utf-8") as f:
             yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
@@ -653,7 +690,8 @@ async def handle_edit_yaml(arguments: Dict[str, Any]) -> List[TextContent]:
         result = {
             "yaml_path": str(yaml_path_abs),
             "changes_applied": changes,
-            "backup_created": False,  # TODO: 实现备份功能
+            "backup_created": True,
+            "backup_path": str(backup_path),
         }
 
         # 可选：验证修改后的配置
@@ -689,8 +727,16 @@ async def handle_run_runtime(arguments: Dict[str, Any]) -> List[TextContent]:
 
     duration = arguments.get("duration")
 
+    # 验证路径安全性 - 确保在项目根目录内
+    try:
+        yaml_path_abs = resolve_project_path(yaml_path_raw, "yaml_path")
+    except ValueError as e:
+        return create_tool_response(
+            {"type": "INVALID_INPUT", "message": str(e)}, success=False
+        )
+
     # 验证文件存在
-    if not Path(yaml_path_raw).exists():
+    if not yaml_path_abs.exists():
         return create_tool_response(
             {
                 "type": "FILE_NOT_FOUND",
@@ -700,7 +746,7 @@ async def handle_run_runtime(arguments: Dict[str, Any]) -> List[TextContent]:
         )
 
     # 启动运行时
-    result = runtime_manager.start_runtime(yaml_path_raw, duration)
+    result = runtime_manager.start_runtime(str(yaml_path_abs), duration)
 
     if result.get("success"):
         # 添加一些额外信息
@@ -781,6 +827,105 @@ async def handle_get_runtime_status(arguments: Dict[str, Any]) -> List[TextConte
     available_logs = runtime_manager.list_available_logs()
     if available_logs:
         result["available_logs"] = available_logs
+
+    return create_tool_response(result)
+
+
+@safe_execute
+async def handle_buffer_read(arguments: Dict[str, Any]) -> List[TextContent]:
+    """处理缓冲区数据读取"""
+    buffer_name = arguments.get("buffer_name")
+
+    if not buffer_name:
+        return create_tool_response(
+            {"type": "INVALID_INPUT", "message": "buffer_name is required"}, success=False
+        )
+
+    if "/" in buffer_name or "\\" in buffer_name or ".." in buffer_name:
+        return create_tool_response(
+            {
+                "type": "INVALID_INPUT",
+                "message": f"Invalid buffer_name: cannot contain path separators or '..'",
+            },
+            success=False,
+        )
+
+    try:
+        from sdk.shared_buffer_lite import SharedBufferLite
+        buf = SharedBufferLite(buffer_name, create=False)
+        data = buf.read()
+        buf.close()
+    except FileNotFoundError:
+        return create_tool_response(
+            {
+                "type": "BUFFER_NOT_FOUND",
+                "message": f"Buffer not found: {buffer_name}",
+            },
+            success=False,
+        )
+    except Exception as e:
+        return create_tool_response(
+            {
+                "type": "BUFFER_READ_ERROR",
+                "message": f"Failed to read buffer: {str(e)}",
+            },
+            success=False,
+        )
+
+    result = {
+        "buffer_name": buffer_name,
+        "data": data,
+    }
+
+    return create_tool_response(result)
+
+
+@safe_execute
+async def handle_node_health(arguments: Dict[str, Any]) -> List[TextContent]:
+    """处理节点健康状态查询"""
+    node_id = arguments.get("node_id")
+
+    if not node_id:
+        return create_tool_response(
+            {"type": "INVALID_INPUT", "message": "node_id is required"}, success=False
+        )
+
+    if "/" in node_id or "\\" in node_id or ".." in node_id:
+        return create_tool_response(
+            {
+                "type": "INVALID_INPUT",
+                "message": f"Invalid node_id: cannot contain path separators or '..'",
+            },
+            success=False,
+        )
+
+    try:
+        from sdk.shared_buffer_lite import SharedBufferLite
+        buffer_name = f"{node_id}.health"
+        buf = SharedBufferLite(buffer_name, create=False)
+        health_data = buf.read()
+        buf.close()
+    except FileNotFoundError:
+        return create_tool_response(
+            {
+                "type": "HEALTH_NOT_FOUND",
+                "message": f"Health buffer not found for node '{node_id}'",
+            },
+            success=False,
+        )
+    except Exception as e:
+        return create_tool_response(
+            {
+                "type": "HEALTH_READ_ERROR",
+                "message": f"Failed to read health data: {str(e)}",
+            },
+            success=False,
+        )
+
+    result = {
+        "node_id": node_id,
+        "health": health_data,
+    }
 
     return create_tool_response(result)
 

@@ -3,20 +3,11 @@
 定义节点崩溃后的重启行为
 """
 
-from dataclasses import dataclass
 import time
-from typing import Optional
-
+from runtime.config.models import RestartPolicy
 from runtime.utils.logger import get_logger
 
 logger = get_logger(__name__)
-
-
-@dataclass
-class RestartPolicy:
-    """重启策略配置"""
-    max_retries: int = 3  # 最大重试次数
-    backoff_ms: int = 500  # 重试退避时间（毫秒）
 
 
 class RetryTracker:

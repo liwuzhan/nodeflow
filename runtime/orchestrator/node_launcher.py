@@ -9,6 +9,7 @@ import os
 import sys
 import signal
 import time
+import fcntl
 from pathlib import Path
 from typing import Dict, Optional, TextIO, Tuple
 import threading
@@ -140,17 +141,36 @@ class NodeLauncher:
                 start_new_session=True  # Unix/macOS: 创建新会话，便于清理整个进程树
             )
 
+            # 设置管道为非阻塞模式，避免 readline() 在进程异常退出后永久挂死
+            for pipe in (process.stdout, process.stderr):
+                if pipe is not None:
+                    fd = pipe.fileno()
+                    flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+                    fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+
             def _forward(stream, logger, level_func):
+                buf = ""
                 while True:
                     if stream is None:
                         break
-                    line = stream.readline()
-                    if not line:
+                    try:
+                        chunk = stream.read(4096)
+                    except (IOError, OSError):
                         if process.poll() is not None:
                             break
-                        time.sleep(0.05)  # 避免忙等
+                        time.sleep(0.05)
                         continue
-                    level_func(line.rstrip("\n"))
+                    if chunk:
+                        buf += chunk
+                        while "\n" in buf:
+                            line, buf = buf.split("\n", 1)
+                            level_func(line.rstrip("\r"))
+                    elif process.poll() is not None:
+                        if buf:
+                            level_func(buf.rstrip("\r"))
+                        break
+                    else:
+                        time.sleep(0.05)
 
             t_out = threading.Thread(
                 target=_forward, args=(process.stdout, stdout_logger, stdout_logger.info), daemon=True

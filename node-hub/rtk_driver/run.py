@@ -7,10 +7,6 @@ RTK驱动节点主程序
 import sys
 import time
 import math
-from pathlib import Path
-
-# 添加SDK路径
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from sdk.nodeflow_sdk import NodeFlowSDK
 from nmea_parser import NMEAParser

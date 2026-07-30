@@ -21,13 +21,6 @@ except ImportError:
     class BaseModel: pass
     def Field(*args, **kwargs): return None
 
-# 4层架构实践：L4和L3分离
-# 添加项目根目录以访问SDK
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-
-# 添加当前节点目录（必须在sdk之前！）以优先加载本地utils
-sys.path.insert(0, str(Path(__file__).parent))
-
 from sdk.nodeflow_sdk import NodeFlowSDK
 from utils.planner import GlobalCoveragePlanner
 from utils.models import VehicleConfig, ParcelData

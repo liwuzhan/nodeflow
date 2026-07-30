@@ -11,19 +11,10 @@
 职责：仅负责数据收发和调用原子函数，不包含业务逻辑
 """
 
-import sys
 import time
 import os
-from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, Optional, List, Tuple
-
-# 添加 SDK 路径
-project_root = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(project_root))
-
-# 添加当前目录
-sys.path.insert(0, str(Path(__file__).parent))
 
 from sdk.nodeflow_sdk import NodeFlowSDK
 import atom  # L4 原子逻辑

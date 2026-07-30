@@ -26,13 +26,6 @@ except ImportError:
     class BaseModel: pass
     def Field(*args, **kwargs): return None
 
-# 添加项目根目录以访问SDK
-project_root = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(project_root))
-
-# 添加当前节点目录
-sys.path.insert(0, str(Path(__file__).parent))
-
 from sdk.nodeflow_sdk import NodeFlowSDK
 from atom import gps_to_enu, convert_boundary_gps_to_enu, validate_boundary
 

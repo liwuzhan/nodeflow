@@ -9,6 +9,10 @@ setup(
     packages=find_packages(),
     install_requires=[
         "PyYAML>=6.0",
+        "pyzmq>=24.0.0",
+        "msgpack>=1.0.0",
+        "pydantic>=2.0",
+        "psutil>=5.8.0",
     ],
     python_requires=">=3.10",
     entry_points={
