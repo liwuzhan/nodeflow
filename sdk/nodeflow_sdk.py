@@ -178,6 +178,9 @@ class NodeFlowSDK:
         self.inputs: Dict[str, InputPort] = {}
         self.outputs: Dict[str, OutputPort] = {}
 
+        # 健康心跳 buffer（延迟创建，避免启动时无端口就写）
+        self._health_buffer: Optional[SharedBufferLite] = None
+
         # 父进程监控（解决孤儿进程问题）
         self._parent_watchdog: Optional[ParentProcessWatchdog] = None
 
@@ -328,11 +331,12 @@ class NodeFlowSDK:
                 },
             }
 
-            health_buffer = SharedBufferLite(buffer_name, size=64*1024, create=True)
-            health_buffer.write(health_data)
-            health_buffer.close()
+            # 复用以避免每 2 秒截断重建文件
+            if self._health_buffer is None:
+                self._health_buffer = SharedBufferLite(buffer_name, size=64*1024, create=True)
+            self._health_buffer.write(health_data)
 
-            self.logger.info(f"Reported health to {buffer_name}")
+            self.logger.debug(f"Reported health to {buffer_name}")
         except Exception as e:
             self.logger.warning(f"Failed to report health: {e}")
 
@@ -455,6 +459,12 @@ class NodeFlowSDK:
 
         for port in self.outputs.values():
             port.close()
+
+        if self._health_buffer:
+            try:
+                self._health_buffer.close()
+            except Exception:
+                pass
 
         self.logger.info("NodeFlow SDK shutdown complete")
 

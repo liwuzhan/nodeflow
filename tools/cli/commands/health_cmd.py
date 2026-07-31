@@ -308,10 +308,13 @@ def _sample_buffers(names: List[str], buffer_dir: Path, interval: float) -> Dict
 
 def handle_health_status(args) -> int:
     """查询节点健康状态"""
+    import time
     node_id = args.node_id
     as_json = bool(getattr(args, "json", False))
 
     buffer_name = f"{node_id}.health"
+    # 默认心跳间隔 2s，3 倍作为超时阈值
+    stale_timeout = float(os.getenv("NODE_HEALTH_INTERVAL", "2.0")) * 3
 
     try:
         buf = SharedBufferLite(buffer_name, create=False)
@@ -336,11 +339,23 @@ def handle_health_status(args) -> int:
         )
         return 1
 
+    ts = health_data.get("timestamp", 0)
+    age = time.time() - ts
+    is_stale = age > stale_timeout
+    effective_status = "stale" if is_stale else health_data.get("status", "unknown")
+
     if as_json:
-        print_json({"status": "ok", "node_id": node_id, "health": health_data})
+        print_json({
+            "status": effective_status,
+            "stale": is_stale,
+            "age_seconds": round(age, 1),
+            "node_id": node_id,
+            "health": health_data,
+        })
     else:
+        status_label = f"{effective_status} (stale, age={age:.0f}s)" if is_stale else effective_status
         print(f"\nHealth Status for '{node_id}':")
-        print(f"  Status: {health_data.get('status', 'unknown')}")
+        print(f"  Status: {status_label}")
         print(f"  Timestamp: {health_data.get('timestamp', 'N/A')}")
         print(f"  Inputs: {json.dumps(health_data.get('inputs', {}), indent=4)}")
         print(f"  Outputs: {json.dumps(health_data.get('outputs', {}), indent=4)}")

@@ -119,16 +119,17 @@ class SharedBufferLite:
     def read_with_sequence(self, _max_retries: int = 5) -> Tuple[int, Optional[Dict[str, Any]]]:
         """原子读取序列号和对应数据快照。
 
-        header（seq + length）通过 fd 直接读取以保证跨进程一致性；
-        macOS 上两份 mmap 映射同一文件未必立即可见。
-        使用 seqlock 协议：读取前后各取一次序列号，不一致则重试。
+        header（seq + length）通过 fd 直接读取以保证跨进程一致性。
+        读取前后比较完整 8 字节 header——仅比较 seq 不够：
+        写端顺序为 length=0 → data → seq → length，data 已更新但 seq 未变时
+        seq 检查会漏过，必须连 length 一起校验。
         """
         for _ in range(_max_retries):
             with self._lock:
                 self.file.seek(0)
-                header = self.file.read(8)
-                seq_before = struct.unpack('<I', header[0:4])[0]
-                length = struct.unpack('<I', header[4:8])[0]
+                header_before = self.file.read(8)
+                seq_before = struct.unpack('<I', header_before[0:4])[0]
+                length = struct.unpack('<I', header_before[4:8])[0]
 
                 if length == 0 or length > (self.size - self.HEADER_SIZE):
                     return seq_before, None
@@ -137,10 +138,10 @@ class SharedBufferLite:
                 serialized = self.file.read(length)
 
                 self.file.seek(0)
-                seq_after = struct.unpack('<I', self.file.read(4))[0]
+                header_after = self.file.read(8)
 
-            if seq_before != seq_after:
-                continue  # 写入穿插，重试
+            if header_before != header_after:
+                continue  # header 发生变化（写入穿插），重试
 
             try:
                 data = msgpack.unpackb(serialized, object_hook=self._decode_numpy, raw=False)
@@ -148,7 +149,7 @@ class SharedBufferLite:
             except Exception:
                 return seq_before, None
 
-        return seq_before, None  # 重试耗尽
+        return 0, None  # 重试耗尽
 
     def read(self, _max_retries: int = 3) -> Optional[Dict[str, Any]]:
         _, data = self.read_with_sequence(_max_retries=_max_retries)
