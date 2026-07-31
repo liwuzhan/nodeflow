@@ -5,6 +5,10 @@
   </div>
 </template>
 
+<script setup lang="ts">
+import { FolderOpened } from '@element-plus/icons-vue'
+</script>
+
 <style scoped>
 .empty-state { text-align: center; padding: 48px 0; color: #909399; }
 .empty-state p { margin-top: 12px; }

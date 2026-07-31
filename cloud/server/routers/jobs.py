@@ -1,10 +1,10 @@
 import logging
 import time
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from cloud.server.config import settings
-from cloud.server.database import get_db
+from cloud.server.database import get_db, SessionLocal
 from cloud.server.models.job import Job, JobStep
 from cloud.server.models.parcel import ParcelSplit
 from cloud.server.models.parcel import Parcel
@@ -152,18 +152,30 @@ def delete_job(job_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/{job_id}/dispatch")
-def dispatch_job(job_id: str, request: Request, db: Session = Depends(get_db)):
+def dispatch_job(job_id: str, request: Request,
+                 background_tasks: BackgroundTasks,
+                 db: Session = Depends(get_db)):
     job = db.query(Job).filter(Job.id == job_id).first()
     if not job:
         raise HTTPException(404, f"Job {job_id} not found")
+    if job.status == "running":
+        raise HTTPException(409, "Job is already running")
 
     mqtt = request.app.state.mqtt
-    dispatcher = Dispatcher(mqtt)
-    try:
-        result = dispatcher.dispatch_job(db, job_id, base_url=settings.HTTP_PUBLIC_BASE_URL)
-    except ValueError as exc:
-        raise HTTPException(409, str(exc)) from exc
-    return result
+    base_url = settings.HTTP_PUBLIC_BASE_URL
+
+    def _do_dispatch():
+        bg_db = SessionLocal()
+        try:
+            dispatcher = Dispatcher(mqtt)
+            dispatcher.dispatch_job(bg_db, job_id, base_url=base_url, commit=True)
+        except Exception as exc:
+            logger.exception("Background dispatch failed for job %s: %s", job_id, exc)
+        finally:
+            bg_db.close()
+
+    background_tasks.add_task(_do_dispatch)
+    return {"job_id": job_id, "status": "dispatching"}
 
 
 @router.post("/{job_id}/cancel")

@@ -1,5 +1,7 @@
 <template>
-  <div ref="mapContainer" class="farm-map"></div>
+  <div ref="mapContainer" class="farm-map">
+    <slot />
+  </div>
 </template>
 
 <script setup lang="ts">
