@@ -321,6 +321,7 @@ class NodeFlowSDK:
                 "status": "ok",
                 "node_id": self.node_id,
                 "timestamp": time.time(),
+                "heartbeat_interval": self._health_interval,
                 "inputs": {
                     port_name: port.is_connected()
                     for port_name, port in self.inputs.items()

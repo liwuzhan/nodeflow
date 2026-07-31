@@ -1,3 +1,4 @@
+import os
 import time
 import json
 import sys
@@ -308,13 +309,10 @@ def _sample_buffers(names: List[str], buffer_dir: Path, interval: float) -> Dict
 
 def handle_health_status(args) -> int:
     """查询节点健康状态"""
-    import time
     node_id = args.node_id
     as_json = bool(getattr(args, "json", False))
 
     buffer_name = f"{node_id}.health"
-    # 默认心跳间隔 2s，3 倍作为超时阈值
-    stale_timeout = float(os.getenv("NODE_HEALTH_INTERVAL", "2.0")) * 3
 
     try:
         buf = SharedBufferLite(buffer_name, create=False)
@@ -340,6 +338,9 @@ def handle_health_status(args) -> int:
         return 1
 
     ts = health_data.get("timestamp", 0)
+    # 从健康数据中读取心跳间隔（生产者写入的契约），兜底 2s
+    interval = float(health_data.get("heartbeat_interval", 2.0))
+    stale_timeout = interval * 3
     age = time.time() - ts
     is_stale = age > stale_timeout
     effective_status = "stale" if is_stale else health_data.get("status", "unknown")
