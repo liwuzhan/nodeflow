@@ -58,7 +58,7 @@ class SharedBufferLite:
         else:
             self.size = self.buffer_path.stat().st_size
 
-        self.file = open(self.buffer_path, 'r+b')
+        self.file = open(self.buffer_path, 'r+b', buffering=0)
         self.mmap = mmap.mmap(self.file.fileno(), self.size)
         self._lock = _get_buffer_lock(self.buffer_path)
 
@@ -104,7 +104,6 @@ class SharedBufferLite:
             current_seq = struct.unpack('<I', self.mmap[0:4])[0]
             new_seq = (current_seq + 1) & 0xFFFFFFFF
 
-            # tombstone: length=0 防止读者读到半写数据
             self.mmap[4:8] = struct.pack('<I', 0)
             self.mmap.flush()
 
@@ -117,27 +116,47 @@ class SharedBufferLite:
 
     # ── 读路径 ───────────────────────────────────────────────────────
 
-    def read_with_sequence(self, _max_retries: int = 3) -> Tuple[int, Optional[Dict[str, Any]]]:
-        del _max_retries
-        with self._lock:
-            sequence = struct.unpack('<I', self.mmap[0:4])[0]
-            length = struct.unpack('<I', self.mmap[4:8])[0]
-            if length == 0 or length > (self.size - self.HEADER_SIZE):
-                return sequence, None
-            serialized = bytes(self.mmap[8:8 + length])
+    def read_with_sequence(self, _max_retries: int = 5) -> Tuple[int, Optional[Dict[str, Any]]]:
+        """原子读取序列号和对应数据快照。
 
-        try:
-            data = msgpack.unpackb(serialized, object_hook=self._decode_numpy, raw=False)
-            return sequence, data
-        except Exception:
-            return sequence, None
+        header（seq + length）通过 fd 直接读取以保证跨进程一致性；
+        macOS 上两份 mmap 映射同一文件未必立即可见。
+        使用 seqlock 协议：读取前后各取一次序列号，不一致则重试。
+        """
+        for _ in range(_max_retries):
+            with self._lock:
+                self.file.seek(0)
+                header = self.file.read(8)
+                seq_before = struct.unpack('<I', header[0:4])[0]
+                length = struct.unpack('<I', header[4:8])[0]
+
+                if length == 0 or length > (self.size - self.HEADER_SIZE):
+                    return seq_before, None
+
+                self.file.seek(8)
+                serialized = self.file.read(length)
+
+                self.file.seek(0)
+                seq_after = struct.unpack('<I', self.file.read(4))[0]
+
+            if seq_before != seq_after:
+                continue  # 写入穿插，重试
+
+            try:
+                data = msgpack.unpackb(serialized, object_hook=self._decode_numpy, raw=False)
+                return seq_before, data
+            except Exception:
+                return seq_before, None
+
+        return seq_before, None  # 重试耗尽
 
     def read(self, _max_retries: int = 3) -> Optional[Dict[str, Any]]:
         _, data = self.read_with_sequence(_max_retries=_max_retries)
         return data
 
     def get_sequence(self) -> int:
-        return struct.unpack('<I', self.mmap[0:4])[0]
+        self.file.seek(0)
+        return struct.unpack('<I', self.file.read(4))[0]
 
     # ── 生命周期 ─────────────────────────────────────────────────────
 

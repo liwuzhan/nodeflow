@@ -206,6 +206,13 @@ class NodeFlowSDK:
         else:
             self.logger.info("Parent process watchdog disabled")
 
+        # 健康心跳线程
+        self._health_running = True
+        self._health_thread: Optional[threading.Thread] = None
+        health_interval = float(os.getenv('NODE_HEALTH_INTERVAL', '2.0'))
+        self._health_interval = max(0.5, health_interval)
+        self._start_health_heartbeat()
+
     def get_param(self, key: str, default: Any = None) -> Any:
         """
         获取参数值
@@ -409,6 +416,25 @@ class NodeFlowSDK:
             return None
         return port.get_connection_state()
 
+    def _start_health_heartbeat(self):
+        self._health_thread = threading.Thread(
+            target=self._health_loop,
+            name=f"health-{self.node_id}",
+            daemon=True,
+        )
+        self._health_thread.start()
+        self.logger.debug(f"Health heartbeat started (interval={self._health_interval}s)")
+
+    def _stop_health_heartbeat(self):
+        self._health_running = False
+        if self._health_thread:
+            self._health_thread.join(timeout=2.0)
+
+    def _health_loop(self):
+        while self._health_running:
+            self.report_health()
+            time.sleep(self._health_interval)
+
     def shutdown(self):
         """
         清理资源
@@ -416,6 +442,9 @@ class NodeFlowSDK:
         关闭所有端口和监控线程
         """
         self.logger.info("Shutting down NodeFlow SDK")
+
+        # 停止健康心跳
+        self._stop_health_heartbeat()
 
         # 停止父进程监控
         if self._parent_watchdog:
