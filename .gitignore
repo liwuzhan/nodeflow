@@ -71,3 +71,5 @@ unittest-*.log
 
 # Claude Code (只排除本地配置)
 .claude/*.local.json
+cloud/monitor/node_modules/
+cloud/monitor/dist/
