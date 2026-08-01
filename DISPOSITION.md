@@ -2,7 +2,7 @@
 
 | 目录 | 状态 | 处置 |
 |---|---|---|
-| `backend/` | 保留 | 待合并到 `cloud/server/`，消除双 FastAPI |
+| `backend/` | ✅ 已合并 | 路由提取为 `cloud/server/routers/editor.py`，prefix `/editor` |
 | `gui/` | ✅ 已处置 | 移至 `tools/gui/`（tkinter 控制面板） |
 | `other/` | ✅ 已处置 | 移至 `docs/archive/`（测试数据） |
 | `runtime_manager.py` | ✅ 已处置 | 移至 `tools/runtime_manager.py` |
