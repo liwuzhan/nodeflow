@@ -8,6 +8,7 @@ from cloud.server.models import (
     CoordinateFrame, EdgeTask, Job, JobStep, Machine, Parcel, ParcelSplit, PathArtifact,
 )
 from cloud.server.routers import api_router
+from cloud.server.routers.editor import router as editor_router
 from cloud.server.services.mqtt_client import MQTTClient
 from cloud.server.services.heartbeat_monitor import HeartbeatMonitor
 from cloud.server.services.sse_broker import SSEBroker
@@ -69,6 +70,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(api_router, prefix="/api/v1")
+    app.include_router(editor_router)
 
     @app.get("/api/v1/health")
     def health():
