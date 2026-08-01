@@ -1,23 +1,22 @@
-const BASE = '/api'
+const BASE = '/api/v1'
 
 export interface Machine {
   id: string
   name: string
-  status: string
-  lat?: number
-  lon?: number
-  heading?: number
-  last_heartbeat?: number
-  cpu_pct?: number
-  memory_pct?: number
-  seconds_since_heartbeat?: number
+  status: 'online' | 'offline' | 'busy' | 'error' | 'unregistered'
+  last_heartbeat: string | null
+  position_lat: number | null
+  position_lon: number | null
+  cpu_pct: number
+  memory_mb: number
+  seconds_since_heartbeat: number | null
+  current_task_id: string | null
 }
 
 export interface Parcel {
   id: string
   name: string
-  geojson?: unknown
-  area_hectares?: number
+  area_hectares: number | null
 }
 
 export interface Job {
@@ -25,14 +24,8 @@ export interface Job {
   name: string
   parcel_id: string
   status: string
-  created_at?: number
-  steps?: JobStep[]
-}
-
-export interface JobStep {
-  seq_index: number
-  operation_type: string
-  status: string
+  created_at?: string
+  steps?: { seq_index: number; operation_type: string; status: string }[]
 }
 
 export interface EdgeTask {
@@ -41,25 +34,35 @@ export interface EdgeTask {
   machine_id: string
   state: string
   progress_pct?: number
-  parcel_split_id?: string
+}
+
+async function request<T>(path: string): Promise<T> {
+  const r = await fetch(`${BASE}${path}`)
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
+  const body = await r.json()
+  return body.data ?? body
 }
 
 export async function fetchParcels(): Promise<Parcel[]> {
-  const r = await fetch(`${BASE}/parcels`)
-  return r.json()
+  return request<Parcel[]>('/parcels')
+}
+
+export async function fetchParcelDetail(id: string): Promise<Parcel & { geojson?: unknown }> {
+  return request(`/parcels/${id}`)
 }
 
 export async function fetchMachines(): Promise<Machine[]> {
-  const r = await fetch(`${BASE}/machines`)
-  return r.json()
+  return request<Machine[]>('/machines')
 }
 
 export async function fetchJobs(): Promise<Job[]> {
-  const r = await fetch(`${BASE}/jobs`)
-  return r.json()
+  return request<Job[]>('/jobs')
+}
+
+export async function fetchJobDetail(id: string): Promise<Job> {
+  return request<Job>(`/jobs/${id}`)
 }
 
 export async function fetchJobTasks(jobId: string): Promise<EdgeTask[]> {
-  const r = await fetch(`${BASE}/jobs/${jobId}/tasks`)
-  return r.json()
+  return request<EdgeTask[]>(`/jobs/${jobId}/tasks`)
 }

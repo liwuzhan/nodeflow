@@ -219,8 +219,19 @@ class SimInputNode:
                         if loop_count % 20 == 0:  # 每20次循环记录一次
                             logger.debug(f"发送速度命令: v={linear_vel:.2f} m/s, ω={angular_vel:.2f} rad/s")
 
-                else:
-                    # 2. 如果没有速度命令，尝试电机命令（优先级2）
+                # 2. 机具控制命令（始终检查，独立于速度命令）
+                if self.tillage_port:
+                    tillage_cmd = self.tillage_port.recv_latest()
+                    if tillage_cmd:
+                        self._send_implement_command(tillage_cmd)
+                        if loop_count % 20 == 0:
+                            logger.debug(
+                                f"发送机具命令: hitch={tillage_cmd.get('hitch_height', 0):.1f}, "
+                                f"pto={tillage_cmd.get('pto_on', False)}"
+                            )
+
+                if not velocity_cmd:
+                    # 3. 如果没有速度命令，尝试电机命令（优先级2）
                     motor_cmd = None
                     if self.motor_port:
                         motor_cmd = self.motor_port.recv_latest()
@@ -231,22 +242,11 @@ class SimInputNode:
 
                         if self._send_motor_command(throttle, steering):
                             self.last_motor_cmd = motor_cmd
-                            self.no_command_counter = 0  # 重置看门狗计数器
+                            self.no_command_counter = 0
                             if loop_count % 20 == 0:
                                 logger.debug(f"发送电机命令: throttle={throttle:.2f}, steering={steering:.2f}")
 
-                    # 3. 机具控制命令（独立于速度命令，始终检查）
-                    if self.tillage_port:
-                        tillage_cmd = self.tillage_port.recv_latest()
-                        if tillage_cmd:
-                            self._send_implement_command(tillage_cmd)
-                            if loop_count % 20 == 0:
-                                logger.debug(
-                                    f"发送机具命令: hitch={tillage_cmd.get('hitch_height', 0):.1f}, "
-                                    f"pto={tillage_cmd.get('pto_on', False)}"
-                                )
-
-                    if not velocity_cmd and not (self.motor_port and motor_cmd):
+                    if not (self.motor_port and motor_cmd):
                         # 4. 两个驱动命令都没有，使用看门狗机制
                         if self.last_velocity_cmd or self.last_motor_cmd:
                             # 有历史命令，增加计数器

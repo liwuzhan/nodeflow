@@ -1,9 +1,9 @@
 import { reactive } from 'vue'
-import { fetchParcels, fetchMachines, fetchJobs, fetchJobTasks, type Machine, type Parcel, type Job, type EdgeTask } from '../api'
+import { fetchParcels, fetchParcelDetail, fetchMachines, fetchJobs, fetchJobTasks, type Machine, type Parcel, type Job, type EdgeTask } from '../api'
 
 export const store = reactive({
   machines: [] as Machine[],
-  parcels: [] as Parcel[],
+  parcels: [] as (Parcel & { geojson?: unknown })[],
   jobs: [] as Job[],
   tasks: {} as Record<string, EdgeTask[]>,
   loading: false,
@@ -15,14 +15,25 @@ export const store = reactive({
         fetchMachines(), fetchParcels(), fetchJobs(),
       ])
       this.machines = machines
-      this.parcels = parcels
+
+      // 为每个地块拉取详情（含 GeoJSON）
+      const detailed: (Parcel & { geojson?: unknown })[] = []
+      for (const p of parcels) {
+        try {
+          const detail = await fetchParcelDetail(p.id)
+          detailed.push({ ...p, geojson: detail.geojson })
+        } catch {
+          detailed.push(p)
+        }
+      }
+      this.parcels = detailed
       this.jobs = jobs
 
-      // 拉取每个运行中作业的任务
       for (const j of jobs) {
         if (j.status === 'running') {
-          const tasks = await fetchJobTasks(j.id)
-          this.tasks[j.id] = tasks
+          try {
+            this.tasks[j.id] = await fetchJobTasks(j.id)
+          } catch { /* ignore */ }
         }
       }
     } finally {
@@ -30,16 +41,26 @@ export const store = reactive({
     }
   },
 
-  updateHeartbeat(data: { machine_id: string; lat?: number; lon?: number; heading?: number; cpu_pct?: number; memory_pct?: number }) {
-    const m = this.machines.find(x => x.id === data.machine_id)
+  updateHeartbeat(data: Record<string, unknown>) {
+    const mid = data.machine_id as string
+    const m = this.machines.find(x => x.id === mid)
     if (m) {
-      if (data.lat != null) m.lat = data.lat
-      if (data.lon != null) m.lon = data.lon
-      if (data.heading != null) m.heading = data.heading
-      if (data.cpu_pct != null) m.cpu_pct = data.cpu_pct
-      if (data.memory_pct != null) m.memory_pct = data.memory_pct
-      m.last_heartbeat = Date.now() / 1000
+      if (data.position_lat != null) m.position_lat = data.position_lat as number
+      if (data.position_lon != null) m.position_lon = data.position_lon as number
+      m.last_heartbeat = new Date().toISOString()
       m.seconds_since_heartbeat = 0
+      if (data.cpu_pct != null) m.cpu_pct = data.cpu_pct as number
+      if (data.memory_mb != null) m.memory_mb = data.memory_mb as number
+    }
+  },
+
+  updateTaskStatus(data: Record<string, unknown>) {
+    const jobId = data.job_id as string
+    if (!jobId || !this.tasks[jobId]) return
+    const task = this.tasks[jobId].find(t => t.edge_task_id === data.edge_task_id)
+    if (task) {
+      task.state = data.state as string
+      if (data.progress_pct != null) task.progress_pct = data.progress_pct as number
     }
   },
 

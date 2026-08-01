@@ -202,11 +202,14 @@ class KinematicsEngine:
         2. 速度控制模式（linear_velocity/angular_velocity，农田作业模式）
         """
         # 判断使用哪种控制模式
-        # 如果设置了速度控制，优先使用速度控制模式
         if abs(self.linear_velocity) > 1e-6 or abs(self.angular_velocity) > 1e-6:
-            return self._step_velocity_control(state)
+            new_state = self._step_velocity_control(state)
         else:
-            return self._step_throttle_control(state)
+            new_state = self._step_throttle_control(state)
+
+        # 机具动画始终执行（即使静止）
+        self._animate_implement(new_state)
+        return new_state
 
     def _step_throttle_control(self, state: RobotState) -> RobotState:
         """油门+转向控制模式（也包含地面不平噪声）"""
@@ -306,9 +309,6 @@ class KinematicsEngine:
         new_state.ax = ax
         new_state.sim_time += self.dt
         new_state.step_count += 1
-
-        # 动画化机具状态
-        self._animate_implement(new_state)
 
         return new_state
 

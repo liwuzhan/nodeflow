@@ -1,15 +1,14 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
+import { onMounted, onUnmounted } from 'vue'
 import { store } from './stores/monitorStore'
 import { useSSE } from './composables/useSSE'
 import MonitorMap from './components/MonitorMap.vue'
 import MachinePanel from './components/MachinePanel.vue'
 import StatusBar from './components/StatusBar.vue'
 
-const { connected } = useSSE((e) => {
-  if (e.type === 'heartbeat') {
-    store.updateHeartbeat(e.data as any)
-  }
+useSSE((e) => {
+  if (e.type === 'heartbeat') store.updateHeartbeat(e.data)
+  else if (e.type === 'task_status') store.updateTaskStatus(e.data)
 })
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
@@ -28,14 +27,10 @@ onUnmounted(() => {
   <div class="monitor-root">
     <MonitorMap />
     <MachinePanel />
-    <StatusBar :connected="connected" :machine-count="store.machines.length" />
+    <StatusBar :connected="true" :machine-count="store.machines.length" />
   </div>
 </template>
 
 <style>
-.monitor-root {
-  width: 100%; height: 100%;
-  position: relative;
-  background: #1a1a2e;
-}
+.monitor-root { width: 100%; height: 100%; position: relative; background: #1a1a2e; }
 </style>
