@@ -5,9 +5,9 @@ YAML解析器单元测试
 import pytest
 from pathlib import Path
 
-from runtime.config.yaml_parser import YAMLParser
-from runtime.config.models import RuntimeConfig, NodeManifest
-from runtime.utils.errors import YAMLParseError
+from edge.runtime.config.yaml_parser import YAMLParser
+from edge.runtime.config.models import RuntimeConfig, NodeManifest
+from edge.runtime.utils.errors import YAMLParseError
 
 
 # 获取fixtures目录路径

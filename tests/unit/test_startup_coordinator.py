@@ -2,8 +2,8 @@ import subprocess
 
 import pytest
 
-from runtime.orchestrator.startup_coordinator import StartupCoordinator
-from runtime.utils.errors import NodeStartupError
+from edge.runtime.orchestrator.startup_coordinator import StartupCoordinator
+from edge.runtime.utils.errors import NodeStartupError
 
 
 class DummyLauncher:

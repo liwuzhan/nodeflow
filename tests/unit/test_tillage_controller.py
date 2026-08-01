@@ -16,7 +16,7 @@ from pathlib import Path
 
 # 直接加载 tillage_controller/atom.py 模块
 project_root = Path(__file__).parent.parent.parent
-atom_path = project_root / "node-hub" / "tillage_controller" / "atom.py"
+atom_path = project_root / "edge/nodes" / "implement" / "tillage_controller" / "atom.py"
 spec = importlib.util.spec_from_file_location("tillage_atom", atom_path)
 atom = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(atom)

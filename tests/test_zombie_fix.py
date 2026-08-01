@@ -21,7 +21,7 @@ def test_normal_shutdown():
 
     # 启动 runtime
     proc = subprocess.Popen(
-        ["python3", "-m", "runtime.main", "examples/planning_simulation.yaml", "--duration", "2"],
+        ["python3", "-m", "edge.runtime.main", "examples/planning_simulation.yaml", "--duration", "2"],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True
@@ -59,7 +59,7 @@ def test_sigterm():
     print("\n=== 测试 2: SIGTERM 信号 ===")
 
     proc = subprocess.Popen(
-        ["python3", "-m", "runtime.main", "examples/planning_simulation.yaml", "--duration", "100"],
+        ["python3", "-m", "edge.runtime.main", "examples/planning_simulation.yaml", "--duration", "100"],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True
@@ -91,7 +91,7 @@ def test_sighup():
     print("\n=== 测试 3: SIGHUP 信号 ===")
 
     proc = subprocess.Popen(
-        ["python3", "-m", "runtime.main", "examples/planning_simulation.yaml", "--duration", "100"],
+        ["python3", "-m", "edge.runtime.main", "examples/planning_simulation.yaml", "--duration", "100"],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True

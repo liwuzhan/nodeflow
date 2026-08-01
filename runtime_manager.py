@@ -93,7 +93,7 @@ class PidManager:
 class RuntimeManager:
     """运行时进程管理器"""
 
-    from runtime.utils.constants import LOGS_DIR as LOG_DIR
+    from edge.runtime.utils.constants import LOGS_DIR as LOG_DIR
 
     def __init__(self):
         self.log_dir = Path(self.LOG_DIR)
@@ -211,7 +211,7 @@ class RuntimeManager:
         cmd = [
             "python3",
             "-m",
-            "runtime.main",
+            "edge.runtime.main",
             str(yaml_file.absolute()),
             "--log-level",
             "INFO",

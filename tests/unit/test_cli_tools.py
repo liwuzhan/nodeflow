@@ -1,8 +1,8 @@
 import json
 from argparse import Namespace
 
-from runtime.task.models import Task
-from runtime.task.store import TaskStore
+from edge.agent.models import Task
+from edge.agent.store import TaskStore
 from tools.cli.commands import buffer_cmd, health_cmd, logs_cmd, node_cmd, runtime_cmd, task_cmd
 from tools.cli.core.cli import create_parser
 
@@ -149,7 +149,7 @@ def test_task_list_json_empty(monkeypatch, capsys, tmp_path):
 
 def test_task_run_json_marks_control_unavailable(monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(TaskStore, "STORE_PATH", str(tmp_path / "tasks.json"))
-    monkeypatch.setattr("runtime.task.executor._runtime_process_running", lambda: False)
+    monkeypatch.setattr("edge.agent.executor._runtime_process_running", lambda: False)
 
     task_file = tmp_path / "task.yaml"
     task_file.write_text(

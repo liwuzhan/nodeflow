@@ -347,7 +347,7 @@ def _s4(ctx: dict) -> bool:
     time.sleep(2)
 
     # 记录 cancel 前 control buffer seq
-    from sdk.shared_buffer_lite import SharedBufferLite
+    from edge.sdk.shared_buffer_lite import SharedBufferLite
     try:
         pre_buf = SharedBufferLite("runtime.control", create=False)
         pre_seq = pre_buf.get_sequence()
@@ -537,7 +537,7 @@ def _s8(ctx: dict) -> bool:
                 print(f"    {_dim(msg)}")
 
     # 重启 agent 恢复环境
-    _run_bg([sys.executable, "-m", "runtime.task.agent_main"], "agent",
+    _run_bg([sys.executable, "-m", "edge.agent.agent_main"], "agent",
             env={"PYTHONPATH": str(PROJECT_ROOT), "NF_MACHINE_ID": MACHINE_ID,
                  "NF_MQTT_BROKER": "localhost", "NF_MQTT_PORT": BROKER_PORT})
     time.sleep(2)
@@ -607,7 +607,7 @@ def cmd_start(args):
         print(f"  ⏭  edge daemon 已运行")
     else:
         print(f"  ▶  edge daemon [{config_path}]", end=" ", flush=True)
-        _run_bg([sys.executable, "-m", "runtime.main", config_path, "--daemon"],
+        _run_bg([sys.executable, "-m", "edge.runtime.main", config_path, "--daemon"],
                 "daemon", env={"PYTHONPATH": str(PROJECT_ROOT)})
         time.sleep(3)
         print(_ok() if _is_running("daemon") else _fail("启动失败"))
@@ -616,7 +616,7 @@ def cmd_start(args):
         print(f"  ⏭  TaskAgent 已运行")
     else:
         print(f"  ▶  TaskAgent", end=" ", flush=True)
-        _run_bg([sys.executable, "-m", "runtime.task.agent_main"], "agent",
+        _run_bg([sys.executable, "-m", "edge.agent.agent_main"], "agent",
                 env={"PYTHONPATH": str(PROJECT_ROOT), "NF_MACHINE_ID": MACHINE_ID,
                      "NF_MQTT_BROKER": "localhost", "NF_MQTT_PORT": BROKER_PORT})
         time.sleep(2)
@@ -627,7 +627,7 @@ def cmd_start(args):
         agent2_name = f"agent-{MACHINE_ID_2}"
         if not _is_running(agent2_name):
             print(f"  ▶  TaskAgent [{MACHINE_ID_2}]", end=" ", flush=True)
-            _run_bg([sys.executable, "-m", "runtime.task.agent_main"], agent2_name,
+            _run_bg([sys.executable, "-m", "edge.agent.agent_main"], agent2_name,
                     env={"PYTHONPATH": str(PROJECT_ROOT), "NF_MACHINE_ID": MACHINE_ID_2,
                          "NF_MQTT_BROKER": "localhost", "NF_MQTT_PORT": BROKER_PORT})
             time.sleep(2)

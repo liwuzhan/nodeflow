@@ -14,15 +14,15 @@ from pathlib import Path
 # 添加项目根目录到路径
 sys.path.insert(0, str(Path(__file__).parent))
 
-from runtime.config.yaml_parser import YAMLParser
-from runtime.config.validator import ConfigValidator
-from runtime.node_hub.node_registry import NodeRegistry
-from runtime.graph.topology import TopologyAnalyzer
-from runtime.graph.validator import GraphValidator
-from runtime.orchestrator.node_launcher import NodeLauncher
-from runtime.orchestrator.startup_coordinator import StartupCoordinator
-from runtime.monitoring.node_monitor import NodeMonitor
-from runtime.utils.logger import setup_logger
+from edge.runtime.config.yaml_parser import YAMLParser
+from edge.runtime.config.validator import ConfigValidator
+from edge.runtime.node_hub.node_registry import NodeRegistry
+from edge.runtime.graph.topology import TopologyAnalyzer
+from edge.runtime.graph.validator import GraphValidator
+from edge.runtime.orchestrator.node_launcher import NodeLauncher
+from edge.runtime.orchestrator.startup_coordinator import StartupCoordinator
+from edge.runtime.monitoring.node_monitor import NodeMonitor
+from edge.runtime.utils.logger import setup_logger
 
 logger = setup_logger("test_e2e", "INFO")
 
@@ -53,7 +53,7 @@ def test_complete_workflow():
 
     # 3. 加载节点库
     print("\n[3/7] 加载节点库...")
-    registry = NodeRegistry("node-hub")
+    registry = NodeRegistry("edge/nodes")
     registry.load_all()
 
     print(f"✓ 加载了{len(registry.get_all_packages())}个节点包")
@@ -82,7 +82,7 @@ def test_complete_workflow():
     print("\n[6/7] 启动节点...")
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        launcher = NodeLauncher("node-hub", config.edges)
+        launcher = NodeLauncher("edge/nodes", config.edges)
         coordinator = StartupCoordinator(launcher, registry)
 
         nodes_dict = {n.id: n for n in config.nodes}

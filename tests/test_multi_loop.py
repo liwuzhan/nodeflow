@@ -16,8 +16,8 @@ from pathlib import Path
 # 添加项目路径
 sys.path.insert(0, str(Path(__file__).parent))
 
-from runtime.main import NodeFlowRuntime
-from runtime.utils.logger import setup_logger
+from edge.runtime.main import NodeFlowRuntime
+from edge.runtime.utils.logger import setup_logger
 
 logger = setup_logger("test_multi_loop")
 

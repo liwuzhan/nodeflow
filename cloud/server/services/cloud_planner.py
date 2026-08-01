@@ -18,7 +18,7 @@ _PACKAGE_ALIAS = "nodeflow_global_coverage"
 def _load_planner_package():
     if _PACKAGE_ALIAS in sys.modules:
         return
-    package_dir = settings.PROJECT_ROOT / "node-hub" / "global_coverage"
+    package_dir = settings.PROJECT_ROOT / "edge/nodes" / "planning" / "global_coverage"
     spec = importlib.util.spec_from_file_location(
         _PACKAGE_ALIAS,
         package_dir / "__init__.py",

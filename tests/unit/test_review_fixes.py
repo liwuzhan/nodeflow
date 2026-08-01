@@ -14,8 +14,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from sdk.shared_buffer_lite import SharedBufferLite
-from sdk.port import OutputPort, InputPort
+from edge.sdk.shared_buffer_lite import SharedBufferLite
+from edge.sdk.port import OutputPort, InputPort
 
 
 class TestFullHeaderSeqlock:
@@ -96,7 +96,7 @@ class TestHealthHeartbeat:
     def test_health_data_contains_interval(self):
         os.environ["NODE_ID"] = "test_hb_node"
         os.environ["NODE_OUT_test"] = "test_hb_node.test"
-        from sdk.nodeflow_sdk import NodeFlowSDK
+        from edge.sdk.nodeflow_sdk import NodeFlowSDK
 
         sdk = NodeFlowSDK(enable_parent_watchdog=False)
         sdk.create_output_port("test")
@@ -121,14 +121,14 @@ class TestHealthHeartbeat:
         """验证心跳写不截断重建文件"""
         os.environ["NODE_ID"] = "test_hb_reuse"
         os.environ["NODE_OUT_test"] = "test_hb_reuse.test"
-        from sdk.nodeflow_sdk import NodeFlowSDK
+        from edge.sdk.nodeflow_sdk import NodeFlowSDK
 
         sdk = NodeFlowSDK(enable_parent_watchdog=False)
         sdk.create_output_port("test")
         time.sleep(0.3)
 
         # 记录第一次文件大小
-        from runtime.utils.constants import BUFFERS_DIR
+        from edge.runtime.utils.constants import BUFFERS_DIR
         buf_path = Path(BUFFERS_DIR) / "test_hb_reuse.health.buf"
         size1 = buf_path.stat().st_size
 

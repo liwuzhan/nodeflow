@@ -11,8 +11,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from sdk.port import OutputPort, InputPort
-from sdk.shared_buffer_lite import SharedBufferLite
+from edge.sdk.port import OutputPort, InputPort
+from edge.sdk.shared_buffer_lite import SharedBufferLite
 
 
 def test_late_joiner_basic():

@@ -9,12 +9,12 @@ from pathlib import Path
 # 添加项目根目录到路径
 sys.path.insert(0, str(Path(__file__).parent))
 
-from runtime.node_hub.scanner import NodeHubScanner
-from runtime.node_hub.node_registry import NodeRegistry
-from runtime.graph.topology import TopologyAnalyzer
-from runtime.graph.validator import GraphValidator
-from runtime.config.models import NodeInstance, Edge
-from runtime.utils.errors import CyclicDependencyError
+from edge.runtime.node_hub.scanner import NodeHubScanner
+from edge.runtime.node_hub.node_registry import NodeRegistry
+from edge.runtime.graph.topology import TopologyAnalyzer
+from edge.runtime.graph.validator import GraphValidator
+from edge.runtime.config.models import NodeInstance, Edge
+from edge.runtime.utils.errors import CyclicDependencyError
 
 
 def test_node_scanner():

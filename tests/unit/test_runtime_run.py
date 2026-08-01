@@ -1,5 +1,5 @@
-from runtime import main as runtime_main
-from runtime.main import NodeFlowRuntime
+from edge.runtime import main as runtime_main
+from edge.runtime.main import NodeFlowRuntime
 
 
 def test_traditional_run_marks_running_before_start_dataflow(monkeypatch):

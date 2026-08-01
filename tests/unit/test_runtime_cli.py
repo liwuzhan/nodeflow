@@ -22,7 +22,7 @@ def test_stop_runtime_sends_daemon_shutdown_command(monkeypatch, tmp_path):
         def write(self, payload):
             writes.append((self.name, payload))
 
-    monkeypatch.setattr("sdk.shared_buffer_lite.SharedBufferLite", FakeBuffer)
+    monkeypatch.setattr("edge.sdk.shared_buffer_lite.SharedBufferLite", FakeBuffer)
 
     result = runtime_cmd.stop_runtime()
 

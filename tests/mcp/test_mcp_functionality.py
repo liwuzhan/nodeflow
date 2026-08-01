@@ -14,8 +14,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 # 导入我们的模块
 from runtime_manager import RuntimeManager
 from tools.cli.commands.node_cmd import scan_node_packages, load_manifest, find_node_manifest
-from runtime.config.yaml_parser import YAMLParser
-from runtime.config.validator import ConfigValidator
+from edge.runtime.config.yaml_parser import YAMLParser
+from edge.runtime.config.validator import ConfigValidator
 
 async def test_node_info():
     """测试节点信息查询"""

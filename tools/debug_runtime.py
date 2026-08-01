@@ -14,15 +14,15 @@ from typing import List, Dict, Any
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from runtime.config.yaml_parser import YAMLParser
-from runtime.config.validator import ConfigValidator
-from runtime.node_hub.node_registry import NodeRegistry
-from runtime.node_hub.scanner import NodeHubScanner
-from runtime.graph.topology import TopologyAnalyzer
-from runtime.graph.validator import GraphValidator
-from runtime.orchestrator.env_builder import EnvBuilder
-from runtime.utils.logger import setup_logger
-from runtime.utils.errors import CyclicDependencyError
+from edge.runtime.config.yaml_parser import YAMLParser
+from edge.runtime.config.validator import ConfigValidator
+from edge.runtime.node_hub.node_registry import NodeRegistry
+from edge.runtime.node_hub.scanner import NodeHubScanner
+from edge.runtime.graph.topology import TopologyAnalyzer
+from edge.runtime.graph.validator import GraphValidator
+from edge.runtime.orchestrator.env_builder import EnvBuilder
+from edge.runtime.utils.logger import setup_logger
+from edge.runtime.utils.errors import CyclicDependencyError
 
 logger = setup_logger("debug", level="DEBUG")
 
@@ -276,7 +276,7 @@ class RuntimeDiagnostics:
         self.print_step(8, "Check Health Check Configuration")
 
         try:
-            from runtime.monitoring.health_checker import HealthChecker
+            from edge.runtime.monitoring.health_checker import HealthChecker
 
             self.print_result("INFO", "Health check timeout configuration:")
             print(f"    • Default socket connect timeout: 5s")

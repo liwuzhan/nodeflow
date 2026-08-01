@@ -19,8 +19,8 @@ from pathlib import Path
 # 添加项目根目录到路径
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from sdk.port import OutputPort, InputPort
-from sdk.shared_buffer_lite import SharedBufferLite
+from edge.sdk.port import OutputPort, InputPort
+from edge.sdk.shared_buffer_lite import SharedBufferLite
 
 
 # ========== 轨迹可视化节点功能测试 ==========
@@ -149,7 +149,7 @@ class TestTrajectoryVizAnalysis:
         print("\n=== 测试距离计算 ===")
 
         # 添加node-hub路径
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "node-hub" / "trajectory_viz"))
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "edge/nodes" / "trajectory_viz"))
         from run import TrajectoryAnalyzer, TrajectoryCollector
 
         # 创建收集器并添加数据
@@ -190,7 +190,7 @@ class TestTrajectoryVizAnalysis:
         print("\n=== 测试误差统计 ===")
 
         # 添加node-hub路径
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "node-hub" / "trajectory_viz"))
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "edge/nodes" / "trajectory_viz"))
         from run import TrajectoryAnalyzer, TrajectoryCollector
 
         collector = TrajectoryCollector()
@@ -244,7 +244,7 @@ class TestTrajectoryVizAnalysis:
         print("\n=== 测试覆盖率计算 ===")
 
         # 添加node-hub路径
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "node-hub" / "trajectory_viz"))
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "edge/nodes" / "trajectory_viz"))
         from run import TrajectoryAnalyzer, TrajectoryCollector
         import time
 
@@ -293,7 +293,7 @@ class TestTrajectoryVizGeneration:
         print("\n=== 测试可视化图像生成 ===")
 
         # 添加node-hub路径
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "node-hub" / "trajectory_viz"))
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "edge/nodes" / "trajectory_viz"))
         from run import TrajectoryVisualizer, TrajectoryCollector
         import tempfile
 

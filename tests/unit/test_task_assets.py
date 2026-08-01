@@ -3,8 +3,8 @@ import json
 
 import msgpack
 
-from runtime.task.assets import TaskAssetPreparer
-from runtime.task.models import Task
+from edge.agent.assets import TaskAssetPreparer
+from edge.agent.models import Task
 
 
 FIELD = {

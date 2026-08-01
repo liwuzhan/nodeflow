@@ -18,11 +18,11 @@ from pathlib import Path
 # 添加项目根目录到路径
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from runtime.config.models import NodeInstance, NodeManifest, PortDef, Edge
-from runtime.config.yaml_parser import YAMLParser
-from runtime.orchestrator.env_builder import EnvBuilder
-from runtime.node_hub.scanner import NodeHubScanner
-from sdk.shared_buffer_lite import SharedBufferLite
+from edge.runtime.config.models import NodeInstance, NodeManifest, PortDef, Edge
+from edge.runtime.config.yaml_parser import YAMLParser
+from edge.runtime.orchestrator.env_builder import EnvBuilder
+from edge.runtime.node_hub.scanner import NodeHubScanner
+from edge.sdk.shared_buffer_lite import SharedBufferLite
 
 
 def test_portdef_default_values():
@@ -187,7 +187,7 @@ def test_outputport_reads_env_config():
     os.environ['NODE_OUT_test_port_CONFLATE'] = 'false'
 
     # 导入OutputPort（必须在设置环境变量后）
-    from sdk.port import OutputPort
+    from edge.sdk.port import OutputPort
 
     # 创建OutputPort
     output = OutputPort(name="test_port", buffer_name="test.test_port")
@@ -225,7 +225,7 @@ def test_outputport_uses_defaults():
         del os.environ['NODE_OUT_default_test_CONFLATE']
 
     # 导入OutputPort
-    from sdk.port import OutputPort
+    from edge.sdk.port import OutputPort
 
     # 创建OutputPort
     output = OutputPort(name="default_test", buffer_name="test.default_test")

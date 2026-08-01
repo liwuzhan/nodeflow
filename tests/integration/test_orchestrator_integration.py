@@ -20,15 +20,15 @@ from unittest import mock
 # 添加项目根目录到路径
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from runtime.graph.topology import TopologyAnalyzer
-from runtime.graph.validator import GraphValidator
-from runtime.config.models import RuntimeConfig, NodeInstance, Edge
-from runtime.node_hub.node_registry import NodeRegistry
-from runtime.orchestrator.startup_coordinator import StartupCoordinator
-from runtime.orchestrator.node_launcher import NodeLauncher
-from runtime.orchestrator.env_builder import EnvBuilder
-from runtime.monitoring.node_monitor import NodeMonitor
-from runtime.monitoring.restart_policy import RetryTracker
+from edge.runtime.graph.topology import TopologyAnalyzer
+from edge.runtime.graph.validator import GraphValidator
+from edge.runtime.config.models import RuntimeConfig, NodeInstance, Edge
+from edge.runtime.node_hub.node_registry import NodeRegistry
+from edge.runtime.orchestrator.startup_coordinator import StartupCoordinator
+from edge.runtime.orchestrator.node_launcher import NodeLauncher
+from edge.runtime.orchestrator.env_builder import EnvBuilder
+from edge.runtime.monitoring.node_monitor import NodeMonitor
+from edge.runtime.monitoring.restart_policy import RetryTracker
 
 
 # ========== 拓扑排序测试 ==========

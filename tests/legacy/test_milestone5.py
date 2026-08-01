@@ -13,9 +13,9 @@ from pathlib import Path
 # 添加项目根目录到路径
 sys.path.insert(0, str(Path(__file__).parent))
 
-from sdk.param_parser import ParamParser
-from sdk.port import OutputPort, InputPort
-from sdk.nodeflow_sdk import NodeFlowSDK
+from edge.sdk.param_parser import ParamParser
+from edge.sdk.port import OutputPort, InputPort
+from edge.sdk.nodeflow_sdk import NodeFlowSDK
 
 
 def test_param_parser():

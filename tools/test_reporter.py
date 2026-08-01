@@ -90,7 +90,7 @@ class TestReporter:
         missing = []
 
         for node_name in mock_nodes:
-            node_dir = self.project_root / "node-hub" / node_name
+            node_dir = self.project_root / "edge/nodes" / node_name
 
             if not node_dir.exists():
                 results[node_name] = "missing_dir"

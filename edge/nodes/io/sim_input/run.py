@@ -1,0 +1,315 @@
+#!/usr/bin/env python3
+import sys
+import time
+import zmq
+import json
+import logging
+from typing import Optional
+
+# Pydantic 导入
+try:
+    from pydantic import BaseModel, Field
+except ImportError:
+    class BaseModel: pass
+    def Field(*args, **kwargs): return None
+
+from edge.sdk.nodeflow_sdk import NodeFlowSDK
+
+# --- Schema Definitions ---
+
+class VelocityCmd(BaseModel):
+    linear_velocity: float
+    angular_velocity: float
+    timestamp: float
+    status: Optional[str] = None
+
+class MotorCmd(BaseModel):
+    throttle: float
+    steering: float
+    timestamp: Optional[float] = None
+
+# --- End Schema Definitions ---
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(name)s] %(levelname)s: %(message)s'
+)
+logger = logging.getLogger("sim_input")
+
+
+class SimInputNode:
+    """仿真器输入节点"""
+
+    def __init__(self, sdk: NodeFlowSDK):
+        self.sdk = sdk
+        self.params = sdk.params
+
+        # 获取参数
+        self.host = self.params.get('simulator_host', 'localhost')
+        self.port = self.params.get('simulator_port', 5555)
+        self.timeout = self.params.get('timeout', 1000)
+
+        # ZMQ 连接（延迟到主循环中创建，避免与sim_output竞争）
+        self.context = None
+        self.socket = None
+        logger.info(f"将在主循环中连接到仿真器: {self.host}:{self.port}")
+
+        # 创建输入端口（仅创建已配置的端口）
+        self.velocity_port = sdk.create_input_port('velocity_cmd')
+        logger.info("速度控制 输入端口已创建")
+
+        # 电机控制端口是可选的（如果没有配置就不创建）
+        try:
+            self.motor_port = sdk.create_input_port('motor_cmd')
+            logger.info("电机控制 输入端口已创建")
+        except ValueError:
+            logger.info("电机控制 输入端口未配置（可选）")
+            self.motor_port = None
+
+        # 机具控制端口（可选）
+        try:
+            self.tillage_port = sdk.create_input_port('tillage_cmd')
+            logger.info("机具控制 输入端口已创建")
+        except ValueError:
+            logger.info("机具控制 输入端口未配置（可选）")
+            self.tillage_port = None
+
+        # 控制状态
+        self.last_velocity_cmd = None
+        self.last_motor_cmd = None
+
+        # 频率控制和默认值
+        self.input_frequency = self.params.get('input_frequency', 50.0)
+        self.default_linear_velocity = self.params.get('default_linear_velocity', 0.0)
+        self.default_angular_velocity = self.params.get('default_angular_velocity', 0.0)
+        self.period = 1.0 / self.input_frequency
+        logger.info(f"输入频率: {self.input_frequency} Hz (周期 {self.period*1000:.1f} ms)")
+
+        # 看门狗机制：防止因相位不同步导致的卡顿
+        # 只有连续 N 帧没有新命令时才发送零命令
+        self.watchdog_timeout_sec = self.params.get('watchdog_timeout_sec', 0.5)
+        self.watchdog_frames = int(self.watchdog_timeout_sec * self.input_frequency)
+        self.no_command_counter = 0
+        logger.info(f"看门狗超时: {self.watchdog_timeout_sec}s ({self.watchdog_frames} 帧)")
+
+    def _send_velocity_command(self, linear_velocity: float, angular_velocity: float) -> bool:
+        """发送速度控制命令到仿真器"""
+        try:
+            request = {
+                "type": "set_actuator",
+                "actuator": "velocity",
+                "data": {
+                    "linear_velocity": linear_velocity,
+                    "angular_velocity": angular_velocity
+                }
+            }
+            self.socket.send_json(request)
+            response = self.socket.recv_json()
+
+            if response.get("status") == "ok":
+                return True
+            else:
+                logger.warning(f"速度命令被拒绝: {response.get('message', '')}")
+                return False
+
+        except zmq.error.Again:
+            logger.warning("发送速度命令超时")
+            return False
+        except Exception as e:
+            logger.error(f"发送速度命令异常: {e}")
+            return False
+
+    def _send_motor_command(self, throttle: float, steering: float) -> bool:
+        """发送电机控制命令到仿真器"""
+        try:
+            request = {
+                "type": "set_actuator",
+                "actuator": "motor",
+                "data": {
+                    "throttle": throttle,
+                    "steering": steering
+                }
+            }
+            self.socket.send_json(request)
+            response = self.socket.recv_json()
+
+            if response.get("status") == "ok":
+                return True
+            else:
+                logger.warning(f"电机命令被拒绝: {response.get('message', '')}")
+                return False
+
+        except zmq.error.Again:
+            logger.warning("发送电机命令超时")
+            return False
+        except Exception as e:
+            logger.error(f"发送电机命令异常: {e}")
+            return False
+
+    def _send_implement_command(self, tillage_cmd: dict) -> bool:
+        """发送机具控制命令到仿真器"""
+        try:
+            request = {
+                "type": "set_actuator",
+                "actuator": "implement",
+                "data": {
+                    "hitch_height": tillage_cmd.get("hitch_height", 0.0),
+                    "pto_on": tillage_cmd.get("pto_on", False),
+                    "pto_rpm": tillage_cmd.get("pto_rpm", 540.0),
+                }
+            }
+            self.socket.send_json(request)
+            response = self.socket.recv_json()
+            if response.get("status") == "ok":
+                return True
+            logger.warning(f"机具命令被拒绝: {response.get('message', '')}")
+            return False
+        except zmq.error.Again:
+            logger.warning("发送机具命令超时")
+            return False
+        except Exception as e:
+            logger.error(f"发送机具命令异常: {e}")
+            return False
+
+    def _ensure_connected(self):
+        """确保与仿真器的连接已建立（延迟初始化）"""
+        if self.socket is None:
+            try:
+                logger.info(f"建立与仿真器的连接: {self.host}:{self.port}")
+                self.context = zmq.Context()
+                self.socket = self.context.socket(zmq.REQ)
+                self.socket.connect(f"tcp://{self.host}:{self.port}")
+                self.socket.setsockopt(zmq.RCVTIMEO, self.timeout)
+                self.socket.setsockopt(zmq.SNDTIMEO, self.timeout)
+                logger.info("与仿真器的连接已建立")
+            except Exception as e:
+                logger.error(f"连接仿真器失败: {e}")
+                self.socket = None
+                return False
+        return True
+
+    def run(self):
+        """主循环"""
+        logger.info("仿真器输入节点已启动")
+
+        loop_count = 0
+        last_log_time = time.time()
+        connection_attempted = False
+
+        try:
+            while True:
+                start_time = time.time()
+
+                # 0. 延迟连接到仿真器（首次尝试发送命令时）
+                if not connection_attempted:
+                    self._ensure_connected()
+                    connection_attempted = True
+
+                # 1. 尝试读取速度控制命令（优先级1）
+                velocity_cmd = self.velocity_port.recv_latest()
+
+                if velocity_cmd:
+                    # 如果收到新的速度命令，立即发送
+                    linear_vel = velocity_cmd.get("linear_velocity", self.default_linear_velocity)
+                    angular_vel = velocity_cmd.get("angular_velocity", self.default_angular_velocity)
+
+                    if self._send_velocity_command(linear_vel, angular_vel):
+                        self.last_velocity_cmd = velocity_cmd
+                        self.no_command_counter = 0  # 重置看门狗计数器
+                        if loop_count % 20 == 0:  # 每20次循环记录一次
+                            logger.debug(f"发送速度命令: v={linear_vel:.2f} m/s, ω={angular_vel:.2f} rad/s")
+
+                # 2. 机具控制命令（始终检查，独立于速度命令）
+                if self.tillage_port:
+                    tillage_cmd = self.tillage_port.recv_latest()
+                    if tillage_cmd:
+                        self._send_implement_command(tillage_cmd)
+                        if loop_count % 20 == 0:
+                            logger.debug(
+                                f"发送机具命令: hitch={tillage_cmd.get('hitch_height', 0):.1f}, "
+                                f"pto={tillage_cmd.get('pto_on', False)}"
+                            )
+
+                if not velocity_cmd:
+                    # 3. 如果没有速度命令，尝试电机命令（优先级2）
+                    motor_cmd = None
+                    if self.motor_port:
+                        motor_cmd = self.motor_port.recv_latest()
+
+                    if motor_cmd:
+                        throttle = motor_cmd.get("throttle", 0.0)
+                        steering = motor_cmd.get("steering", 0.0)
+
+                        if self._send_motor_command(throttle, steering):
+                            self.last_motor_cmd = motor_cmd
+                            self.no_command_counter = 0
+                            if loop_count % 20 == 0:
+                                logger.debug(f"发送电机命令: throttle={throttle:.2f}, steering={steering:.2f}")
+
+                    if not (self.motor_port and motor_cmd):
+                        # 4. 两个驱动命令都没有，使用看门狗机制
+                        if self.last_velocity_cmd or self.last_motor_cmd:
+                            # 有历史命令，增加计数器
+                            self.no_command_counter += 1
+
+                            # 只有连续多帧没有新命令时才发送零命令（防止卡顿）
+                            if self.no_command_counter >= self.watchdog_frames:
+                                self._send_velocity_command(
+                                    self.default_linear_velocity,
+                                    self.default_angular_velocity
+                                )
+                                self.last_velocity_cmd = None
+                                self.last_motor_cmd = None
+                                logger.info(f"看门狗超时 ({self.no_command_counter} 帧)，发送零命令停止")
+                                self.no_command_counter = 0
+                            elif self.no_command_counter % 10 == 0:
+                                logger.debug(f"等待新命令: {self.no_command_counter}/{self.watchdog_frames} 帧")
+
+                # 频率控制
+                loop_count += 1
+                elapsed = time.time() - start_time
+                sleep_time = max(0, self.period - elapsed)
+
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+
+                # 定期日志
+                if time.time() - last_log_time > 10.0:
+                    logger.info(f"运行中 - 已处理 {loop_count} 次循环")
+                    last_log_time = time.time()
+
+        except KeyboardInterrupt:
+            logger.info("接收到停止信号")
+        except Exception as e:
+            logger.error(f"主循环异常: {e}", exc_info=True)
+        finally:
+            self.cleanup()
+
+    def cleanup(self):
+        """清理资源"""
+        logger.info("清理资源...")
+
+        # 发送最后的零命令确保机器人停止
+        try:
+            self._send_velocity_command(0.0, 0.0)
+        except:
+            pass
+
+        self.socket.close()
+        self.context.term()
+        logger.info("仿真器输入节点已停止")
+
+
+def main():
+    """主函数"""
+    try:
+        with NodeFlowSDK(log_level="DEBUG") as sdk:
+            node = SimInputNode(sdk)
+            node.run()
+    except Exception as e:
+        logger.error(f"节点启动失败: {e}", exc_info=True)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

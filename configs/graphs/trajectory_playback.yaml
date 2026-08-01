@@ -1,0 +1,197 @@
+# NodeFlow 轨迹回放场景
+#
+# 加载之前录制的轨迹，自动导航车辆沿轨迹行驶
+#
+# 数据流：
+#
+#   [数据流1: 轨迹加载 + 控制]
+#   [trajectory_loader] ──→ global_path ──→ [waypoint_selector] ──→ next_point ──→ [track_controller] ──→ velocity_cmd ──→ [pwm_driver]
+#         │                                        ↑                      ↑
+#         └──→ task_enu ──→ [coord_transform] ──→ pose_enu ──────────────┘
+#                                  ↑
+#   [rtk_driver] ──→ [rtk_filter] ──→ filtered_rtk
+#
+# 使用说明：
+#   1. 先用 manual_trajectory_recording.yaml 录制一条轨迹
+#   2. 修改下方 trajectory_file 为录制的文件路径（或留空自动选最新）
+#   3. 启动: python3 -m runtime.main examples/trajectory_playback.yaml
+#   4. 车辆将自动沿录制的轨迹行驶
+
+graph_id: trajectory_playback
+graph_version: 1.0
+node_hub_path: ./node-hub
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 节点定义
+# ═══════════════════════════════════════════════════════════════════════════
+
+nodes:
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 轨迹加载器 - 读取录制的轨迹并输出路径                                  │
+  # └─────────────────────────────────────────────────────────────────────┘
+  - id: trajectory_loader
+    package: trajectory_loader
+    description: "加载录制的轨迹文件，转换为ENU路径"
+    params:
+      # 轨迹文件路径（留空则自动选最新的）
+      trajectory_file: ""
+
+      # 记录目录（position_recorder 的输出目录）
+      # records_dir: ./node-hub/position_recorder/data/records
+
+      # GPS参考点（留空则使用轨迹首点）
+      # ref_lon: 116.397128
+      # ref_lat: 39.916527
+
+      # 路径发布间隔
+      publish_interval: 0.1            # 10Hz
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ RTK驱动节点 - 实时定位                                                │
+  # └─────────────────────────────────────────────────────────────────────┘
+  - id: rtk_driver
+    package: rtk_driver
+    description: "从RTK GPS设备读取高精度定位数据"
+    params:
+      serial_port: /dev/ttyACM3
+      serial_baudrate: 115200
+      serial_timeout: 1.0
+      use_network: false
+      nmea_message: GPRMC
+      output_frequency: 20
+      min_rtk_quality: 3               # 3=FIXED（最高），设4会过滤掉所有数据
+      min_satellites: 10
+      enable_smoothing: false
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ RTK滤波器                                                            │
+  # └─────────────────────────────────────────────────────────────────────┘
+  - id: rtk_filter
+    package: rtk_filter
+    description: "RTK数据滤波"
+    params:
+      alpha_pos: 0.2
+      alpha_heading: 0.3
+      use_imu_yaw_rate: false
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 坐标系转换 (WGS84 → ENU)                                            │
+  # └─────────────────────────────────────────────────────────────────────┘
+  - id: coord_transform
+    package: coord_transform
+    description: "将WGS84坐标转换为ENU局部坐标系"
+    params: {}
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 前瞻点选择器                                                         │
+  # └─────────────────────────────────────────────────────────────────────┘
+  - id: waypoint_selector
+    package: waypoint_selector
+    description: "基于视野区域的前瞻点选择器"
+    params:
+      view_distance: 2.0
+      view_width: 4.0
+      view_depth: 1.5
+      goal_tolerance: 1.5
+      max_search_points: 100
+      initial_check_points: 10
+      initial_consume_distance: 2.0
+      min_view_points: 3
+      view_expand_factor: 2.0
+      max_view_width: 12.0
+      continuous_consume_distance: 1.5
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 轨迹控制器                                                           │
+  # └─────────────────────────────────────────────────────────────────────┘
+  - id: track_controller
+    package: track_controller
+    description: "履带控制，支持原地转向"
+    params:
+      max_speed: 0.5                   # 首次测试降低速度
+      min_speed: 0.0
+      heading_p_gain: 2.0
+      max_angular_velocity: 1.0
+      pivot_threshold_deg: 20.0
+      decel_start_distance: 5.0        # 点间距大，提前减速
+      final_stop_distance: 0.5
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ PWM驱动节点                                                          │
+  # └─────────────────────────────────────────────────────────────────────┘
+  - id: pwm_driver
+    package: pwm_driver
+    description: "将速度命令转换为电机PWM信号"
+    params:
+      pwm_frequency: 50.0
+      left_pwmchip: pwmchip0
+      left_pwm_channel: 0
+      right_pwmchip: pwmchip4
+      right_pwm_channel: 0
+      pwm_min_ns: 1000000
+      pwm_center_ns: 1500000
+      pwm_max_ns: 2000000
+      pwm_duty_scale: 1.0
+      wheel_base: 0.5
+      max_linear_speed: 1.0
+      max_angular_speed: 4.0           # 2 × max_linear / wheel_base
+      enable_safety_check: true
+      command_timeout: 0.5
+      dry_run_mode: false              # 首次测试时建议设为true
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 数据连接（边）
+# ═══════════════════════════════════════════════════════════════════════════
+
+edges:
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 轨迹加载 → 路径导航                                                  │
+  # └─────────────────────────────────────────────────────────────────────┘
+
+  # 轨迹加载器 → 前瞻点选择器（ENU路径）
+  - from: trajectory_loader.global_path
+    to: waypoint_selector.global_path
+    description: "录制的轨迹路径（ENU坐标）"
+
+  # 轨迹加载器 → 坐标转换（GPS参考点）
+  - from: trajectory_loader.task_enu
+    to: coord_transform.task_enu
+    description: "GPS参考点（用于 WGS84 → ENU 转换）"
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 实时定位流                                                           │
+  # └─────────────────────────────────────────────────────────────────────┘
+
+  # RTK驱动 → RTK滤波
+  - from: rtk_driver.rtk_fix
+    to: rtk_filter.rtk_fix
+    description: "原始RTK定位数据"
+
+  # RTK滤波 → 坐标转换 (WGS84 → ENU)
+  - from: rtk_filter.filtered_rtk
+    to: coord_transform.rtk_fix
+    description: "滤波后的RTK → ENU坐标转换"
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 导航控制流                                                           │
+  # └─────────────────────────────────────────────────────────────────────┘
+
+  # ENU位姿 → 前瞻点选择器
+  - from: coord_transform.pose_enu
+    to: waypoint_selector.pose_enu
+    description: "实时ENU位姿 → 前瞻点选择"
+
+  # 前瞻点 → 轨迹控制器
+  - from: waypoint_selector.next_point
+    to: track_controller.next_point
+    description: "前瞻点（ENU）"
+
+  # ENU位姿 → 轨迹控制器
+  - from: coord_transform.pose_enu
+    to: track_controller.pose_enu
+    description: "实时ENU位姿 → 轨迹控制"
+
+  # 速度指令 → PWM驱动
+  - from: track_controller.velocity_cmd
+    to: pwm_driver.velocity_cmd
+    description: "速度命令（linear_velocity, angular_velocity）"

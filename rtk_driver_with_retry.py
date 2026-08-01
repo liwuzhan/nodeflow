@@ -16,7 +16,7 @@ def log(level, msg):
 
 def run_rtk_system(config_file, timeout=None):
     """运行RTK系统，返回退出码"""
-    cmd = [sys.executable, "-m", "runtime.main", config_file]
+    cmd = [sys.executable, "-m", "edge.runtime.main", config_file]
 
     try:
         log("INFO", f"启动RTK系统: {' '.join(cmd)}")

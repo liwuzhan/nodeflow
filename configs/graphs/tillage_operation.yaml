@@ -1,0 +1,327 @@
+# NodeFlow 旋耕作业场景
+#
+# 完整运动控制链 + 机具控制链:
+#
+#   [trajectory_loader] ──→ global_path ──→ [waypoint_selector] ──→ next_point ──→ [track_controller] ──→ velocity_cmd ──→ [sim_input]
+#         │                                       ↑                       │ zone hint
+#         ├──→ task_enu ──→ [coord_transform] ──→ pose_enu ──────────────→ [tillage_controller]
+#         │                        ↑              ↑                              ↑
+#   [sim_output] ──→ [rtk_filter] ─┘              │                              │
+#   [parcel_planner] ──→ task_enu ──→ [coord_transform] ──→ task_enu (boundary) ──┘
+#
+#   机具控制链 (独立于运动控制):
+#   - tillage_controller 读取 pose_enu + next_point(zone hint) + task_enu(field boundary)
+#   - 根据 zone 提示 + RTK 实际位置做 PTO/悬挂决策
+#   - 输出 tillage_cmd 逻辑指令 (后续由 implement_driver 转换为物理信号)
+#
+#   控制逻辑:
+#   - 在 work zone → 降悬挂 → 接合 PTO → 旋耕作业
+#   - 在 transit zone (地头) → 断 PTO → 升悬挂 → 运输
+#   - 到达终点 (final=true) → 断 PTO → 升悬挂 → 完成
+#
+# 使用说明：
+#   1. 启动仿真器: python3 simulator/server.py
+#   2. 准备地块数据: data/parcels/default.json (parcel_planner 自动加载)
+#   3. 准备轨迹文件: data/records/ (留空自动选最新)
+#   4. 启动: python3 -m runtime.main examples/tillage_operation.yaml
+#   5. 观察日志中 tillage_controller 状态: TRANSPORT → LOWERING → WORKING → RAISING
+#   6. 浏览器打开 http://localhost:8080 查看实时轨迹
+
+graph_id: tillage_operation
+graph_version: 1.0
+node_hub_path: ./node-hub
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 节点定义
+# ═══════════════════════════════════════════════════════════════════════════
+
+nodes:
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 仿真器输出 (传感器数据源)                                            │
+  # └─────────────────────────────────────────────────────────────────────┘
+  - id: sim_output
+    package: sim_output
+    description: "从仿真器读取传感器数据"
+    params:
+      simulator_host: localhost
+      simulator_port: 5555
+      timeout: 2000
+      enable_gps: false
+      enable_imu: false
+      enable_rtk: true
+      enable_odometry: false
+      enable_state: false
+      output_frequency: 20.0
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 地块规划器 - 提供地块边界 (用于 zone 自动检测)                       │
+  # └─────────────────────────────────────────────────────────────────────┘
+  - id: parcel_planner
+    package: parcel_planner
+    description: "加载地块边界与车辆配置"
+    params:
+      parcel_name: ""            # 留空使用默认地块
+      send_interval: 1.0
+      web_port: 8081
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 轨迹加载器 - 加载录制轨迹，生成全局路径                              │
+  # └─────────────────────────────────────────────────────────────────────┘
+  - id: trajectory_loader
+    package: trajectory_loader
+    description: "加载轨迹文件，转换为 ENU 全局路径"
+    params:
+      trajectory_file: ""            # 留空自动选最新
+      publish_interval: 0.1          # 10Hz
+      enable_bezier: false           # 使用原始折线路径（配合 waypoint_selector）
+      turn_angle_threshold_deg: 45.0
+      turn_zone_radius_m: 4.0
+      work_speed_limit_mps: 1.0
+      turn_speed_limit_mps: 0.5
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ RTK 滤波器                                                          │
+  # └─────────────────────────────────────────────────────────────────────┘
+  - id: rtk_filter
+    package: rtk_filter
+    description: "RTK 数据滤波 (低通 + 异常值剔除)"
+    params:
+      alpha_pos: 0.2
+      alpha_heading: 0.3
+      use_imu_yaw_rate: false
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 坐标系转换 (WGS84 → ENU)                                            │
+  # └─────────────────────────────────────────────────────────────────────┘
+  - id: coord_transform
+    package: coord_transform
+    description: "将 WGS84 坐标转换为 ENU 局部坐标系"
+    params: {}
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 前瞻点选择器 - 视野区域算法 + zone 透传                              │
+  # └─────────────────────────────────────────────────────────────────────┘
+  - id: waypoint_selector
+    package: waypoint_selector
+    description: "基于视野区域的前瞻点选择，同时透传 zone 标注"
+    params:
+      view_distance: 3.0
+      view_width: 4.0
+      view_depth: 1.5
+      goal_tolerance: 1.5
+      max_search_points: 100
+      initial_check_points: 10
+      initial_consume_distance: 2.0
+      continuous_consume_distance: 1.5
+      turn_preview_distance: 8.0
+
+  - id: path_progress
+    package: path_progress
+    description: "路径进度节点 - 统一输出当前作业段和误差"
+    params:
+      search_window: 120
+      publish_interval: 0.02
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 轨迹跟踪控制器 - P 控制器 (运动控制)                                │
+  # └─────────────────────────────────────────────────────────────────────┘
+  - id: track_controller
+    package: track_controller
+    description: "跟踪前瞻点，输出速度指令 (仅负责移动)"
+    params:
+      max_speed: 1.0
+      min_speed: 0.0
+      heading_p_gain: 2.5
+      max_angular_velocity: 1.0
+      pivot_threshold_deg: 15.0
+      decel_start_distance: 2.0
+      final_stop_distance: 0.5
+      decel_min_factor: 0.3
+      turn_slowdown_angle_deg: 45.0
+      turn_speed_factor: 0.65
+      sharp_turn_angle_deg: 120.0
+      sharp_turn_speed_factor: 0.35
+      cross_track_slowdown_error_m: 0.5
+      cross_track_stop_error_m: 1.5
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 旋耕控制器 - 机具控制 (PTO + 三点悬挂)                              │
+  # └─────────────────────────────────────────────────────────────────────┘
+  - id: tillage_controller
+    package: tillage_controller
+    description: "旋耕机具状态机 - 与运动控制完全解耦"
+    params:
+      hitch_lower_time_s: 1.5         # 悬挂下降时间 (秒)
+      hitch_raise_time_s: 1.5         # 悬挂提升时间 (秒)
+      headland_width_m: 3.0           # 地头转弯区宽度 (米)
+      pto_engage_delay_s: 0.5         # PTO 接合延迟 (悬挂降到位后等待)
+      auto_zone_detect: true          # 自动区域检测 (RTK + 地块边界)
+      hitch_working_height: 1.0       # 作业悬挂高度 (0~1)
+      enable_verbose_log: true        # 详细日志输出
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 仿真器输入 (接收控制命令)                                            │
+  # └─────────────────────────────────────────────────────────────────────┘
+  - id: sim_input
+    package: sim_input
+    description: "将速度控制命令发送到仿真器"
+    params:
+      simulator_host: localhost
+      simulator_port: 5555
+      timeout: 2000
+      control_mode: velocity
+      input_frequency: 50.0
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 轨迹可视化                                                          │
+  # └─────────────────────────────────────────────────────────────────────┘
+  - id: trajectory_viz
+    package: trajectory_viz
+    description: "实时 Web 可视化 - 轨迹 + 作业状态"
+    params:
+      web_host: "0.0.0.0"
+      web_port: 8080
+      timeout: 0.0
+      update_interval: 5.0
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 数据连接（边）
+# ═══════════════════════════════════════════════════════════════════════════
+
+edges:
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ GPS 参考点流                                                        │
+  # └─────────────────────────────────────────────────────────────────────┘
+
+  # 轨迹加载器 → 坐标转换 (GPS 参考点)
+  - from: trajectory_loader.task_enu
+    to: coord_transform.task_enu
+    description: "GPS 参考点 (WGS84 → ENU 转换)"
+
+  # 地块规划器 → 坐标转换 (GPS 参考点)
+  - from: parcel_planner.task_enu
+    to: coord_transform.task_enu
+    description: "地块 GPS 参考点 + 边界"
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 实时定位流                                                          │
+  # └─────────────────────────────────────────────────────────────────────┘
+
+  - from: sim_output.rtk_fix
+    to: rtk_filter.rtk_fix
+    description: "原始 RTK 定位"
+
+  - from: rtk_filter.filtered_rtk
+    to: coord_transform.rtk_fix
+    description: "滤波 RTK → ENU 转换"
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 运动控制流 (独立链路)                                               │
+  # └─────────────────────────────────────────────────────────────────────┘
+
+  # 全局路径 → 前瞻点选择
+  - from: trajectory_loader.global_path
+    to: waypoint_selector.global_path
+    description: "全局路径 (ENU) → 视野区域选择"
+  - from: trajectory_loader.operation_plan
+    to: waypoint_selector.operation_plan
+    description: "作业计划 → 前瞻点选择"
+  - from: trajectory_loader.operation_plan
+    to: path_progress.operation_plan
+    description: "作业计划 → 路径进度"
+
+  # ENU 位姿 → 前瞻点选择 (用于视野计算)
+  - from: coord_transform.pose_enu
+    to: waypoint_selector.pose_enu
+    description: "实时位姿 → 视野区域更新"
+  - from: coord_transform.pose_enu
+    to: path_progress.pose_enu
+    description: "实时位姿 → 路径进度"
+  - from: path_progress.progress_state
+    to: waypoint_selector.path_progress
+    description: "路径进度 → 前瞻点索引同步"
+
+  # 前瞻点 → 轨迹跟踪控制器
+  - from: waypoint_selector.next_point
+    to: track_controller.next_point
+    description: "前瞻点坐标 → P 控制器跟踪"
+
+  # ENU 位姿 → 轨迹跟踪控制器
+  - from: coord_transform.pose_enu
+    to: track_controller.pose_enu
+    description: "实时位姿 → 航向误差计算"
+  - from: path_progress.progress_state
+    to: track_controller.path_progress
+    description: "路径进度 → 段限速/误差保护"
+
+  # 速度指令 → 仿真器
+  - from: track_controller.velocity_cmd
+    to: sim_input.velocity_cmd
+    description: "速度指令 → 仿真器底盘"
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 机具控制流 (独立链路，与运动控制共享 RTK + zone 源)                 │
+  # └─────────────────────────────────────────────────────────────────────┘
+
+  # ENU 位姿 → 旋耕控制器 (RTK 位置，用于 zone 自动检测 + 安全互锁)
+  - from: coord_transform.pose_enu
+    to: tillage_controller.pose_enu
+    description: "实时 ENU 位姿 → 旋耕 zone 检测"
+  - from: path_progress.progress_state
+    to: tillage_controller.path_progress
+    description: "路径进度与机具意图 → 旋耕状态机"
+
+  # 前瞻点 → 旋耕控制器 (zone 提示 + final 检测)
+  - from: waypoint_selector.next_point
+    to: tillage_controller.next_point
+    description: "带 zone 标注的航点 → 机具状态机"
+
+  # 地块边界 → 旋耕控制器 (点-in-多边形 zone 检测)
+  - from: coord_transform.task_enu
+    to: tillage_controller.task_enu
+    description: "地块边界 (ENU) → auto-zone 检测"
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 可视化数据流                                                        │
+  # └─────────────────────────────────────────────────────────────────────┘
+
+  # 地块信息 → 可视化
+  - from: coord_transform.task_enu
+    to: trajectory_viz.task_enu
+    description: "地块边界"
+
+  # 全局路径 → 可视化 (规划路径)
+  - from: trajectory_loader.global_path
+    to: trajectory_viz.global_path
+    description: "规划路径 (ENU)"
+  - from: trajectory_loader.operation_plan
+    to: trajectory_viz.operation_plan
+    description: "作业计划与段语义 → 可视化"
+
+  # 实际轨迹 → 可视化
+  - from: coord_transform.pose_enu
+    to: trajectory_viz.pose_enu
+    description: "实际行驶轨迹"
+  - from: path_progress.progress_state
+    to: trajectory_viz.path_progress
+    description: "路径进度 → 可视化"
+
+  # 前瞻点、速度与机具状态 → 可视化复盘
+  - from: waypoint_selector.next_point
+    to: trajectory_viz.next_point
+    description: "前瞻点状态 → 可视化"
+
+  - from: track_controller.velocity_cmd
+    to: trajectory_viz.velocity_cmd
+    description: "速度指令 → 可视化"
+
+  - from: tillage_controller.tillage_cmd
+    to: trajectory_viz.tillage_cmd
+    description: "机具逻辑指令 → 可视化"
+  - from: tillage_controller.tillage_cmd
+    to: sim_input.tillage_cmd
+    description: "机具逻辑指令 → 仿真器物理"
+
+  - from: tillage_controller.tillage_status
+    to: trajectory_viz.tillage_status
+    description: "机具状态反馈 → 可视化"

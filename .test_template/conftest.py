@@ -79,7 +79,7 @@ def mock_sdk():
             port = mock_sdk.create_input_port('input')
             port.set_data({'test': 'data'})
     """
-    from sdk.test_utils import MockNodeFlowSDK
+    from edge.sdk.test_utils import MockNodeFlowSDK
 
     sdk = MockNodeFlowSDK()
     yield sdk
@@ -95,7 +95,7 @@ def mock_sdk_with_params():
 
     TODO: 如需自定义参数，修改该fixture或在test中直接设置
     """
-    from sdk.test_utils import MockNodeFlowSDK
+    from edge.sdk.test_utils import MockNodeFlowSDK
 
     sdk = MockNodeFlowSDK(DEFAULT_MOCK_SDK_PARAMS)
     yield sdk

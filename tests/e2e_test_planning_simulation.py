@@ -18,9 +18,9 @@ from typing import Dict, Optional
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from runtime.config.yaml_parser import YAMLParser
-from runtime.utils.logger import setup_logger
-from sdk.shared_buffer_lite import SharedBufferLite
+from edge.runtime.config.yaml_parser import YAMLParser
+from edge.runtime.utils.logger import setup_logger
+from edge.sdk.shared_buffer_lite import SharedBufferLite
 
 logger = setup_logger("e2e_test")
 
@@ -119,7 +119,7 @@ class RuntimeProcess:
                 return False
 
             self.process = subprocess.Popen(
-                [sys.executable, "-m", "runtime.main", self.config_path],
+                [sys.executable, "-m", "edge.runtime.main", self.config_path],
                 cwd=str(project_root),
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.STDOUT,

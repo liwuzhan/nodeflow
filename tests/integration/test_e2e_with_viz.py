@@ -25,8 +25,8 @@ from pathlib import Path
 # 添加项目根目录到路径
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from sdk.port import OutputPort, InputPort
-from sdk.shared_buffer_lite import SharedBufferLite
+from edge.sdk.port import OutputPort, InputPort
+from edge.sdk.shared_buffer_lite import SharedBufferLite
 
 
 class TestE2EWithVisualization:
@@ -201,7 +201,7 @@ class TestE2EWithVisualization:
             print("\n[步骤 7] 生成轨迹可视化")
 
             # 导入可视化类
-            sys.path.insert(0, str(Path(__file__).parent.parent.parent / "node-hub" / "trajectory_viz"))
+            sys.path.insert(0, str(Path(__file__).parent.parent.parent / "edge/nodes" / "trajectory_viz"))
             from run import TrajectoryCollector, TrajectoryVisualizer, TrajectoryAnalyzer
 
             # 收集数据
@@ -282,7 +282,7 @@ class TestE2EWithVisualization:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             # 导入可视化类
-            sys.path.insert(0, str(Path(__file__).parent.parent.parent / "node-hub" / "trajectory_viz"))
+            sys.path.insert(0, str(Path(__file__).parent.parent.parent / "edge/nodes" / "trajectory_viz"))
             from run import TrajectoryCollector, TrajectoryVisualizer
 
             # 创建GPS输出

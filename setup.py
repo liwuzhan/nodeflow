@@ -4,9 +4,7 @@ setup(
     name="robot-nodeflow",
     version="0.1.0",
     description="机器人节点化框架 - 配置驱动的节点编排系统",
-    author="Your Name",
-    author_email="your.email@example.com",
-    packages=find_packages(),
+    packages=find_packages(include=["edge*", "contracts*", "tools*", "cloud*", "simulation*", "configs*"]),
     install_requires=[
         "PyYAML>=6.0",
         "pyzmq>=24.0.0",
@@ -17,7 +15,7 @@ setup(
     python_requires=">=3.10",
     entry_points={
         "console_scripts": [
-            "nodeflow=runtime.main:main",
+            "nodeflow=edge.runtime.main:main",
             "nodeflow-cli=tools.cli.core.cli:main",
         ],
     },

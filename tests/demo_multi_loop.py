@@ -11,7 +11,7 @@ from pathlib import Path
 # 添加项目路径
 sys.path.insert(0, str(Path(__file__).parent))
 
-from runtime.main import NodeFlowRuntime
+from edge.runtime.main import NodeFlowRuntime
 
 
 def demo_basic_api():

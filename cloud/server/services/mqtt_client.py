@@ -10,7 +10,7 @@ from cloud.server.database import SessionLocal
 from cloud.server.models.machine import Machine
 from cloud.server.models.edge_task import EdgeTask
 from cloud.server.services.sse_broker import SSEBroker
-from nodeflow_protocol.task import can_transition_task_state
+from contracts.task import can_transition_task_state
 
 logger = logging.getLogger("mqtt_client")
 

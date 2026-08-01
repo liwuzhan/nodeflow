@@ -15,7 +15,7 @@ import subprocess
 import sys
 import os
 
-from runtime.node_hub.scanner import NodeHubScanner
+from edge.runtime.node_hub.scanner import NodeHubScanner
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -38,7 +38,7 @@ app.add_middleware(
 
 # 路径配置
 PROJECT_ROOT = Path(__file__).parent.parent
-NODE_HUB_PATH = PROJECT_ROOT / "node-hub"
+NODE_HUB_PATH = PROJECT_ROOT / "edge/nodes"
 EXAMPLES_PATH = PROJECT_ROOT / "examples"
 PID_FILE = Path("/tmp/nodeflow_runtime.pid")
 LOG_FILE = Path("/tmp/nodeflow_runtime.log")

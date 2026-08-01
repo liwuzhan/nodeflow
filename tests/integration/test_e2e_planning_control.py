@@ -27,11 +27,11 @@ from unittest import mock
 # 添加项目根目录到路径
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from runtime.graph.topology import TopologyAnalyzer
-from runtime.graph.validator import GraphValidator
-from runtime.config.models import RuntimeConfig, NodeInstance, Edge
-from sdk.port import OutputPort, InputPort
-from sdk.shared_buffer_lite import SharedBufferLite
+from edge.runtime.graph.topology import TopologyAnalyzer
+from edge.runtime.graph.validator import GraphValidator
+from edge.runtime.config.models import RuntimeConfig, NodeInstance, Edge
+from edge.sdk.port import OutputPort, InputPort
+from edge.sdk.shared_buffer_lite import SharedBufferLite
 
 
 # ========== E2E 图配置验证 ==========

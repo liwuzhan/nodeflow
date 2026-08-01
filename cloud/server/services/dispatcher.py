@@ -13,7 +13,7 @@ from cloud.server.models.edge_task import EdgeTask
 from cloud.server.models.coordinate_frame import CoordinateFrame
 from cloud.server.models.machine import Machine
 from cloud.server.services.splitter import ParcelSplitter
-from nodeflow_protocol.task import FallbackPolicy, PlanningMode, PROTOCOL_VERSION
+from contracts.task import FallbackPolicy, PlanningMode, PROTOCOL_VERSION
 from cloud.server.services.cloud_planner import CloudPathPlanner
 
 logger = logging.getLogger("dispatcher")

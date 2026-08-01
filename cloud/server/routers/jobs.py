@@ -15,7 +15,7 @@ from cloud.server.schemas.job import (
     EdgeTaskSummary,
 )
 from cloud.server.services.dispatcher import Dispatcher
-from nodeflow_protocol.task import FallbackPolicy, PlanningMode
+from contracts.task import FallbackPolicy, PlanningMode
 
 logger = logging.getLogger("routers.jobs")
 router = APIRouter(prefix="/jobs", tags=["jobs"])

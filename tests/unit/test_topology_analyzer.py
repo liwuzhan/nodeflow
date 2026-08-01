@@ -14,9 +14,9 @@ from pathlib import Path
 # 添加项目根目录到路径
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from runtime.graph.topology import TopologyAnalyzer
-from runtime.config.models import NodeInstance, Edge
-from runtime.utils.errors import CyclicDependencyError
+from edge.runtime.graph.topology import TopologyAnalyzer
+from edge.runtime.config.models import NodeInstance, Edge
+from edge.runtime.utils.errors import CyclicDependencyError
 
 
 def make_node(node_id: str) -> NodeInstance:
