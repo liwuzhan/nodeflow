@@ -66,6 +66,14 @@ class SimInputNode:
             logger.info("电机控制 输入端口未配置（可选）")
             self.motor_port = None
 
+        # 机具控制端口（可选）
+        try:
+            self.tillage_port = sdk.create_input_port('tillage_cmd')
+            logger.info("机具控制 输入端口已创建")
+        except ValueError:
+            logger.info("机具控制 输入端口未配置（可选）")
+            self.tillage_port = None
+
         # 控制状态
         self.last_velocity_cmd = None
         self.last_motor_cmd = None
@@ -138,6 +146,31 @@ class SimInputNode:
             logger.error(f"发送电机命令异常: {e}")
             return False
 
+    def _send_implement_command(self, tillage_cmd: dict) -> bool:
+        """发送机具控制命令到仿真器"""
+        try:
+            request = {
+                "type": "set_actuator",
+                "actuator": "implement",
+                "data": {
+                    "hitch_height": tillage_cmd.get("hitch_height", 0.0),
+                    "pto_on": tillage_cmd.get("pto_on", False),
+                    "pto_rpm": tillage_cmd.get("pto_rpm", 540.0),
+                }
+            }
+            self.socket.send_json(request)
+            response = self.socket.recv_json()
+            if response.get("status") == "ok":
+                return True
+            logger.warning(f"机具命令被拒绝: {response.get('message', '')}")
+            return False
+        except zmq.error.Again:
+            logger.warning("发送机具命令超时")
+            return False
+        except Exception as e:
+            logger.error(f"发送机具命令异常: {e}")
+            return False
+
     def _ensure_connected(self):
         """确保与仿真器的连接已建立（延迟初始化）"""
         if self.socket is None:
@@ -202,8 +235,19 @@ class SimInputNode:
                             if loop_count % 20 == 0:
                                 logger.debug(f"发送电机命令: throttle={throttle:.2f}, steering={steering:.2f}")
 
-                    else:
-                        # 3. 两个命令都没有，使用看门狗机制
+                    # 3. 机具控制命令（独立于速度命令，始终检查）
+                    if self.tillage_port:
+                        tillage_cmd = self.tillage_port.recv_latest()
+                        if tillage_cmd:
+                            self._send_implement_command(tillage_cmd)
+                            if loop_count % 20 == 0:
+                                logger.debug(
+                                    f"发送机具命令: hitch={tillage_cmd.get('hitch_height', 0):.1f}, "
+                                    f"pto={tillage_cmd.get('pto_on', False)}"
+                                )
+
+                    if not velocity_cmd and not (self.motor_port and motor_cmd):
+                        # 4. 两个驱动命令都没有，使用看门狗机制
                         if self.last_velocity_cmd or self.last_motor_cmd:
                             # 有历史命令，增加计数器
                             self.no_command_counter += 1

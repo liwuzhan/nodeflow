@@ -20,6 +20,10 @@ ports:
       type: json
       description: "电机控制命令 (throttle, steering) - 优先级2"
 
+    - name: tillage_cmd
+      type: implement.tillage_cmd
+      description: "机具控制命令 (hitch_height, pto_on, pto_rpm)"
+
 params:
   # 仿真器连接
   simulator_host:

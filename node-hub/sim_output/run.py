@@ -180,6 +180,10 @@ class SimOutputNode:
         self.ports['task_enu'] = sdk.create_output_port('task_enu', schema=TaskENU)
         logger.info("任务ENU 输出端口已创建")
 
+        # 机具状态端口
+        self.ports['implement'] = sdk.create_output_port('implement_state')
+        logger.info("机具状态 输出端口已创建")
+
         # 读取当前地块与版本（带重试机制，避免启动竞态）
         self.field_data, self.field_version = self._get_field_with_retry(max_retries=5, retry_delay=0.5)
         logger.info(f"地块信息已读取: {self.field_data.get('type', 'unknown')} - "
@@ -476,10 +480,22 @@ class SimOutputNode:
                     if odom_data:
                         self.ports['odom'].send(odom_data)
 
-                if self.enable_state:
-                    state_data = self._get_state()
-                    if state_data:
-                        self.ports['state'].send(state_data)
+                # 获取完整状态（含机具信息）
+                state_data = self._get_state()
+
+                if self.enable_state and state_data:
+                    self.ports['state'].send(state_data)
+
+                # 机具状态始终发布（独立于 debug 开关）
+                if state_data:
+                    implement = state_data.get("implement", {})
+                    if implement:
+                        self.ports['implement'].send({
+                            "hitch_height": implement.get("hitch_height", 0.0),
+                            "pto_on": implement.get("pto_on", False),
+                            "pto_rpm": implement.get("pto_rpm", 0.0),
+                            "timestamp": state_data.get("sim_time", time.time()),
+                        })
 
                 # 2. 持续发送地块和车辆配置（新版本）
                 self.ports['field'].send(self.field_info)

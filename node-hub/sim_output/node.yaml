@@ -59,6 +59,10 @@ ports:
       type: json
       description: "完整机器人状态 (调试用)"
 
+    - name: implement_state
+      type: implement.state
+      description: "机具状态 (hitch_height, pto_on, pto_rpm)"
+
 params:
   # 仿真器连接
   simulator_host:

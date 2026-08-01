@@ -48,6 +48,11 @@ class RobotState:
     # 仿真步数
     step_count: int = 0
 
+    # 机具状态
+    hitch_height: float = 0.0   # 0=完全抬起，1=完全放下
+    pto_on: bool = False
+    pto_rpm: float = 0.0        # 当前 PTO 转速
+
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
         return {
@@ -75,6 +80,11 @@ class RobotState:
                 "ax": self.ax,
                 "ay": self.ay,
                 "az": self.az
+            },
+            "implement": {
+                "hitch_height": self.hitch_height,
+                "pto_on": self.pto_on,
+                "pto_rpm": self.pto_rpm,
             },
             "sim_time": self.sim_time,
             "step_count": self.step_count
@@ -107,7 +117,10 @@ class RobotState:
             omega_yaw=self.omega_yaw,
             ax=self.ax, ay=self.ay, az=self.az,
             sim_time=self.sim_time,
-            step_count=self.step_count
+            step_count=self.step_count,
+            hitch_height=self.hitch_height,
+            pto_on=self.pto_on,
+            pto_rpm=self.pto_rpm,
         )
 
 

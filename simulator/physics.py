@@ -47,6 +47,13 @@ class KinematicsEngine:
         self.linear_velocity = 0.0   # m/s
         self.angular_velocity = 0.0  # rad/s
 
+        # 模式3：机具控制
+        self.target_hitch_height = 0.0  # 0=抬起, 1=放下
+        self.target_pto_on = False
+        self.target_pto_rpm = 540.0     # 标准 PTO 转速
+        self.implement_drag_factor = 0.0  # 当前阻力系数（0=无阻力）
+        self.implement_drag_full = 0.3    # 机具完全着地时的阻力系数
+
         # 地面不平噪声状态（完全随机模型）
         # 每个时间步都是独立的随机偏移，会累积导致轨迹偏离
         self.terrain_noise_omega = 0.0    # 当前的角速度偏移值 (rad/s)
@@ -140,6 +147,52 @@ class KinematicsEngine:
 
         return linear_vel_real, angular_vel_real
 
+    def set_implement_control(self, hitch_height: float, pto_on: bool, pto_rpm: float = 540.0):
+        """
+        设置机具控制指令
+
+        Args:
+            hitch_height: 悬挂高度，0=抬起 1=放下
+            pto_on: PTO 是否开启
+            pto_rpm: PTO 目标转速
+        """
+        self.target_hitch_height = max(0.0, min(1.0, hitch_height))
+        self.target_pto_on = pto_on
+        self.target_pto_rpm = pto_rpm
+
+    def _animate_implement(self, state: RobotState):
+        """动画化机具状态（向目标值平滑过渡）"""
+        # 悬挂高度平滑过渡
+        hitch_speed = 1.5  # 秒，与 tillage_controller 的 hitch_lower_time_s 匹配
+        if self.target_hitch_height > state.hitch_height:
+            state.hitch_height = min(self.target_hitch_height,
+                                     state.hitch_height + self.dt / hitch_speed)
+        elif self.target_hitch_height < state.hitch_height:
+            state.hitch_height = max(self.target_hitch_height,
+                                     state.hitch_height - self.dt / hitch_speed)
+
+        # PTO RPM 平滑过渡
+        pto_ramp_time = 0.5  # PTO 加速/减速时间
+        target_rpm = self.target_pto_rpm if self.target_pto_on else 0.0
+        if target_rpm > state.pto_rpm:
+            state.pto_rpm = min(target_rpm,
+                                state.pto_rpm + (self.target_pto_rpm / pto_ramp_time) * self.dt)
+        elif target_rpm < state.pto_rpm:
+            state.pto_rpm = max(target_rpm,
+                                state.pto_rpm - (self.target_pto_rpm / pto_ramp_time) * self.dt)
+        state.pto_on = state.pto_rpm > 10.0
+
+        # 阻力系数 = 悬挂高度 × 满阻力（机具越放下阻力越大）
+        self.implement_drag_factor = state.hitch_height * self.implement_drag_full
+
+    def _apply_implement_drag(self, linear_vel: float) -> float:
+        """施加机具阻力，降低实际速度"""
+        if self.implement_drag_factor <= 0:
+            return linear_vel
+        import random
+        drag = 1.0 - self.implement_drag_factor * random.uniform(0.8, 1.2)
+        return linear_vel * max(0.1, drag)  # 最低保留 10% 速度
+
     def step(self, state: RobotState) -> RobotState:
         """
         更新机器人状态
@@ -218,6 +271,9 @@ class KinematicsEngine:
             self.linear_velocity, self.angular_velocity
         )
 
+        # 2.5. 应用机具阻力
+        linear_vel_real = self._apply_implement_drag(linear_vel_real)
+
         # 3. 应用地面不平导致的角速度偏移
         #    这是一个角度值（不是百分比），即使线速度为0也会存在
         angular_vel_real += self.terrain_noise_omega
@@ -251,6 +307,9 @@ class KinematicsEngine:
         new_state.sim_time += self.dt
         new_state.step_count += 1
 
+        # 动画化机具状态
+        self._animate_implement(new_state)
+
         return new_state
 
     def reset_control(self):
@@ -259,6 +318,9 @@ class KinematicsEngine:
         self.steering = 0.0
         self.linear_velocity = 0.0
         self.angular_velocity = 0.0
+        self.target_hitch_height = 0.0
+        self.target_pto_on = False
+        self.implement_drag_factor = 0.0
         self.terrain_noise_omega = 0.0  # 重置地面噪声
 
 

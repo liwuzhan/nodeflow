@@ -302,7 +302,7 @@ class SimulatorServer:
         {
             "type": "get_sensor" | "set_actuator" | "get_state" | "get_field",
             "sensor": "gps" | "imu" | "odometry" | "rtk_gps",  # for get_sensor
-            "actuator": "motor" | "velocity",                   # for set_actuator
+            "actuator": "motor" | "velocity" | "implement",              # for set_actuator
             "data": {...}                                       # for set_actuator
         }
         """
@@ -473,6 +473,22 @@ class SimulatorServer:
                 "applied_at": self.state.sim_time,
                 "linear_velocity": linear_vel,
                 "angular_velocity": angular_vel
+            }
+        elif actuator_type == "implement":
+            # 机具控制：悬挂高度 + PTO
+            hitch_height = data.get("hitch_height", 0.0)
+            pto_on = data.get("pto_on", False)
+            pto_rpm = data.get("pto_rpm", 540.0)
+
+            self.kinematics.set_implement_control(hitch_height, pto_on, pto_rpm)
+
+            return {
+                "status": "ok",
+                "actuator": actuator_type,
+                "applied_at": self.state.sim_time,
+                "hitch_height": hitch_height,
+                "pto_on": pto_on,
+                "pto_rpm": pto_rpm,
             }
         else:
             return {

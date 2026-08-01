@@ -318,6 +318,9 @@ edges:
   - from: tillage_controller.tillage_cmd
     to: trajectory_viz.tillage_cmd
     description: "机具逻辑指令 → 可视化"
+  - from: tillage_controller.tillage_cmd
+    to: sim_input.tillage_cmd
+    description: "机具逻辑指令 → 仿真器物理"
 
   - from: tillage_controller.tillage_status
     to: trajectory_viz.tillage_status
