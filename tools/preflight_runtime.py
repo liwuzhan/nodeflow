@@ -8,6 +8,7 @@ import json
 import math
 import os
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -18,6 +19,8 @@ import zmq
 
 from edge.sdk.shared_buffer_lite import SharedBufferLite
 from tools.cli.commands.runtime_cmd import (
+    PID_FILE,
+    get_runtime_pid,
     is_runtime_running,
     start_dataflow,
     start_runtime,
@@ -119,6 +122,121 @@ def _stop_process_group(process: subprocess.Popen[Any] | None) -> None:
             process.wait(timeout=2)
 
 
+def _process_table() -> dict[int, int]:
+    """Return the current PID -> PPID mapping from the operating system."""
+    result = subprocess.run(
+        ["ps", "-Ao", "pid=,ppid="],
+        capture_output=True,
+        text=True,
+        timeout=3,
+    )
+    if result.returncode != 0:
+        raise PreflightError(f"Could not inspect process table: {result.stderr.strip()}")
+
+    processes: dict[int, int] = {}
+    for line in result.stdout.splitlines():
+        fields = line.split()
+        if len(fields) < 2:
+            continue
+        try:
+            processes[int(fields[0])] = int(fields[1])
+        except ValueError:
+            continue
+    return processes
+
+
+def _descendant_pids(root_pid: int) -> set[int]:
+    """Find every current descendant of a managed runtime process."""
+    processes = _process_table()
+    descendants: set[int] = set()
+    pending = [root_pid]
+    while pending:
+        parent = pending.pop()
+        children = {pid for pid, ppid in processes.items() if ppid == parent}
+        new_children = children - descendants
+        descendants.update(new_children)
+        pending.extend(new_children)
+    return descendants
+
+
+def _pid_is_alive(pid: int) -> bool:
+    """Check a PID without signalling it, treating zombies as exited."""
+    result = subprocess.run(
+        ["ps", "-p", str(pid), "-o", "stat="],
+        capture_output=True,
+        text=True,
+        timeout=2,
+    )
+    state = result.stdout.strip()
+    return result.returncode == 0 and bool(state) and not state.startswith("Z")
+
+
+def _port_is_listening(port: int) -> bool:
+    """Probe NodeFlow's IPv4 loopback endpoint without external utilities."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.settimeout(0.3)
+        return probe.connect_ex(("127.0.0.1", port)) == 0
+
+
+def _expected_node_count(config_path: Path) -> int:
+    """Read the number of nodes the graph promises to launch."""
+    import yaml
+
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    nodes = config.get("nodes")
+    if not isinstance(nodes, list) or not nodes:
+        raise PreflightError(f"Graph contains no nodes: {config_path}")
+    return len(nodes)
+
+
+def _assert_clean_shutdown(
+    *,
+    runtime_was_started: bool,
+    stop_result: dict[str, Any] | None,
+    runtime_pid: int | None,
+    node_pids: set[int],
+    simulator_pid: int | None,
+) -> dict[str, Any]:
+    """Enforce the process, PID-file, and port cleanup contract."""
+    errors: list[str] = []
+
+    if runtime_was_started:
+        if not stop_result or stop_result.get("status") != "success":
+            errors.append(f"runtime stop failed: {stop_result}")
+        elif stop_result.get("message") != "Runtime stopped gracefully":
+            errors.append(f"runtime did not stop gracefully: {stop_result.get('message')}")
+
+    alive_nodes = sorted(pid for pid in node_pids if _pid_is_alive(pid))
+    if alive_nodes:
+        errors.append(f"node processes still alive: {alive_nodes}")
+    if runtime_pid is not None and _pid_is_alive(runtime_pid):
+        errors.append(f"runtime process still alive: {runtime_pid}")
+    if simulator_pid is not None and _pid_is_alive(simulator_pid):
+        errors.append(f"simulator process still alive: {simulator_pid}")
+    if is_runtime_running():
+        errors.append("runtime status still reports running")
+    if PID_FILE.exists():
+        errors.append(f"runtime PID file still exists: {PID_FILE}")
+
+    listening_ports = [port for port in (5555, 8080) if _port_is_listening(port)]
+    if listening_ports:
+        errors.append(f"TCP ports still listening: {listening_ports}")
+
+    if errors:
+        raise PreflightError("Unclean shutdown: " + "; ".join(errors))
+
+    return {
+        "runtime_stop": "graceful" if runtime_was_started else "not_started",
+        "runtime_pid_exited": runtime_pid is None or not _pid_is_alive(runtime_pid),
+        "node_processes_checked": len(node_pids),
+        "node_processes_exited": True,
+        "simulator_pid_exited": simulator_pid is None or not _pid_is_alive(simulator_pid),
+        "released_ports": [5555, 8080],
+        "pid_file_removed": not PID_FILE.exists(),
+        "no_residual_control_process": not is_runtime_running(),
+    }
+
+
 def run_preflight(
     config_path: Path = DEFAULT_CONFIG,
     startup_timeout: float = 60.0,
@@ -132,8 +250,15 @@ def run_preflight(
     if _request_simulator({"type": "get_state"}, timeout_ms=200):
         raise PreflightError("Port 5555 already has a responding simulator")
 
+    expected_node_count = _expected_node_count(config_path)
     simulator: subprocess.Popen[Any] | None = None
     runtime_started = False
+    runtime_pid: int | None = None
+    node_pids: set[int] = set()
+    stop_result: dict[str, Any] | None = None
+    result: dict[str, Any] | None = None
+    run_error: Exception | None = None
+    cleanup_error: Exception | None = None
     started_at = time.monotonic()
     try:
         with SIMULATOR_LOG.open("w", encoding="utf-8") as simulator_log:
@@ -160,6 +285,7 @@ def run_preflight(
                 f"Runtime failed to initialize: {start_result}\n{_tail(RUNTIME_LOG)}"
             )
         runtime_started = True
+        runtime_pid = int(start_result["pid"])
 
         command_result = start_dataflow()
         if command_result.get("status") != "success":
@@ -177,6 +303,16 @@ def run_preflight(
             dataflow_started,
             timeout=startup_timeout,
             description="all dataflow nodes to start",
+        )
+
+        def all_node_processes_started() -> set[int] | None:
+            descendants = _descendant_pids(runtime_pid)
+            return descendants if len(descendants) >= expected_node_count else None
+
+        node_pids = _wait_for(
+            all_node_processes_started,
+            timeout=5,
+            description=f"{expected_node_count} runtime child processes",
         )
 
         buffer_payloads: dict[str, dict[str, Any]] = {}
@@ -210,19 +346,60 @@ def run_preflight(
         )
 
         velocity = _read_buffer("track_controller.velocity_cmd") or {}
-        return {
+        result = {
             "status": "ok",
             "config": str(config_path.relative_to(PROJECT_ROOT)),
             "graph_id": runtime_status.get("graph_id"),
+            "node_processes": len(node_pids),
             "required_buffers": len(buffer_payloads),
             "motion_distance_m": round(distance_m, 3),
             "last_linear_velocity_mps": velocity.get("linear_velocity"),
             "elapsed_seconds": round(time.monotonic() - started_at, 2),
         }
+    except Exception as exc:
+        run_error = exc
     finally:
-        if runtime_started or is_runtime_running():
-            stop_runtime()
-        _stop_process_group(simulator)
+        runtime_is_running = is_runtime_running()
+        if runtime_pid is None and runtime_is_running:
+            runtime_pid = get_runtime_pid()
+        if runtime_pid is not None:
+            try:
+                node_pids.update(_descendant_pids(runtime_pid))
+            except Exception as exc:
+                cleanup_error = exc
+        if runtime_started or runtime_is_running:
+            try:
+                stop_result = stop_runtime()
+            except Exception as exc:
+                cleanup_error = cleanup_error or exc
+        try:
+            _stop_process_group(simulator)
+        except Exception as exc:
+            cleanup_error = cleanup_error or exc
+
+        try:
+            shutdown = _assert_clean_shutdown(
+                runtime_was_started=runtime_started,
+                stop_result=stop_result,
+                runtime_pid=runtime_pid,
+                node_pids=node_pids,
+                simulator_pid=simulator.pid if simulator is not None else None,
+            )
+        except Exception as exc:
+            cleanup_error = cleanup_error or exc
+
+    if run_error or cleanup_error:
+        messages = []
+        if run_error:
+            messages.append(str(run_error))
+        if cleanup_error:
+            messages.append(str(cleanup_error))
+        raise PreflightError("; cleanup: ".join(messages))
+
+    if result is None:
+        raise PreflightError("Preflight completed without a result")
+    result["shutdown"] = shutdown
+    return result
 
 
 def main() -> int:
@@ -261,4 +438,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
