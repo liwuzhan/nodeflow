@@ -19,7 +19,7 @@
 
 graph_id: trajectory_playback
 graph_version: 1.0
-node_hub_path: ./node-hub
+node_hub_path: ./edge/nodes
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 节点定义
@@ -30,7 +30,7 @@ nodes:
   # │ 轨迹加载器 - 读取录制的轨迹并输出路径                                  │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: trajectory_loader
-    package: trajectory_loader
+    package: planning/trajectory_loader
     description: "加载录制的轨迹文件，转换为ENU路径"
     params:
       # 轨迹文件路径（留空则自动选最新的）
@@ -50,7 +50,7 @@ nodes:
   # │ RTK驱动节点 - 实时定位                                                │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: rtk_driver
-    package: rtk_driver
+    package: sensing/rtk_driver
     description: "从RTK GPS设备读取高精度定位数据"
     params:
       serial_port: /dev/ttyACM3
@@ -67,7 +67,7 @@ nodes:
   # │ RTK滤波器                                                            │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: rtk_filter
-    package: rtk_filter
+    package: sensing/rtk_filter
     description: "RTK数据滤波"
     params:
       alpha_pos: 0.2
@@ -78,7 +78,7 @@ nodes:
   # │ 坐标系转换 (WGS84 → ENU)                                            │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: coord_transform
-    package: coord_transform
+    package: localization/coord_transform
     description: "将WGS84坐标转换为ENU局部坐标系"
     params: {}
 
@@ -86,7 +86,7 @@ nodes:
   # │ 前瞻点选择器                                                         │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: waypoint_selector
-    package: waypoint_selector
+    package: planning/waypoint_selector
     description: "基于视野区域的前瞻点选择器"
     params:
       view_distance: 2.0
@@ -105,7 +105,7 @@ nodes:
   # │ 轨迹控制器                                                           │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: track_controller
-    package: track_controller
+    package: control/track_controller
     description: "履带控制，支持原地转向"
     params:
       max_speed: 0.5                   # 首次测试降低速度
@@ -120,7 +120,7 @@ nodes:
   # │ PWM驱动节点                                                          │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: pwm_driver
-    package: pwm_driver
+    package: io/pwm_driver
     description: "将速度命令转换为电机PWM信号"
     params:
       pwm_frequency: 50.0

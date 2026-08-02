@@ -8,7 +8,7 @@
 
 graph_id: planning_real_rtk
 graph_version: 1.0
-node_hub_path: ./node-hub
+node_hub_path: ./edge/nodes
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 节点定义
@@ -19,7 +19,7 @@ nodes:
   # │ 地块规划器 - 提供地块信息                                             │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: parcel_planner
-    package: parcel_planner
+    package: planning/parcel_planner
     description: "读取本地地块配置，提供地块边界和车辆参数"
     params:
       parcel_name: "default"            # 地块名称（对应 data/parcels/default.json）
@@ -29,7 +29,7 @@ nodes:
   # │ 真实RTK驱动节点                                                       │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: rtk_sensor
-    package: rtk_driver
+    package: sensing/rtk_driver
     description: "真实高精度RTK-GPS传感器驱动"
     params:
       # 串口配置
@@ -58,7 +58,7 @@ nodes:
   # │ 全局路径规划                                                         │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: global_coverage
-    package: global_coverage
+    package: planning/global_coverage
     description: "根据地块和车辆配置生成全覆盖路径"
     params:
       planning_strategy: contour_spiral
@@ -72,7 +72,7 @@ nodes:
   # │ RTK滤波器                                                            │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: rtk_filter
-    package: rtk_filter
+    package: sensing/rtk_filter
     description: "RTK滤波/融合"
     params:
       alpha_pos: 0.2
@@ -83,7 +83,7 @@ nodes:
   # │ 坐标系转换 (WGS84 → ENU)                                            │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: coord_transform
-    package: coord_transform
+    package: localization/coord_transform
     description: "将WGS84坐标转换为ENU局部坐标系"
     params: {}
 
@@ -91,7 +91,7 @@ nodes:
   # │ 前瞻点选择器                                                         │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: waypoint_selector
-    package: waypoint_selector
+    package: planning/waypoint_selector
     description: "基于视野区域的前瞻点选择器"
     params:
       view_distance: 2.0
@@ -112,7 +112,7 @@ nodes:
       progress_target_max_cross_track_m: 12.0
 
   - id: path_progress
-    package: path_progress
+    package: planning/path_progress
     description: "将实时位姿投影到 operation_plan，输出当前段和误差"
     params:
       search_window: 120
@@ -123,7 +123,7 @@ nodes:
   # │ 轨迹控制器                                                           │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: track_controller
-    package: track_controller
+    package: control/track_controller
     description: "履带控制，支持原地转向"
     params:
       max_speed: 2.0
@@ -135,7 +135,7 @@ nodes:
       final_stop_distance: 0.5
 
   - id: tillage_controller
-    package: tillage_controller
+    package: implement/tillage_controller
     description: "旋耕机具 PTO 与悬挂状态机"
     params:
       hitch_lower_time_s: 1.5
@@ -150,7 +150,7 @@ nodes:
   # │ PWM驱动节点 - 真机电机控制                                            │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: pwm_driver
-    package: pwm_driver
+    package: io/pwm_driver
     description: "将速度命令转换为电机PWM信号"
     params:
       # PWM基础配置
@@ -180,7 +180,7 @@ nodes:
   # │ 轨迹可视化                                                           │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: trajectory_viz
-    package: trajectory_viz
+    package: observability/trajectory_viz
     description: "生成轨迹对比可视化图像"
     params:
       output_dir: "/tmp/rtk_trajectory"

@@ -23,7 +23,7 @@ from unittest.mock import Mock, patch, MagicMock, mock_open
 
 
 # ========== 导入被测模块 ==========
-import atom
+from edge.nodes.io.pwm_driver import atom
 
 
 # ========== 测试数据常量 ==========

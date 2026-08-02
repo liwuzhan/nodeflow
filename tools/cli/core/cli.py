@@ -77,8 +77,8 @@ def create_parser() -> argparse.ArgumentParser:
     )
     node_list_parser.add_argument(
         '--hub-path',
-        default='./node-hub',
-        help='节点库路径 (默认: ./node-hub)'
+        default='./edge/nodes',
+        help='节点库路径 (默认: ./edge/nodes)'
     )
     node_list_parser.add_argument(
         '--sort',
@@ -100,8 +100,8 @@ def create_parser() -> argparse.ArgumentParser:
     )
     node_info_parser.add_argument(
         '--hub-path',
-        default='./node-hub',
-        help='节点库路径 (默认: ./node-hub)'
+        default='./edge/nodes',
+        help='节点库路径 (默认: ./edge/nodes)'
     )
     _add_json_argument(node_info_parser)
 

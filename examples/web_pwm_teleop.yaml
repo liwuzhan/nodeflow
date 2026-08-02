@@ -18,11 +18,11 @@
 
 graph_id: web_pwm_teleop
 graph_version: 1.0
-node_hub_path: ./node-hub
+node_hub_path: ./edge/nodes
 
 nodes:
   - id: web_teleop
-    package: web_teleop
+    package: observability/web_teleop
     description: "Web遥控界面"
     params:
       http_host: 0.0.0.0
@@ -34,7 +34,7 @@ nodes:
       command_timeout: 5.0
 
   - id: pwm_driver
-    package: pwm_driver
+    package: io/pwm_driver
     description: "PWM电机驱动"
     params:
       # PWM硬件
@@ -69,4 +69,3 @@ edges:
   - from: web_teleop.velocity_cmd
     to: pwm_driver.velocity_cmd
     description: "速度命令（线速度 + 角速度）"
-

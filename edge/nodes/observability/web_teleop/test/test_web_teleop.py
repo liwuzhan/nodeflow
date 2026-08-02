@@ -66,7 +66,7 @@ sys.modules['sdk.nodeflow_sdk'] = MagicMock()
 sys.modules['sdk.nodeflow_sdk'].NodeFlowSDK = MockSDK
 
 # 导入被测代码
-import run
+from edge.nodes.observability.web_teleop import run
 run.TeleopHandler.node_instance = None
 
 
@@ -112,8 +112,8 @@ class TestSpeedLimits:
         }
 
         # 模拟 HTTP 服务器
-        with patch('run.ThreadedHTTPServer'):
-            with patch('run.threading.Thread'):
+        with patch.object(run, 'ThreadedHTTPServer'):
+            with patch.object(run.threading, 'Thread'):
                 node = run.WebTeleopNode(sdk)
                 return node
 
@@ -186,8 +186,8 @@ class TestStatusAPI:
             'command_timeout': 5.0,
         }
 
-        with patch('run.ThreadedHTTPServer'):
-            with patch('run.threading.Thread'):
+        with patch.object(run, 'ThreadedHTTPServer'):
+            with patch.object(run.threading, 'Thread'):
                 node = run.WebTeleopNode(sdk)
                 return node
 
@@ -250,8 +250,8 @@ class TestControlCommand:
             'command_timeout': 5.0,
         }
 
-        with patch('run.ThreadedHTTPServer'):
-            with patch('run.threading.Thread'):
+        with patch.object(run, 'ThreadedHTTPServer'):
+            with patch.object(run.threading, 'Thread'):
                 node = run.WebTeleopNode(sdk)
                 return node
 
@@ -319,8 +319,8 @@ class TestTimeoutBehavior:
             'command_timeout': 0.5,  # 短超时用于测试
         }
 
-        with patch('run.ThreadedHTTPServer'):
-            with patch('run.threading.Thread'):
+        with patch.object(run, 'ThreadedHTTPServer'):
+            with patch.object(run.threading, 'Thread'):
                 node = run.WebTeleopNode(sdk)
                 return node
 
@@ -361,8 +361,8 @@ class TestJSONEncoding:
             'command_timeout': 5.0,
         }
 
-        with patch('run.ThreadedHTTPServer'):
-            with patch('run.threading.Thread'):
+        with patch.object(run, 'ThreadedHTTPServer'):
+            with patch.object(run.threading, 'Thread'):
                 node = run.WebTeleopNode(sdk)
                 node.current_linear = 0.5
                 node.current_angular = 0.3

@@ -79,7 +79,7 @@ def mock_sdk():
             port = mock_sdk.create_input_port('input')
             port.set_data({'test': 'data'})
     """
-    from edge.sdk.test_utils import MockNodeFlowSDK
+    from nodeflow_test_support.mock_nodeflow_sdk import MockNodeFlowSDK
 
     sdk = MockNodeFlowSDK()
     yield sdk
@@ -95,7 +95,7 @@ def mock_sdk_with_params():
 
     TODO: 如需自定义参数，修改该fixture或在test中直接设置
     """
-    from edge.sdk.test_utils import MockNodeFlowSDK
+    from nodeflow_test_support.mock_nodeflow_sdk import MockNodeFlowSDK
 
     sdk = MockNodeFlowSDK(DEFAULT_MOCK_SDK_PARAMS)
     yield sdk
@@ -136,7 +136,7 @@ def sample_vehicle_config():
 @pytest.fixture
 def sample_parcel_data():
     """生成样本地块数据（矩形）"""
-    from edge.sdk.test_utils.test_constants import SHANGHAI_CENTER
+    from nodeflow_test_support.mock_nodeflow_sdk import SHANGHAI_CENTER
     lat_center, lon_center = SHANGHAI_CENTER
 
     # 创建一个约100m x 50m的矩形地块

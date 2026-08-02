@@ -47,7 +47,7 @@
 
 graph_id: manual_trajectory_recording
 graph_version: 1.0
-node_hub_path: ./node-hub
+node_hub_path: ./edge/nodes
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 节点定义
@@ -58,7 +58,7 @@ nodes:
   # │ RTK驱动节点 - 高精度GPS定位数据采集                                   │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: rtk_driver
-    package: rtk_driver
+    package: sensing/rtk_driver
     description: "从RTK GPS设备读取高精度定位数据"
     params:
       # ========== 连接方式选择 ==========
@@ -102,7 +102,7 @@ nodes:
   # │ 位置记录节点 - 提供Web界面进行轨迹记录                                │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: position_recorder
-    package: position_recorder
+    package: observability/position_recorder
     description: "提供Web界面进行手动/自动位置记录"
     params:
       # ========== Web服务器配置 ==========
@@ -128,7 +128,7 @@ nodes:
   # │ Web遥控节点 - 提供Web界面进行远程控制                                 │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: web_teleop
-    package: web_teleop
+    package: observability/web_teleop
     description: "提供Web界面进行车辆远程控制（键盘/虚拟手柄）"
     params:
       # ========== Web服务器配置 ==========
@@ -164,7 +164,7 @@ nodes:
   # │ PWM驱动节点 - 输出电机PWM控制信号                                     │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: pwm_driver
-    package: pwm_driver
+    package: io/pwm_driver
     description: "将速度命令转换为电机PWM信号（香橙派5 Ultra）"
     params:
       # ========== PWM硬件配置 ==========

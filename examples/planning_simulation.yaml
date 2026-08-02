@@ -27,7 +27,7 @@
 
 graph_id: planning_simulation
 graph_version: 1.0
-node_hub_path: ./node-hub
+node_hub_path: ./edge/nodes
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 节点定义
@@ -38,7 +38,7 @@ nodes:
   # │ 仿真器输出 (传感器 + 地块)                                           │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: sim_output
-    package: sim_output
+    package: sensing/sim_output
     description: "从仿真器读取传感器数据和地块信息"
     params:
       simulator_host: localhost
@@ -69,7 +69,7 @@ nodes:
   # │ 全局路径规划 (基于往复式扫描)                                         │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: global_coverage
-    package: global_coverage
+    package: planning/global_coverage
     description: "根据地块和车辆配置生成全覆盖路径"
     params:
       planning_strategy: contour_spiral
@@ -86,7 +86,7 @@ nodes:
   # │ 纯追踪速度控制器                                                     │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: rtk_filter
-    package: rtk_filter
+    package: sensing/rtk_filter
     description: "RTK滤波/融合"
     params:
       alpha_pos: 0.2
@@ -97,13 +97,13 @@ nodes:
   # │ 坐标系转换 (WGS84 → ENU)                                            │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: coord_transform
-    package: coord_transform
+    package: localization/coord_transform
     description: "将WGS84坐标转换为ENU局部坐标系"
     params: {}
     # GPS参考点从环境变量自动读取 (GPS_REF_LON, GPS_REF_LAT)
 
   - id: waypoint_selector
-    package: waypoint_selector
+    package: planning/waypoint_selector
     description: "基于视野区域的前瞻点选择器 (v2.0)"
     params:
       # 视野区域参数（推荐低速覆盖场景）
@@ -131,7 +131,7 @@ nodes:
       progress_target_max_cross_track_m: 12.0
 
   - id: path_progress
-    package: path_progress
+    package: planning/path_progress
     description: "将实时位姿投影到 operation_plan，输出当前段和误差"
     params:
       search_window: 120
@@ -139,7 +139,7 @@ nodes:
       publish_interval: 0.02
 
   - id: track_controller
-    package: track_controller
+    package: control/track_controller
     description: "履带控制，支持原地转向"
     params:
       max_speed: 2.0
@@ -172,7 +172,7 @@ nodes:
       pivot_timeout_s: 8.0
 
   - id: tillage_controller
-    package: tillage_controller
+    package: implement/tillage_controller
     description: "机具控制状态机，用于覆盖率和作业状态复盘"
     params:
       hitch_lower_time_s: 1.5
@@ -187,7 +187,7 @@ nodes:
   # │ 仿真器输入 (接收控制命令)                                            │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: sim_input
-    package: sim_input
+    package: io/sim_input
     description: "将控制命令发送到仿真器"
     params:
       simulator_host: localhost
@@ -208,7 +208,7 @@ nodes:
   # │ 轨迹可视化 (实时 Web 版本)                                           │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: trajectory_viz
-    package: trajectory_viz
+    package: observability/trajectory_viz
     description: "实时 Web 可视化（Flask + WebSocket + Plotly.js）"
     params:
       web_host: "0.0.0.0"      # 仅本机访问（更安全）

@@ -21,7 +21,7 @@
 
 graph_id: sim_arc_tracker
 graph_version: 1.0
-node_hub_path: ./node-hub
+node_hub_path: ./edge/nodes
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 节点定义
@@ -32,7 +32,7 @@ nodes:
   # │ 仿真器输出 (传感器数据源)                                            │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: sim_output
-    package: sim_output
+    package: sensing/sim_output
     description: "从仿真器读取传感器数据"
     params:
       simulator_host: localhost
@@ -49,7 +49,7 @@ nodes:
   # │ 轨迹加载器 - 加载录制轨迹 + 生成贝塞尔平滑路径                        │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: trajectory_loader
-    package: trajectory_loader
+    package: planning/trajectory_loader
     description: "加载轨迹并生成贝塞尔平滑路径"
     params:
       trajectory_file: ""            # 留空自动选最新
@@ -61,7 +61,7 @@ nodes:
   # │ RTK 滤波器                                                          │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: rtk_filter
-    package: rtk_filter
+    package: sensing/rtk_filter
     description: "RTK数据滤波"
     params:
       alpha_pos: 0.2
@@ -72,7 +72,7 @@ nodes:
   # │ 坐标系转换 (WGS84 → ENU)                                            │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: coord_transform
-    package: coord_transform
+    package: localization/coord_transform
     description: "将WGS84坐标转换为ENU局部坐标系"
     params: {}
 
@@ -80,7 +80,7 @@ nodes:
   # │ 弧线跟踪控制器 - Pure Pursuit + 贝塞尔路径                           │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: arc_tracker
-    package: arc_tracker
+    package: control/arc_tracker
     description: "贝塞尔路径 Pure Pursuit 弧线跟踪"
     params:
       cruise_speed: 1.0              # 巡航速度 m/s
@@ -97,7 +97,7 @@ nodes:
   # │ 仿真器输入 (接收控制命令)                                            │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: sim_input
-    package: sim_input
+    package: io/sim_input
     description: "将控制命令发送到仿真器"
     params:
       simulator_host: localhost
@@ -112,7 +112,7 @@ nodes:
   # │ 轨迹可视化                                                          │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: trajectory_viz
-    package: trajectory_viz
+    package: observability/trajectory_viz
     description: "实时 Web 可视化"
     params:
       web_host: "0.0.0.0"

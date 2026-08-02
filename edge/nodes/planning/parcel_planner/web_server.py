@@ -21,7 +21,10 @@ from flask_socketio import SocketIO, emit
 from typing import Dict, Any, Optional, List
 
 # 导入坐标转换算法
-from atom import gps_to_enu, enu_to_gps, convert_boundary_gps_to_enu, convert_boundary_enu_to_gps, calculate_polygon_area, calculate_perimeter
+try:
+    from .atom import gps_to_enu, enu_to_gps, convert_boundary_gps_to_enu, convert_boundary_enu_to_gps, calculate_polygon_area, calculate_perimeter
+except ImportError:  # Direct script execution from the node directory.
+    from atom import gps_to_enu, enu_to_gps, convert_boundary_gps_to_enu, convert_boundary_enu_to_gps, calculate_polygon_area, calculate_perimeter
 
 # Flask 应用
 app = Flask(__name__)

@@ -1,4 +1,6 @@
 import json
+import sys
+import time
 from argparse import Namespace
 
 from edge.agent.models import Task
@@ -97,6 +99,73 @@ def test_runtime_start_dataflow_requires_running_runtime(monkeypatch, capsys, tm
     data = json.loads(capsys.readouterr().out)
     assert data["status"] == "not_running"
     assert "cannot start dataflow" in data["message"]
+
+
+def test_runtime_start_uses_current_module(monkeypatch, tmp_path):
+    config_path = tmp_path / "flow.yaml"
+    config_path.write_text("graph_id: test\n", encoding="utf-8")
+    captured = {}
+
+    class FakeProcess:
+        pid = 123
+
+    def fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return FakeProcess()
+
+    monkeypatch.setattr(runtime_cmd, "is_runtime_running", lambda: False)
+    monkeypatch.setattr(runtime_cmd.subprocess, "Popen", fake_popen)
+
+    result = runtime_cmd.start_runtime(str(config_path), background=False)
+
+    assert result["status"] == "success"
+    assert captured["cmd"][:3] == [sys.executable, "-m", "edge.runtime.main"]
+
+
+def test_flow_health_accepts_static_output_from_live_producer(monkeypatch):
+    now = time.time()
+
+    class FakeHealthBuffer:
+        def read(self):
+            return {
+                "status": "ok",
+                "timestamp": now,
+                "heartbeat_interval": 2.0,
+            }
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        health_cmd,
+        "SharedBufferLite",
+        lambda name, create=False: FakeHealthBuffer(),
+    )
+
+    assert health_cmd._producer_health_is_fresh("source.task_enu", now=now)
+
+
+def test_flow_health_rejects_static_output_from_stale_producer(monkeypatch):
+    now = time.time()
+
+    class FakeHealthBuffer:
+        def read(self):
+            return {
+                "status": "ok",
+                "timestamp": now - 30,
+                "heartbeat_interval": 2.0,
+            }
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        health_cmd,
+        "SharedBufferLite",
+        lambda name, create=False: FakeHealthBuffer(),
+    )
+
+    assert not health_cmd._producer_health_is_fresh("source.task_enu", now=now)
 
 
 def test_health_flow_reports_runtime_not_running(monkeypatch, capsys, tmp_path):

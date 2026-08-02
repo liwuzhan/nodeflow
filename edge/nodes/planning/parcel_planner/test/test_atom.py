@@ -5,7 +5,7 @@
 
 import pytest
 import math
-from atom import (
+from edge.nodes.planning.parcel_planner.atom import (
     gps_to_enu,
     enu_to_gps,
     convert_boundary_gps_to_enu,

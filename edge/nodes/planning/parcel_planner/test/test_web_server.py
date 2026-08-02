@@ -8,7 +8,7 @@ import json
 import tempfile
 import shutil
 from pathlib import Path
-from web_server import (
+from edge.nodes.planning.parcel_planner.web_server import (
     app,
     socketio,
     get_parcels_list,
@@ -33,7 +33,7 @@ def temp_data_dir(monkeypatch, tmp_path):
     """创建临时数据目录"""
     temp_dir = tmp_path / "parcels"
     temp_dir.mkdir()
-    monkeypatch.setattr('web_server.DATA_DIR', temp_dir)
+    monkeypatch.setattr('edge.nodes.planning.parcel_planner.web_server.DATA_DIR', temp_dir)
     yield temp_dir
     # 清理临时目录
     if temp_dir.exists():
@@ -299,7 +299,7 @@ class TestConfiguration:
         """测试默认配置"""
         # 使用不存在的配置文件路径
         fake_config = tmp_path / "nonexistent.json"
-        monkeypatch.setattr('web_server.CONFIG_FILE', fake_config)
+        monkeypatch.setattr('edge.nodes.planning.parcel_planner.web_server.CONFIG_FILE', fake_config)
 
         config = load_config()
         assert 'amap_api_key' in config
@@ -318,7 +318,7 @@ class TestConfiguration:
         }
         config_file.write_text(json.dumps(config_data))
 
-        monkeypatch.setattr('web_server.CONFIG_FILE', config_file)
+        monkeypatch.setattr('edge.nodes.planning.parcel_planner.web_server.CONFIG_FILE', config_file)
 
         config = load_config()
         assert config['amap_api_key'] == 'test_key'
@@ -331,7 +331,7 @@ class TestConfiguration:
         config_data = {'amap_api_key': 'file_key'}
         config_file.write_text(json.dumps(config_data))
 
-        monkeypatch.setattr('web_server.CONFIG_FILE', config_file)
+        monkeypatch.setattr('edge.nodes.planning.parcel_planner.web_server.CONFIG_FILE', config_file)
         monkeypatch.setenv('AMAP_API_KEY', 'env_key')
 
         config = load_config()

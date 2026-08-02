@@ -78,7 +78,10 @@ def _emit_flow_results(
     counts: Dict[str, int] = {}
     for r in results.values():
         counts[r["status"]] = counts.get(r["status"], 0) + 1
-    healthy = bool(results) and all(r["status"] == "OK" for r in results.values())
+    healthy_statuses = {"OK", "IDLE"}
+    healthy = bool(results) and all(
+        r["status"] in healthy_statuses for r in results.values()
+    )
     summary = {
         "status": "ok" if healthy else "unhealthy",
         "graph_id": graph_id,
@@ -299,12 +302,44 @@ def _sample_buffers(names: List[str], buffer_dir: Path, interval: float) -> Dict
             delta = seq1 - results[name]["seq_start"]
             results[name]["seq_end"] = seq1
             results[name]["delta"] = delta
-            results[name]["status"] = "OK" if delta > 0 else "STALE"
+            if delta > 0:
+                results[name]["status"] = "OK"
+            elif results[name]["length"] > 0 and _producer_health_is_fresh(name):
+                # Static outputs such as task/field configuration are valid even
+                # when their sequence does not change during the sample window.
+                # A fresh producer heartbeat distinguishes that normal idle state
+                # from a dead producer leaving stale data behind.
+                results[name]["status"] = "IDLE"
+            else:
+                results[name]["status"] = "STALE"
             buf.close()
         except Exception:
             results[name]["status"] = "ERROR"
 
     return results
+
+
+def _producer_health_is_fresh(buffer_name: str, now: float | None = None) -> bool:
+    node_id = buffer_name.split(".", 1)[0]
+    health_buf = None
+    try:
+        health_buf = SharedBufferLite(f"{node_id}.health", create=False)
+        health = health_buf.read()
+        if not health or health.get("status") not in {"ok", "healthy"}:
+            return False
+
+        timestamp = float(health.get("timestamp", 0))
+        heartbeat_interval = max(0.1, float(health.get("heartbeat_interval", 2.0)))
+        age = (time.time() if now is None else now) - timestamp
+        return 0 <= age <= heartbeat_interval * 3
+    except Exception:
+        return False
+    finally:
+        if health_buf is not None:
+            try:
+                health_buf.close()
+            except Exception:
+                pass
 
 
 def handle_health_status(args) -> int:

@@ -16,7 +16,7 @@ from pathlib import Path
 # 添加项目路径
 sys.path.insert(0, str(Path(__file__).parent))
 
-from web_server import start_web_server, update_trajectory_data
+from edge.nodes.observability.trajectory_viz.web_server import start_web_server, update_trajectory_data
 
 def main():
     print("=" * 70)

@@ -12,7 +12,7 @@ node_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(node_dir))
 
 import pytest
-from run import PurePursuitController
+from edge.nodes.observability.velocity_controller.run import PurePursuitController
 
 
 class TestVelocityControllerWithSDK:

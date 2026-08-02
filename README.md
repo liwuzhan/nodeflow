@@ -68,7 +68,8 @@ python3 -m mypy --ignore-missing-imports mcp_server.py runtime_manager.py
 
 ```bash
 # 完整仿真场景（推荐）
-python3 -m runtime.main examples/planning_simulation.yaml
+python3 simulation/server.py
+python3 -m edge.runtime.main examples/planning_simulation.yaml
 
 # 查看可用节点
 python3 -m tools.cli.core.cli node list
@@ -166,7 +167,7 @@ node/
 ```yaml
 graph_id: "sensor_fusion_demo"
 graph_version: "1.0.0"
-node_hub_path: "./node-hub"
+node_hub_path: "./edge/nodes"
 
 nodes:
   - id: gps_sensor

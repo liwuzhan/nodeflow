@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-import web_server
+from edge.nodes.observability.trajectory_viz import web_server
 
 def test_basic():
     print("=" * 60)

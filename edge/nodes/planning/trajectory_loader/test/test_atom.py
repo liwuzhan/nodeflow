@@ -9,7 +9,7 @@ from pathlib import Path
 # 添加父目录到路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import atom
+from edge.nodes.planning.trajectory_loader import atom
 
 
 def test_wgs84_to_enu():

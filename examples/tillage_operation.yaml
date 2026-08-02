@@ -29,7 +29,7 @@
 
 graph_id: tillage_operation
 graph_version: 1.0
-node_hub_path: ./node-hub
+node_hub_path: ./edge/nodes
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 节点定义
@@ -40,7 +40,7 @@ nodes:
   # │ 仿真器输出 (传感器数据源)                                            │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: sim_output
-    package: sim_output
+    package: sensing/sim_output
     description: "从仿真器读取传感器数据"
     params:
       simulator_host: localhost
@@ -57,7 +57,7 @@ nodes:
   # │ 地块规划器 - 提供地块边界 (用于 zone 自动检测)                       │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: parcel_planner
-    package: parcel_planner
+    package: planning/parcel_planner
     description: "加载地块边界与车辆配置"
     params:
       parcel_name: ""            # 留空使用默认地块
@@ -68,7 +68,7 @@ nodes:
   # │ 轨迹加载器 - 加载录制轨迹，生成全局路径                              │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: trajectory_loader
-    package: trajectory_loader
+    package: planning/trajectory_loader
     description: "加载轨迹文件，转换为 ENU 全局路径"
     params:
       trajectory_file: ""            # 留空自动选最新
@@ -83,7 +83,7 @@ nodes:
   # │ RTK 滤波器                                                          │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: rtk_filter
-    package: rtk_filter
+    package: sensing/rtk_filter
     description: "RTK 数据滤波 (低通 + 异常值剔除)"
     params:
       alpha_pos: 0.2
@@ -94,7 +94,7 @@ nodes:
   # │ 坐标系转换 (WGS84 → ENU)                                            │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: coord_transform
-    package: coord_transform
+    package: localization/coord_transform
     description: "将 WGS84 坐标转换为 ENU 局部坐标系"
     params: {}
 
@@ -102,7 +102,7 @@ nodes:
   # │ 前瞻点选择器 - 视野区域算法 + zone 透传                              │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: waypoint_selector
-    package: waypoint_selector
+    package: planning/waypoint_selector
     description: "基于视野区域的前瞻点选择，同时透传 zone 标注"
     params:
       view_distance: 3.0
@@ -116,7 +116,7 @@ nodes:
       turn_preview_distance: 8.0
 
   - id: path_progress
-    package: path_progress
+    package: planning/path_progress
     description: "路径进度节点 - 统一输出当前作业段和误差"
     params:
       search_window: 120
@@ -126,7 +126,7 @@ nodes:
   # │ 轨迹跟踪控制器 - P 控制器 (运动控制)                                │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: track_controller
-    package: track_controller
+    package: control/track_controller
     description: "跟踪前瞻点，输出速度指令 (仅负责移动)"
     params:
       max_speed: 1.0
@@ -148,7 +148,7 @@ nodes:
   # │ 旋耕控制器 - 机具控制 (PTO + 三点悬挂)                              │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: tillage_controller
-    package: tillage_controller
+    package: implement/tillage_controller
     description: "旋耕机具状态机 - 与运动控制完全解耦"
     params:
       hitch_lower_time_s: 1.5         # 悬挂下降时间 (秒)
@@ -163,7 +163,7 @@ nodes:
   # │ 仿真器输入 (接收控制命令)                                            │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: sim_input
-    package: sim_input
+    package: io/sim_input
     description: "将速度控制命令发送到仿真器"
     params:
       simulator_host: localhost
@@ -176,7 +176,7 @@ nodes:
   # │ 轨迹可视化                                                          │
   # └─────────────────────────────────────────────────────────────────────┘
   - id: trajectory_viz
-    package: trajectory_viz
+    package: observability/trajectory_viz
     description: "实时 Web 可视化 - 轨迹 + 作业状态"
     params:
       web_host: "0.0.0.0"

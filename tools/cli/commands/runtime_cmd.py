@@ -72,7 +72,7 @@ def start_runtime(config_path, background=False, log_level="INFO", clean_buffers
 
     # 构建命令
     cmd = [
-        sys.executable, "-m", "runtime.main",
+        sys.executable, "-m", "edge.runtime.main",
         config_path,
         f"--log-level", log_level
     ]

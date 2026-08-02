@@ -88,7 +88,7 @@ def mock_sdk():
             port = mock_sdk.create_input_port('input')
             port.set_data({'test': 'data'})
     """
-    from edge.sdk.test_utils import MockNodeFlowSDK
+    from nodeflow_test_support.mock_nodeflow_sdk import MockNodeFlowSDK
 
     sdk = MockNodeFlowSDK()
     yield sdk
@@ -104,7 +104,7 @@ def mock_sdk_with_params():
 
     TODO: 如需自定义参数，修改该fixture或在test中直接设置
     """
-    from edge.sdk.test_utils import MockNodeFlowSDK
+    from nodeflow_test_support.mock_nodeflow_sdk import MockNodeFlowSDK
 
     sdk = MockNodeFlowSDK(DEFAULT_MOCK_SDK_PARAMS)
     yield sdk
@@ -134,7 +134,7 @@ def temp_output_dir(tmp_path):
 @pytest.fixture
 def sample_rtk_data():
     """生成样本RTK GPS数据"""
-    from edge.sdk.test_utils.test_constants import SHANGHAI_CENTER
+    from nodeflow_test_support.mock_nodeflow_sdk import SHANGHAI_CENTER
     return {
         "latitude": SHANGHAI_CENTER[0],
         "longitude": SHANGHAI_CENTER[1],
@@ -146,7 +146,7 @@ def sample_rtk_data():
 @pytest.fixture
 def sample_path_data():
     """生成样本路径数据"""
-    from edge.sdk.test_utils.test_constants import SHANGHAI_CENTER
+    from nodeflow_test_support.mock_nodeflow_sdk import SHANGHAI_CENTER
     lat_center, lon_center = SHANGHAI_CENTER
     return {
         "task_id": "test_path_001",

@@ -15,7 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 # 导入Web服务器模块（不启动节点，只测试Web服务）
-import web_server
+from edge.nodes.observability.trajectory_viz import web_server
 
 def test_web_server():
     print("=" * 70)
