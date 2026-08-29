@@ -416,6 +416,19 @@ def create_parser() -> argparse.ArgumentParser:
         help='以 JSON 格式输出'
     )
 
+    # ========== status 命令（聚合视图） ==========
+    status_parser = subparsers.add_parser(
+        'status',
+        help='运行时聚合状态',
+        description='单命令回答：哪些节点在跑、哪些输入断流、数据多旧、最近谁死过'
+    )
+    status_parser.add_argument(
+        '--json',
+        action='store_true',
+        default=argparse.SUPPRESS,
+        help='以 JSON 格式输出结果'
+    )
+
     # ========== task 命令 ==========
     task_parser = subparsers.add_parser(
         'task',
@@ -587,6 +600,10 @@ def main():
         elif args.command == 'runtime':
             from tools.cli.commands.runtime_cmd import handle_runtime_command
             exit_code = handle_runtime_command(args)
+            sys.exit(exit_code)
+        elif args.command == 'status':
+            from tools.cli.commands.status_cmd import handle_status_command
+            exit_code = handle_status_command(args)
             sys.exit(exit_code)
         elif args.command == 'logs':
             from tools.cli.commands.logs_cmd import handle_logs_command

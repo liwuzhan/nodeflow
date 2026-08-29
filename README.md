@@ -83,63 +83,49 @@ nodeflow logs --follow
 ## 🏗️ 项目结构
 
 ```
-node/
-├── runtime/              # 运行时框架核心
-│   ├── config/           # 配置解析
-│   ├── graph/            # 图拓扑分析
-│   ├── orchestrator/     # 节点编排与生命周期
-│   ├── monitoring/       # 进程监控与自动重启
-│   ├── task/             # 任务下发与执行
-│   └── utils/            # 工具函数
+nodeflow/
+├── edge/
+│   ├── runtime/          # 运行时框架核心
+│   │   ├── config/       # 配置解析与数据模型
+│   │   ├── graph/        # 图拓扑分析与验证
+│   │   ├── orchestrator/ # 节点编排（launcher/env/启动协调）
+│   │   ├── monitoring/   # 进程监控与自动重启
+│   │   └── utils/        # 常量、错误、日志
+│   │
+│   ├── sdk/              # 节点开发 SDK（NodeFlowSDK/端口/SharedBuffer）
+│   ├── agent/            # 边侧任务执行代理
+│   │
+│   └── nodes/            # 节点库（每节点含 node.yaml 说明书）
+│       ├── sensing/      # rtk_driver / rtk_filter / sim_output
+│       ├── localization/ # coord_transform
+│       ├── planning/     # global_coverage / waypoint_selector 等
+│       ├── control/      # track_controller / arc_tracker
+│       ├── implement/    # tillage_controller
+│       ├── io/           # pwm_driver / sim_input
+│       └── observability/# logger / web_teleop / farm_coverage_viz 等
 │
-├── sdk/                  # 节点开发 SDK
-│   ├── doc/              # SDK 文档
-│   ├── test_utils/       # 测试工具
-│   └── utils/            # 地理坐标等工具
-│
-├── node-hub/             # 节点库
-│   ├── coord_transform/  # 坐标转换网关
-│   ├── global_coverage/  # 全局覆盖规划
-│   ├── waypoint_selector/# 前瞻点选择
-│   ├── track_controller/ # 轨迹跟踪控制
-│   ├── sim_output/       # 仿真器输出
-│   ├── sim_input/        # 仿真器输入
-│   └── ...               # 更多节点
-│
-├── simulator/            # 农田仿真器
-│   └── docs/             # 仿真器文档
-│
-├── web-editor/           # Web 可视化编辑器
-│   └── docs/             # 编辑器文档
+├── simulator/            # 农田仿真器（ZMQ 控制通道）
+├── simulation/           # 仿真物理引擎
 │
 ├── cloud/                # 云端农场管理平台
-│   ├── server/           # FastAPI 后端 (25 API 端点)
-│   │   ├── models/       # SQLAlchemy ORM (6 张表)
-│   │   ├── routers/      # 地块/机器/作业/任务/文件/SSE
-│   │   └── services/     # MQTT/分割/下发引擎/心跳监控
-│   ├── web/              # Vue 3 前端 (6 页面, Leaflet 地图)
-│   │   ├── views/        # 地图/机器/作业/设置
-│   │   └── components/   # 地图图层/作业向导/时间线
-│   └── docs/             # 开发手册 + 对接协议 + 前端指南
+│   ├── server/           # FastAPI 后端（routers/migrations）
+│   └── web/              # Vue 3 前端 (Leaflet 地图)
 │
-├── tools/cli/            # 命令行工具
-│   └── commands/         # CLI 命令 + task 子命令
+├── tools/
+│   ├── cli/              # 命令行工具（runtime/buffer/health/task/logs）
+│   ├── editor/           # Web 可视化图编辑器
+│   ├── mcp/              # MCP Server (AI 辅助调试)
+│   └── gui/              # GUI 运行时控制
 │
+├── contracts/            # 共享契约（任务模型）
+├── configs/              # 生成配置
+├── examples/             # 运行配置示例（runtime.yaml / 任务预设）
 ├── tests/                # 测试套件
 │   ├── unit/             # 单元测试
 │   ├── integration/      # 集成测试
 │   └── e2e_cli.py        # E2E 集成测试工具 (8 场景)
 │
-├── docs/                 # 文档
-│   ├── old/              # 历史文档归档
-│   ├── 评审报告/          # AI 评审报告
-│   ├── BUG_REPORT.md     # Bug 审查报告 (37 项)
-│   ├── BUG_FIX_PLAN.md   # 修复方案 (14 FIX)
-│   ├── BUG_FIX_REPORT.md # 修复报告
-│   └── FIELD_TEST_PLAN.md # 实机测试计划
-│
-├── mcp_server.py         # MCP 服务 (AI 辅助调试)
-├── runtime_manager.py    # 运行时进程管理
+├── docs/                 # 文档（历史文档见 docs/old 与 docs/archive）
 └── pytest.ini            # 测试配置
 ```
 
@@ -225,19 +211,19 @@ params:
 ```
 
 ### IPC 通信机制
-基于 **混合架构 (SharedBuffer + ZeroMQ)** 的高性能进程间通信，解决传统 Socket 的 Slow Joiner 问题。
+基于 **纯 SharedBuffer (mmap)** 的进程间通信，单写者多读者模型，无 ZMQ / 无 fcntl 文件锁。
 
 **核心设计**:
 - 📦 **SharedBuffer (mmap)**: 持久化数据存储，确保后启动的节点也能读取历史数据
-- 🔔 **ZeroMQ PUB/SUB**: 实时事件通知，减少轮询开销
-- 🔄 **Latest-Value 语义**: 读取总是获取最新值（覆盖模式）
-- ⚡ **JSON 序列化**: 简单高效，支持复杂数据结构
+- 🔄 **Latest-Value 语义**: 读取总是获取最新值（覆盖模式），tombstone 协议保证原子性
+- ⚡ **MsgPack 序列化**: 支持复杂数据结构与 numpy 数组
+- 📡 **读者轮询序列号**: 无需额外通知通道，读者自行感知新数据
 
 **优势**:
 - ✅ **无数据丢失**: 数据持久在共享内存，不受节点启动顺序影响
-- ✅ **低延迟**: 内存访问 + ZeroMQ 通知，毫秒级延迟
+- ✅ **低延迟**: 纯内存访问，无网络栈开销
 - ✅ **可配置缓冲区**: 支持 1MB (默认) 到 50MB+ 的灵活配置
-- ✅ **简化连接管理**: 无需重连逻辑，缓冲区由 Runtime 预分配
+- ✅ **零外部依赖**: 节点间通信不依赖 ZMQ 等消息库（仿真器控制通道除外）
 
 **缓冲区配置**:
 ```yaml
@@ -261,8 +247,8 @@ outputs:
 - 统一临时目录根: `/tmp/nodeflow`，子目录：
   - 缓冲区: `/tmp/nodeflow/buffers`
   - 日志: `/tmp/nodeflow/logs`
-- ZeroMQ 地址规范: `ipc:///tmp/nodeflow/<node_id>.<port_name>`
-- 运行时与SDK通过常量管理上述路径，示例见 `runtime/utils/constants.py`
+- 缓冲区命名规范: `<node_id>.<port_name>.buf`（端口即寻址，无需地址配置）
+- 运行时与SDK通过常量管理上述路径，示例见 `edge/runtime/utils/constants.py`
 
 #### 弃用说明
 - 旧版 Unix Socket/MsgPack 通道与相关工具（SocketManager、protocol/channel）已不在运行路径中使用
@@ -619,10 +605,10 @@ nodes:
 
 ## 📊 性能指标
 
-### IPC 通信性能 (Hybrid Architecture)
+### IPC 通信性能 (SharedBuffer mmap)
 
-| 指标 | 传统 Socket | Hybrid (SharedBuffer + ZMQ) | 提升 |
-|------|------------|----------------------------|------|
+| 指标 | 传统 Socket | SharedBuffer (mmap) | 提升 |
+|------|------------|---------------------|------|
 | 数据持久性 | ❌ 未连接时丢失 | ✅ 持久化存储 | 🎯 100% |
 | 连接延迟 | ~100ms (需重连) | <1ms (直接访问) | 🚀 100x |
 | Late Joiner | ❌ 丢失历史数据 | ✅ 可读取历史 | 🎯 完整 |
@@ -677,7 +663,7 @@ nodes:
 
 ### 2025-12-24
 - 📦 **缓冲区配置**: 灵活的输出端口缓冲区配置（1MB-50MB+）
-- 🎯 **混合 IPC**: SharedBuffer + ZeroMQ 架构
+- 🎯 **混合 IPC**: SharedBuffer + ZeroMQ 架构（注: ZMQ 通道已于后续版本移除，现为纯 SharedBuffer IPC）
 
 ### 2025-12-22
 - 🔒 **安全加固**: 修复 MCP 服务路径穿越漏洞

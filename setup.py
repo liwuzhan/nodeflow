@@ -12,7 +12,7 @@ setup(
         "pydantic>=2.0",
         "psutil>=5.8.0",
     ],
-    python_requires=">=3.10",
+    python_requires=">=3.12",
     entry_points={
         "console_scripts": [
             "nodeflow=edge.runtime.main:main",

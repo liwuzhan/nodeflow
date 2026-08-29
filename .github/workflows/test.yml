@@ -2,9 +2,9 @@ name: NodeFlow 自动化测试
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, master, develop, refactor/consolidate-post-ai-review]
   pull_request:
-    branches: [main, develop]
+    branches: [main, master, develop, refactor/consolidate-post-ai-review]
 
 jobs:
   test:
@@ -36,6 +36,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -r cloud/server/requirements.txt
+
+      - name: 测试收集门槛
+        run: |
+          python -m pytest tests/unit --collect-only -q
 
       - name: 运行测试
         run: |

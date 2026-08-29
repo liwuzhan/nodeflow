@@ -78,40 +78,49 @@ class NodeMonitor:
         logger.info("Node monitor stopped")
 
     def _monitor_loop(self):
-        """监控循环（在独立线程中运行）"""
+        """监控循环（在独立线程中运行）
+
+        循环体整体包异常保护：监控线程必须比被监控对象活得久，
+        任何单轮未捕获异常只记日志，不允许杀死整个监控循环。
+        """
         check_interval = 1.0  # 每秒检查一次
 
         while self.running:
-            now = time.time()
-
-            # 检查所有进程
-            crashed_nodes = []
-
-            for node_id, process in list(self.processes.items()):
-                ret_code = process.poll()
-
-                if ret_code is not None:
-                    # 进程已退出
-                    crashed_nodes.append((node_id, ret_code))
-                else:
-                    started_at = self.start_times.get(node_id)
-                    if started_at:
-                        if self.retry_tracker.get_retry_count(node_id) > 0:
-                            if now - started_at >= self.stable_reset_seconds:
-                                self.retry_tracker.reset(node_id)
-
-            # 处理崩溃的节点
-            for node_id, ret_code in crashed_nodes:
-                self._handle_node_crash(node_id, ret_code)
-
-            # 处理待重启队列中到时间的节点
-            for node_id in list(self._pending_restarts.keys()):
-                if now >= self._pending_restarts[node_id]:
-                    del self._pending_restarts[node_id]
-                    self._execute_restart(node_id)
-
-            # 休眠
+            try:
+                self._monitor_tick()
+            except Exception:
+                logger.exception("Unexpected error in monitor loop, continuing")
             time.sleep(check_interval)
+
+    def _monitor_tick(self):
+        """单轮监控：崩溃检测、退避重置、到期重启执行"""
+        now = time.time()
+
+        # 检查所有进程
+        crashed_nodes = []
+
+        for node_id, process in list(self.processes.items()):
+            ret_code = process.poll()
+
+            if ret_code is not None:
+                # 进程已退出
+                crashed_nodes.append((node_id, ret_code))
+            else:
+                started_at = self.start_times.get(node_id)
+                if started_at:
+                    if self.retry_tracker.get_retry_count(node_id) > 0:
+                        if now - started_at >= self.stable_reset_seconds:
+                            self.retry_tracker.reset(node_id)
+
+        # 处理崩溃的节点
+        for node_id, ret_code in crashed_nodes:
+            self._handle_node_crash(node_id, ret_code)
+
+        # 处理待重启队列中到时间的节点
+        for node_id in list(self._pending_restarts.keys()):
+            if now >= self._pending_restarts[node_id]:
+                del self._pending_restarts[node_id]
+                self._execute_restart(node_id)
 
     def _handle_node_crash(self, node_id: str, exit_code: int):
         """
@@ -170,30 +179,49 @@ class NodeMonitor:
         """
         执行节点重启
 
+        回调抛异常或返回 None 不再静默放弃：记一次失败并按退避重新入
+        待重启队列，与节点崩溃共享 max_retries 预算，耗尽后才 give up。
+
         参数：
         - node_id: 节点ID
         """
-        if self.restart_callback:
-            try:
-                logger.info(
-                    f"Restarting node '{node_id}' "
-                    f"(attempt {self.retry_tracker.get_retry_count(node_id)})"
-                )
-
-                # 调用重启回调
-                new_process = self.restart_callback(node_id)
-
-                if new_process:
-                    self.processes[node_id] = new_process
-                    self.start_times[node_id] = time.time()
-                    logger.info(f"Node '{node_id}' restarted with PID {new_process.pid}")
-                else:
-                    logger.error(f"Failed to restart node '{node_id}'")
-
-            except Exception as e:
-                logger.error(f"Error restarting node '{node_id}': {e}")
-        else:
+        if not self.restart_callback:
             logger.warning(f"No restart callback configured, node '{node_id}' not restarted")
+            return
+
+        new_process = None
+        try:
+            logger.info(
+                f"Restarting node '{node_id}' "
+                f"(attempt {self.retry_tracker.get_retry_count(node_id)})"
+            )
+            new_process = self.restart_callback(node_id)
+        except Exception as e:
+            logger.error(f"Error restarting node '{node_id}': {e}")
+
+        if new_process:
+            self.processes[node_id] = new_process
+            self.start_times[node_id] = time.time()
+            logger.info(f"Node '{node_id}' restarted with PID {new_process.pid}")
+            return
+
+        # 重启失败 → 记失败并按退避重新调度（与节点崩溃共享重试预算）
+        logger.error(f"Failed to restart node '{node_id}'")
+        self.retry_tracker.record_failure(node_id)
+
+        if not self.retry_tracker.can_retry(node_id):
+            logger.error(
+                f"Node '{node_id}' exceeded max retries ({self.restart_policy.max_retries}) "
+                f"on restart failures, giving up"
+            )
+            return
+
+        wait_time = self.retry_tracker.should_wait_before_retry(node_id)
+        self._pending_restarts[node_id] = time.time() + wait_time
+        logger.info(
+            f"Scheduled restart retry for node '{node_id}' in {wait_time:.2f}s "
+            f"(attempt {self.retry_tracker.get_retry_count(node_id)})"
+        )
 
     def get_running_nodes(self) -> list:
         """

@@ -96,20 +96,24 @@ def start_runtime(config_path, background=False, log_level="INFO", clean_buffers
                     start_new_session=True
                 )
 
-            # 等待框架初始化
-            time.sleep(2)
+            # 轮询 PID 文件直到 runtime 上线（上限 10s），替代固定 sleep(2)
+            deadline = time.time() + 10.0
+            while time.time() < deadline:
+                if is_runtime_running():
+                    return {
+                        "status": "success",
+                        "message": "Runtime started in background",
+                        "pid": get_runtime_pid()
+                    }
+                time.sleep(0.25)
 
-            if is_runtime_running():
-                return {
-                    "status": "success",
-                    "message": "Runtime started in background",
-                    "pid": get_runtime_pid()
-                }
-            else:
-                return {
-                    "status": "error",
-                    "message": "Runtime failed to start"
-                }
+            return {
+                "status": "error",
+                "message": (
+                    "Runtime failed to start within 10s; "
+                    f"check log: {log_file_path}"
+                )
+            }
         else:
             # 前台启动
             process = subprocess.Popen(cmd)
