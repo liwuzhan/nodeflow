@@ -7,8 +7,9 @@ import os
 import sys
 import json
 import time
+import traceback
 import threading
-from typing import Dict, Any, Optional, Type, TYPE_CHECKING
+from typing import Dict, Any, Optional, Type, Callable, TYPE_CHECKING
 
 if TYPE_CHECKING:
     try:
@@ -22,6 +23,48 @@ from edge.sdk.shared_buffer_lite import SharedBufferLite, IPC_VERSION
 from edge.sdk.structured_logger import StructuredLogger
 
 logger = None  # 框架日志（进程级）
+
+# 模块级活动 SDK 引用（die() 无 sdk 实例时用于补充端口观测）
+_ACTIVE_SDK: Optional["NodeFlowSDK"] = None
+
+
+def die(reason: str, code: int = 1) -> None:
+    """统一"大声死"（W3-5）：结构化 stderr 遗言 → flush → 硬退出。
+
+    - 任意线程可调用：os._exit 直接终止进程（sys.exit 在非主线程仅终止
+      线程、心跳线程假存活的坑由此杜绝）
+    - 遗言包含 node_id、原因、当前异常栈、关键端口观测（若 SDK 可用）
+    - 退出前尽力运行已注册的 atexit 清理（端口关闭、日志落盘）
+    """
+    payload = {
+        "event": "node_die",
+        "node_id": (_ACTIVE_SDK.node_id if _ACTIVE_SDK else os.getenv("NODE_ID")),
+        "reason": str(reason),
+        "ts": time.time(),
+    }
+    if sys.exc_info()[0] is not None:
+        payload["traceback"] = traceback.format_exc()
+    if _ACTIVE_SDK is not None:
+        payload["ports"] = {
+            direction: {
+                name: port.get_stats() if isinstance(port, InputPort) else {"buffer": port.buffer_name}
+                for name, port in ports.items()
+            }
+            for direction, ports in (("inputs", _ACTIVE_SDK.inputs), ("outputs", _ACTIVE_SDK.outputs))
+            if ports
+        }
+        payload["incarnation"] = _ACTIVE_SDK.incarnation
+    try:
+        sys.stderr.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        sys.stderr.flush()
+    except Exception:
+        pass
+    try:
+        import atexit
+        atexit._run_exitfuncs()
+    except Exception:
+        pass
+    os._exit(code)
 
 
 class ParentProcessWatchdog:
@@ -168,15 +211,7 @@ class NodeFlowSDK:
             except ValueError:
                 declared = -1
             if declared != IPC_VERSION:
-                sys.stderr.write(json.dumps({
-                    "event": "ipc_version_mismatch",
-                    "node_id": self.node_id,
-                    "declared_version": env_ver,
-                    "sdk_version": IPC_VERSION,
-                    "action": "exiting loudly",
-                }) + "\n")
-                sys.stderr.flush()
-                os._exit(86)
+                die(f"ipc_version_mismatch: declared={env_ver}, sdk={IPC_VERSION}", code=86)
 
         # run / 世代身份（W2-2；env 缺失时为默认值，兼容手动启动）
         self.run_id = os.getenv('NODEFLOW_RUN_ID') or ""
@@ -244,6 +279,33 @@ class NodeFlowSDK:
         health_interval = float(os.getenv('NODE_HEALTH_INTERVAL', '2.0'))
         self._health_interval = max(0.5, health_interval)
         self._start_health_heartbeat()
+
+        # 输入看门狗（W3-3，opt-in）：manifest 声明 input_watchdog 的端口
+        # 断流超时 → 节点自定义回调，未注册则默认 sdk.die（P2：病了就大声死）
+        self._input_watchdog_cfg: Dict[str, float] = {}
+        self._on_input_lost: Dict[str, Callable] = {}
+        self._input_watchdog_thread: Optional[threading.Thread] = None
+        watchdog_env = os.getenv('NODEFLOW_INPUT_WATCHDOG')
+        if watchdog_env:
+            try:
+                raw_cfg = json.loads(watchdog_env)
+                self._input_watchdog_cfg = {
+                    str(k): float(v) for k, v in raw_cfg.items() if v is not None
+                }
+            except (ValueError, TypeError):
+                self.logger.warning("Invalid NODEFLOW_INPUT_WATCHDOG, ignored", value=watchdog_env)
+        if self._input_watchdog_cfg:
+            self._input_watchdog_thread = threading.Thread(
+                target=self._input_watchdog_loop,
+                name=f"input-watchdog-{self.node_id}",
+                daemon=True,
+            )
+            self._input_watchdog_thread.start()
+            self.logger.info("Input watchdog enabled", ports=self._input_watchdog_cfg)
+
+        # 登记为活动 SDK（模块级 die() 由此补充端口观测）
+        global _ACTIVE_SDK
+        _ACTIVE_SDK = self
 
     def get_param(self, key: str, default: Any = None) -> Any:
         """
@@ -465,6 +527,54 @@ class NodeFlowSDK:
         )
         self._health_thread.start()
         self.logger.debug(f"Health heartbeat started (interval={self._health_interval}s)")
+
+    def _input_watchdog_loop(self):
+        """输入看门狗（W3-3）：断言"声明了看门狗的端口上游会持续写入"。
+
+        判定条件：端口已连接且上游写过至少一次（age 非 None），
+        且写入年龄超过声明超时。只应声明在持续输出的端口上——
+        静态输出端口（如任务配置下发）不适用此机制。
+        """
+        check_interval = min(0.05, min(self._input_watchdog_cfg.values()) / 2)
+        while self._health_running:
+            for port_name, timeout_s in self._input_watchdog_cfg.items():
+                port = self.inputs.get(port_name)
+                if port is None or not port.is_connected():
+                    continue  # 未创建/未连接由重连机制负责
+                age_ms = port.last_write_age_ms()
+                if age_ms is None:
+                    continue  # 上游从未写入（启动排序窗口），不判定
+                if age_ms > timeout_s * 1000:
+                    handler = self._on_input_lost.get(port_name)
+                    if handler is not None:
+                        try:
+                            handler(port_name)
+                        except Exception as e:
+                            self.logger.error(
+                                f"on_input_lost handler for '{port_name}' failed: {e}",
+                                exc_info=True,
+                            )
+                            self.die(f"on_input_lost handler failed for input '{port_name}': {e}")
+                            return
+                    else:
+                        self.die(
+                            f"input '{port_name}' stale for {age_ms:.0f}ms "
+                            f"(timeout {timeout_s}s, source {port.source_node}.{port.source_port})"
+                        )
+                        return
+            time.sleep(check_interval)
+
+    def set_on_input_lost(self, port_name: str, handler: Callable[[str], None]):
+        """注册输入断流回调（覆盖默认的 sdk.die）。
+
+        handler(port_name) 在看门狗线程中调用；抛异常则升级为 die。
+        安全值输出（如执行器回中位）适合用此回调实现。
+        """
+        self._on_input_lost[port_name] = handler
+
+    def die(self, reason: str, code: int = 1):
+        """实例方法形态的统一大声死（见模块级 die 文档）"""
+        die(reason, code=code)
 
     def _stop_health_heartbeat(self):
         self._health_running = False

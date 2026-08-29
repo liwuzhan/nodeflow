@@ -164,6 +164,107 @@ def build_death_record(
     }
 
 
+# ── 现场保留（W3-2）─────────────────────────────────────────────────
+
+def _run_has_incidents(run_id: str) -> bool:
+    """该 run 是否有死亡记录（决定剪除前是否快照）"""
+    path = resolve_incident_dir() / INCIDENTS_FILENAME
+    if not path.exists():
+        return False
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            try:
+                if json.loads(line).get("run_id") == run_id:
+                    return True
+            except json.JSONDecodeError:
+                continue
+    except OSError:
+        pass
+    return False
+
+
+def snapshot_run_buffers(run_id: str, run_dir: Path, max_payload: int = 256 * 1024) -> int:
+    """快照 run 目录内小端口的最后 payload 到 incidents/snapshots/<run_id>/。
+
+    单端口 payload 超过 max_payload 跳过（大端口现场价值低于成本）。
+    返回快照的端口数。
+    """
+    import msgpack
+
+    from edge.sdk.shared_buffer_lite import SharedBufferLite
+
+    buffers_dir = run_dir / "buffers"
+    if not buffers_dir.exists():
+        return 0
+
+    snap_dir = resolve_incident_dir() / "snapshots" / run_id
+    snap_dir.mkdir(parents=True, exist_ok=True)
+
+    count = 0
+    for buf_file in sorted(buffers_dir.glob("*.buf")):
+        try:
+            # 历史 run 目录必须按显式路径打开（名字解析只命中当前 run）
+            buf = SharedBufferLite.from_path(buf_file)
+            try:
+                seq, data = buf.read_with_sequence()
+                _, length, ts = buf.get_header()
+            finally:
+                buf.close()
+            if length > max_payload:
+                continue
+            snap = {
+                "buffer": buf_file.stem,
+                "seq": seq,
+                "write_ts_ns": ts,
+                "snapshot_ts_unix": time.time(),
+                "payload": data,
+            }
+            (snap_dir / f"{buf_file.stem}.snapshot.msgpack").write_bytes(
+                msgpack.packb(snap, use_bin_type=True)
+            )
+            count += 1
+        except Exception as e:
+            logger.warning(f"Snapshot skipped for '{buf_file.name}': {e}")
+    if count:
+        logger.info(f"Snapshotted {count} buffers of run '{run_id}' into {snap_dir}")
+    return count
+
+
+def prune_run_dirs(keep: int = 5) -> int:
+    """保留最近 keep 个 run 目录，超限剪除。
+
+    含死亡记录的 run 剪除前先快照小端口最后 payload（长久保存的是
+    验尸报告与关键现场，不是全部现场）。
+    """
+    import shutil
+
+    from edge.runtime.utils import constants
+
+    runs_root = Path(constants.get_runs_root())
+    if not runs_root.exists():
+        return 0
+    try:
+        run_dirs = sorted(runs_root.iterdir(), key=lambda p: p.name)
+    except OSError:
+        return 0
+    if len(run_dirs) <= keep:
+        return 0
+
+    victims = run_dirs[:-keep]
+    for victim in victims:
+        if _run_has_incidents(victim.name):
+            try:
+                snapshot_run_buffers(victim.name, victim)
+            except Exception:
+                logger.exception(f"Snapshot failed for run '{victim.name}', pruning anyway")
+        try:
+            shutil.rmtree(victim, ignore_errors=True)
+            logger.info(f"Pruned run directory {victim}")
+        except OSError as e:
+            logger.warning(f"Failed to prune run dir {victim}: {e}")
+    return len(victims)
+
+
 # ── 旁证采集 ────────────────────────────────────────────────────────
 
 def buffer_write_age_ms(buffer_name: str) -> Optional[float]:

@@ -16,7 +16,7 @@ import time
 from typing import Optional
 
 from pydantic import BaseModel
-from edge.sdk.nodeflow_sdk import NodeFlowSDK
+from edge.sdk.nodeflow_sdk import NodeFlowSDK, die
 import atom
 
 
@@ -160,10 +160,7 @@ def main():
     except KeyboardInterrupt:
         print("\nInterrupted by user")
     except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+        die(f"Fatal error: {e}")
 
 
 if __name__ == "__main__":

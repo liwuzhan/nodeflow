@@ -386,6 +386,7 @@ def handle_health_status(args) -> int:
             "stale": is_stale,
             "age_seconds": round(age, 1),
             "node_id": node_id,
+            "incarnation": health_data.get("incarnation"),
             "health": health_data,
         })
     else:
@@ -393,6 +394,10 @@ def handle_health_status(args) -> int:
         print(f"\nHealth Status for '{node_id}':")
         print(f"  Status: {status_label}")
         print(f"  Timestamp: {health_data.get('timestamp', 'N/A')}")
+        # incarnation 为 health v2 字段；旧节点缺失时降级显示
+        incarnation = health_data.get("incarnation")
+        if incarnation is not None:
+            print(f"  Incarnation: {incarnation}")
         print(f"  Inputs: {json.dumps(health_data.get('inputs', {}), indent=4)}")
         print(f"  Outputs: {json.dumps(health_data.get('outputs', {}), indent=4)}")
         print()

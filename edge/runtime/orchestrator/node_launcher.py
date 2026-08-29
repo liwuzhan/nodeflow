@@ -122,10 +122,10 @@ class NodeLauncher:
             stderr_path = self.log_dir / f"{node.id}.stderr.log"
 
             stdout_handler = RotatingFileHandler(
-                stdout_path, maxBytes=1024 * 1024 * 1024, backupCount=30
+                stdout_path, maxBytes=64 * 1024 * 1024, backupCount=3
             )
             stderr_handler = RotatingFileHandler(
-                stderr_path, maxBytes=1024 * 1024 * 1024, backupCount=30
+                stderr_path, maxBytes=64 * 1024 * 1024, backupCount=3
             )
 
             stdout_logger = logging.getLogger(f"node.{node.id}.stdout")

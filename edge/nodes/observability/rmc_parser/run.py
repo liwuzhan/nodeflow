@@ -14,7 +14,7 @@ from pathlib import Path
 # Add SDK path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
-from edge.sdk.nodeflow_sdk import NodeFlowSDK
+from edge.sdk.nodeflow_sdk import NodeFlowSDK, die
 
 class RMCParser:
     """NMEA RMC Parser class"""
@@ -155,8 +155,7 @@ def main():
                 time.sleep(0.01)
 
     except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
+        die(f"Fatal error: {e}")
 
 if __name__ == '__main__':
     main()

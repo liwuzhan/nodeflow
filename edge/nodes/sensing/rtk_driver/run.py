@@ -8,7 +8,7 @@ import sys
 import time
 import math
 
-from edge.sdk.nodeflow_sdk import NodeFlowSDK
+from edge.sdk.nodeflow_sdk import NodeFlowSDK, die
 from nmea_parser import NMEAParser
 from device_interface import create_interface
 
@@ -436,9 +436,7 @@ def main():
     except Exception as e:
         if node:
             node.logger.error(f"Fatal error: {e}", exc_info=True)
-        else:
-            print(f"Fatal error: {e}")
-        sys.exit(1)
+        die(f"Fatal error: {e}")
     finally:
         if node:
             node.cleanup()

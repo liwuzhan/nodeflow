@@ -61,6 +61,11 @@ class PWMDriverNode:
         self.velocity_cmd_port = sdk.create_input_port('velocity_cmd')
         self.pwm_status_port = sdk.create_output_port('pwm_status')
 
+        # 输入看门狗回调（W3-3）：SDK 看门狗检测断流超时后回中位安全值。
+        # 主循环内的 200Hz 内联超时检查保留为快路径，两者幂等。
+        self._watchdog_stop_logged = False
+        sdk.set_on_input_lost('velocity_cmd', self._on_velocity_cmd_lost)
+
         # ========== 构建PWM路径 ==========
         self.left_pwm_path = f"/sys/class/pwm/{self.left_pwmchip}/pwm{self.left_pwm_channel}"
         self.right_pwm_path = f"/sys/class/pwm/{self.right_pwmchip}/pwm{self.right_pwm_channel}"
@@ -219,6 +224,15 @@ class PWMDriverNode:
         center_duty = self._pulse_to_duty_ns(self.pwm_center_ns)
         self._write_pwm_ns(center_duty, center_duty)
         self.sdk.logger.info("Motors stopped (center PWM)")
+
+    def _on_velocity_cmd_lost(self, port_name: str) -> None:
+        """SDK 输入看门狗回调：断流超时 → 电机回中位（安全值输出，P2 例外）"""
+        self._stop_motors()
+        if not self._watchdog_stop_logged:
+            self.sdk.logger.warning(
+                f"Input watchdog: '{port_name}' stale over timeout, motors at center"
+            )
+            self._watchdog_stop_logged = True
 
     def run(self) -> None:
         """主循环"""

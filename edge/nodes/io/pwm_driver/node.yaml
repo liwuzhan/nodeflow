@@ -24,6 +24,11 @@ ports:
       type: control.pwm_status
       description: "PWM状态输出（左轮PWM、右轮PWM）"
 
+# 输入看门狗（W3-3）：velocity_cmd 断流超时 → on_input_lost 回调（回中位安全值，
+# 见 run.py），是 SDK 看门狗机制的首个用户。仅声明在持续输出的端口上。
+input_watchdog:
+  velocity_cmd: 0.5
+
 
 
 # 节点参数

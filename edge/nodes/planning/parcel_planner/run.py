@@ -26,7 +26,7 @@ except ImportError:
     class BaseModel: pass
     def Field(*args, **kwargs): return None
 
-from edge.sdk.nodeflow_sdk import NodeFlowSDK
+from edge.sdk.nodeflow_sdk import NodeFlowSDK, die
 from atom import gps_to_enu, convert_boundary_gps_to_enu, validate_boundary
 
 # --- Schema Definitions ---
@@ -305,9 +305,7 @@ def main():
             node.run()
 
     except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
-        traceback.print_exc()
-        sys.exit(1)
+        die(f"Fatal error: {e}")
 
 
 if __name__ == "__main__":

@@ -48,6 +48,10 @@ class NodeManifest:
     # 就绪信号（W2-5）：heartbeat = health 心跳新鲜（默认）；
     # first_output = 全部输出 buffer seq>0（静态输出节点 opt-in）
     readiness: str = "heartbeat"
+    # 输入看门狗（W3-3，opt-in）：{端口名: 超时秒}。
+    # 断流超时 → 节点 on_input_lost 回调，未注册则默认 sdk.die。
+    # 只应声明在持续输出的上游端口上（静态输出端口不适用）
+    input_watchdog: Dict[str, float] = field(default_factory=dict)
 
 
 # ========== 运行时配置 (runtime.yaml) 数据结构 ==========

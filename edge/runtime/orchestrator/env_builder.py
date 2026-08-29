@@ -42,6 +42,11 @@ class EnvBuilder:
             env['NODEFLOW_BUFFERS_DIR'] = constants.get_buffers_dir()
         env['NODEFLOW_INCARNATION'] = str(incarnation)
 
+        # 输入看门狗（W3-3，opt-in）：SDK 超时调用 on_input_lost（默认 sdk.die）
+        if manifest.input_watchdog:
+            import json as _json
+            env['NODEFLOW_INPUT_WATCHDOG'] = _json.dumps(manifest.input_watchdog)
+
         # PYTHONPATH: 项目根目录（node_hub_path 的上两级: edge/nodes/../..)）
         project_root = os.path.abspath(os.path.join(node_hub_path, "../.."))
         existing = env.get('PYTHONPATH', '')

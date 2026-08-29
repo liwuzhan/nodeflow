@@ -22,7 +22,7 @@ except ImportError:
     class BaseModel: pass
     def Field(*args, **kwargs): return None
 
-from edge.sdk.nodeflow_sdk import NodeFlowSDK
+from edge.sdk.nodeflow_sdk import NodeFlowSDK, die
 
 # --- Schema Definitions ---
 
@@ -547,8 +547,7 @@ def main():
             node = SimOutputNode(sdk)
             node.run()
     except Exception as e:
-        logger.error(f"节点启动失败: {e}", exc_info=True)
-        sys.exit(1)
+        die(f"节点启动失败: {e}")
 
 
 if __name__ == "__main__":

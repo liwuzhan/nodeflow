@@ -13,7 +13,7 @@ from pathlib import Path
 # 添加SDK路径
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from edge.sdk.nodeflow_sdk import NodeFlowSDK
+from edge.sdk.nodeflow_sdk import NodeFlowSDK, die
 
 
 def simulate_gps_data(sequence):
@@ -175,10 +175,7 @@ def main():
                 sdk.logger.info("Received interrupt signal, shutting down...")
 
     except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+        die(f"Fatal error: {e}")
 
 
 if __name__ == '__main__':

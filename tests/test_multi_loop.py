@@ -9,17 +9,29 @@
 """
 
 import sys
+import os
 import time
 import logging
+import threading
 from pathlib import Path
 
-# 添加项目路径
-sys.path.insert(0, str(Path(__file__).parent))
+# 添加项目路径（脚本位于 tests/ 下，项目根是其上一级）
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from edge.runtime.main import NodeFlowRuntime
 from edge.runtime.utils.logger import setup_logger
 
 logger = setup_logger("test_multi_loop")
+
+
+def _fd_count() -> int:
+    """当前进程打开的 fd 数（资源泄漏基线指标）"""
+    for candidate in ("/dev/fd", f"/proc/{Path('/proc/self').name}/fd"):
+        try:
+            return len(os.listdir(candidate))
+        except OSError:
+            continue
+    return -1
 
 
 def test_framework_initialization():
@@ -95,8 +107,9 @@ def test_dataflow_lifecycle():
             logger.error("Framework initialization failed")
             return False
 
-        # 启动数据流
+        # 启动数据流（start_dataflow 以 self.running 判取消，直接调用 API 须先置位）
         logger.info("Starting dataflow...")
+        runtime.running = True
         runtime.start_dataflow()
 
         # 验证数据流状态
@@ -155,7 +168,8 @@ def test_multi_loop_cycles():
 
         logger.info("✓ Framework initialized")
 
-        # 多轮循环
+        # 多轮循环（直接调用 API 须先进入 running 态）
+        runtime.running = True
         for loop_num in range(1, num_loops + 1):
             logger.info(f"\n--- Loop {loop_num}/{num_loops} ---")
 
@@ -223,8 +237,9 @@ def test_error_handling():
         # 初始化框架
         runtime._initialize_framework()
 
-        # 测试2：重复启动
+        # 测试2：重复启动（直接调用 API 须先进入 running 态）
         logger.info("Test 4.2: Duplicate start...")
+        runtime.running = True
         runtime.start_dataflow()
         time.sleep(2)
 
@@ -255,6 +270,60 @@ def test_error_handling():
         return False
 
 
+def test_resource_baseline():
+    """
+    资源泄漏基线测试（验收 #6）
+
+    期望：
+    - 多轮启动-停止循环后，进程 fd 数与线程数回到基线（容差 ±2）
+    - buffer 文件遵循 run 保留策略（每轮新 run 目录，保留最近 5 份）
+    """
+    logger.info("\n" + "=" * 60)
+    logger.info("TEST 5: Resource Baseline After Loops")
+    logger.info("=" * 60)
+
+    config_file = "examples/planning_simulation.yaml"
+
+    try:
+        runtime = NodeFlowRuntime(config_file, log_level="WARNING")
+
+        if runtime._initialize_framework() != 0:
+            logger.error("Framework initialization failed")
+            return False
+
+        runtime.running = True
+
+        # 静置等清理线程（launcher 日志转发线程等）退出
+        time.sleep(1.0)
+        fd_before = _fd_count()
+        threads_before = threading.active_count()
+        logger.info(f"  Baseline: fd={fd_before}, threads={threads_before}")
+
+        for loop in range(3):
+            runtime.start_dataflow()
+            time.sleep(1.5)
+            runtime.stop_dataflow()
+            time.sleep(0.5)
+
+        # 等残留守护线程退出
+        time.sleep(1.0)
+        fd_after = _fd_count()
+        threads_after = threading.active_count()
+        logger.info(f"  After 3 loops: fd={fd_after}, threads={threads_after}")
+
+        assert fd_after <= fd_before + 2, \
+            f"fd leak: {fd_before} -> {fd_after}"
+        assert threads_after <= threads_before + 2, \
+            f"thread leak: {threads_before} -> {threads_after}"
+
+        logger.info("✓ Resource baseline maintained")
+        return True
+
+    except Exception as e:
+        logger.error(f"✗ Resource baseline test failed: {e}", exc_info=True)
+        return False
+
+
 def main():
     """运行所有测试"""
     logger.info("\n" + "=" * 60)
@@ -273,6 +342,7 @@ def main():
         ("Dataflow Lifecycle", test_dataflow_lifecycle),
         ("Multi-Loop Cycles", test_multi_loop_cycles),
         ("Error Handling", test_error_handling),
+        ("Resource Baseline", test_resource_baseline),
     ]
 
     results = {}

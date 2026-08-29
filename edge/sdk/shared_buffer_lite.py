@@ -77,6 +77,19 @@ class SharedBufferLite:
         self.mmap = mmap.mmap(self.file.fileno(), self.size)
         self._lock = _get_buffer_lock(self.buffer_path)
 
+    @classmethod
+    def from_path(cls, path: Path) -> "SharedBufferLite":
+        """按显式路径打开（快照/取证等跨 run 读旧目录的场景；
+        名字解析只会命中当前 run 目录，不适用于历史 run）"""
+        obj = cls.__new__(cls)
+        obj.buffer_name = path.stem
+        obj.buffer_path = path
+        obj.size = path.stat().st_size
+        obj.file = open(path, 'r+b', buffering=0)
+        obj.mmap = mmap.mmap(obj.file.fileno(), obj.size)
+        obj._lock = _get_buffer_lock(path)
+        return obj
+
     # ── numpy 序列化辅助 ──────────────────────────────────────────────
 
     @staticmethod

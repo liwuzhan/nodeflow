@@ -56,5 +56,11 @@ class EMAFilter:
         
         if self.heading_deg is not None:
             out["heading"] = (self.heading_deg % 360.0)
-        out["timestamp"] = now
+        # 设备时间透传（W3-1）：上游 timestamp 优先，缺失才回退本地墙钟并标记来源
+        if rtk.get("timestamp") is not None:
+            out["timestamp"] = rtk["timestamp"]
+            out["timestamp_source"] = "device"
+        else:
+            out["timestamp"] = now
+            out["timestamp_source"] = "local"
         return out

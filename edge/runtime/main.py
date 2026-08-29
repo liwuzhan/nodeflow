@@ -185,34 +185,10 @@ class NodeFlowRuntime:
                 pass  # 此时甚至日志记录也可能失败
 
     def _clean_buffers(self):
-        """清理共享缓冲区（写满0以重置序列号和数据）
-
-        run 目录化后新 run 天然是空目录，此方法仅作为兼容保留；
-        仅当 run 目录内已有残留文件（异常场景复用同 run_id）时才有实际效果。
+        """已退役（W3-2）：run 目录化后每轮 run 天然是全新空目录，
+        无需就地清零；保留方法以兼容 --no-clean-buffers 旧脚本。
         """
-        buf_dir = Path(constants.get_buffers_dir())
-        if not buf_dir.exists():
-            logger.info("Buffer directory does not exist, skip cleaning")
-            return
-
-        buf_files = list(buf_dir.glob("*.buf"))
-        if not buf_files:
-            logger.info("No buffer files to clean")
-            return
-
-        cleaned_count = 0
-        for buf_file in buf_files:
-            try:
-                # 获取文件大小
-                file_size = buf_file.stat().st_size
-                # 写满0
-                with open(buf_file, 'wb') as f:
-                    f.write(b'\x00' * file_size)
-                cleaned_count += 1
-            except Exception as e:
-                logger.warning(f"Failed to clean buffer {buf_file.name}: {e}")
-
-        logger.info(f"Cleaned {cleaned_count} buffer files (reset to zeros)")
+        logger.debug("Buffer cleaning retired (run-scoped directories start fresh)")
 
     def _initialize_framework(self):
         """
@@ -376,7 +352,15 @@ class NodeFlowRuntime:
             self.run_id = run_id
             logger.info(f"Run id: {run_id} (buffers: {run_buffers_dir})")
 
-            # 清理buffer（如果需要；run 目录化后通常为空操作）
+            # 现场保留策略（W3-2）：保留最近 5 个 run 目录；
+            # 含死亡记录的旧 run 剪除前快照小端口 payload 入 incidents
+            try:
+                from edge.runtime.monitoring.incident_store import prune_run_dirs
+                prune_run_dirs(keep=5)
+            except Exception:
+                logger.exception("Run retention pruning failed (non-fatal)")
+
+            # 兼容保留（W3-2 已退役为 no-op；run 目录天然全新）
             if self.clean_buffers:
                 self._clean_buffers()
 

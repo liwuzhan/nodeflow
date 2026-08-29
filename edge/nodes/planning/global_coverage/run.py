@@ -21,7 +21,7 @@ except ImportError:
     class BaseModel: pass
     def Field(*args, **kwargs): return None
 
-from edge.sdk.nodeflow_sdk import NodeFlowSDK
+from edge.sdk.nodeflow_sdk import NodeFlowSDK, die
 from utils.planner import GlobalCoveragePlanner
 from utils.models import VehicleConfig, ParcelData
 from utils.operation_plan import build_operation_plan
@@ -333,9 +333,7 @@ def main():
                 sdk.logger.info("Received interrupt signal, shutting down...")
 
     except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
-        traceback.print_exc()
-        sys.exit(1)
+        die(f"Fatal error: {e}")
 
 if __name__ == '__main__':
     main()

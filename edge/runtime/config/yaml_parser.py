@@ -191,6 +191,11 @@ class YAMLParser:
                 outputs=outputs,
                 params=params,
                 readiness=data.get('readiness', 'heartbeat'),
+                input_watchdog={
+                    str(k): float(v)
+                    for k, v in (data.get('input_watchdog') or {}).items()
+                    if v is not None
+                },
             )
 
             logger.debug(f"Parsed node manifest: {manifest.name} (version {manifest.version})")
