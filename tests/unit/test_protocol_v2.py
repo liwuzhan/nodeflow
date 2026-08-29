@@ -365,6 +365,72 @@ class FakeCrashProcess:
         return ("", "traceback: boom")
 
 
+# ========== D2: 损坏 buffer 隔离重建 ==========
+
+class TestBufferQuarantine:
+    def test_output_port_quarantines_illegal_header(self):
+        """验收 #8：垃圾 header → 旧文件改名 .dead.1.buf 留证、新池建立可写"""
+        out = OutputPort(name="src", buffer_name="v4_corrupt_src")
+        out.send({"v": 1})
+
+        # 写坏 length 字段（越界值）
+        with open(out.buffer.buffer_path, "r+b") as f:
+            import mmap as _mmap
+            with _mmap.mmap(f.fileno(), 0) as m:
+                m[4:8] = struct.pack('<I', 10 ** 9)
+        old_path = Path(out.buffer.buffer_path)
+        out.close()
+
+        out2 = OutputPort(name="src", buffer_name="v4_corrupt_src")
+        quarantined = old_path.with_name("v4_corrupt_src.dead.1.buf")
+        assert quarantined.exists(), "损坏文件必须改名留证（不删除）"
+        assert not old_path.exists() or old_path.stat().st_ino != quarantined.stat().st_ino
+
+        out2.send({"v": "new-pool"})
+        seq, data = out2.buffer.read_with_sequence()
+        assert data == {"v": "new-pool"} and seq == 1, "新池应从 seq=1 重新计数"
+        out2.close()
+
+    def test_output_port_quarantines_size_mismatch(self):
+        """尺寸与配置不符（N-2）→ 同样改名重建"""
+        out = OutputPort(name="src", buffer_name="v4_size_src")
+        old_path = Path(out.buffer.buffer_path)
+        out.close()
+
+        # 缩小文件制造尺寸失配
+        with open(old_path, "r+b") as f:
+            f.truncate(2048)
+
+        out2 = OutputPort(name="src", buffer_name="v4_size_src")
+        assert old_path.with_name("v4_size_src.dead.1.buf").exists()
+        assert out2.buffer.size == out2.buffer_size
+        out2.close()
+
+    def test_incident_side_quarantine_of_dead_node_buffers(self):
+        """监控侧框架办后事（P1）：死亡节点的损坏输出 buffer 被改名并进死亡记录"""
+        from edge.runtime.monitoring import incident_store
+
+        out = OutputPort(name="src", buffer_name="v4_dead_src")
+        out.send({"v": 1})
+        path = Path(out.buffer.buffer_path)
+        out.close()
+
+        # 写坏 header 模拟撕裂
+        with open(path, "r+b") as f:
+            import mmap as _mmap
+            with _mmap.mmap(f.fileno(), 0) as m:
+                m[4:8] = struct.pack('<I', 99999999)
+
+        dead_name = incident_store.inspect_and_quarantine("v4_dead_src", 1024 * 1024, incarnation=2)
+        assert dead_name == "v4_dead_src.dead.2.buf"
+        assert Path(path.parent, dead_name).exists()
+        # 完好 buffer 不动
+        good = OutputPort(name="ok", buffer_name="v4_ok_src")
+        good.send({"v": 1})
+        assert incident_store.inspect_and_quarantine("v4_ok_src", 1024 * 1024, 1) is None
+        good.close()
+
+
 # ========== W2-5: readiness 驱动启动 ==========
 
 class TestReadinessStartup:
