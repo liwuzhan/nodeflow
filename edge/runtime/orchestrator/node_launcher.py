@@ -41,10 +41,18 @@ class NodeLauncher:
         self.edges = edges
         self.env_builder = EnvBuilder()
 
+        # 节点世代计数（W2-2）：首拉=1，每次重启 +1；
+        # 与 NodeLauncher 同生命周期，新 run 随新 launcher 实例自然重置
+        self.incarnations: Dict[str, int] = {}
+
         # 节点日志文件管理
         self.log_dir = Path(LOGS_DIR)
         self.log_dir.mkdir(exist_ok=True, parents=True)
         self.log_files: Dict[str, Tuple[TextIO, TextIO]] = {}
+
+    def get_incarnation(self, node_id: str) -> int:
+        """节点当前世代（未启动过视为 1）"""
+        return self.incarnations.get(node_id, 1)
 
     def launch(
         self, node: NodeInstance, manifest: NodeManifest, platform: str = "linux"
@@ -83,10 +91,13 @@ class NodeLauncher:
             logger.error(f"Failed to get entrypoint for {node.id}: {e}")
             raise
 
-        # 2. 构建环境变量（Shared Buffer版本：不再需要socket_manager）
+        # 2. 构建环境变量（含 IPC 版本 / run_id / incarnation / buffer 目录注入）
+        incarnation = self.incarnations.get(node.id, 0) + 1
+        self.incarnations[node.id] = incarnation
         try:
             env = self.env_builder.build_env(
-                node, manifest, self.node_hub_path, self.edges
+                node, manifest, self.node_hub_path, self.edges,
+                incarnation=incarnation,
             )
         except Exception as e:
             logger.error(f"Failed to build env for {node.id}: {e}")

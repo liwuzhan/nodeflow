@@ -45,6 +45,9 @@ class NodeManifest:
     inputs: List[PortDef] = field(default_factory=list)  # 输入端口列表
     outputs: List[PortDef] = field(default_factory=list)  # 输出端口列表
     params: Dict[str, ParamSchema] = field(default_factory=dict)  # 参数定义
+    # 就绪信号（W2-5）：heartbeat = health 心跳新鲜（默认）；
+    # first_output = 全部输出 buffer seq>0（静态输出节点 opt-in）
+    readiness: str = "heartbeat"
 
 
 # ========== 运行时配置 (runtime.yaml) 数据结构 ==========

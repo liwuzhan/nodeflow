@@ -6,12 +6,14 @@ NodeFlow Runtime主入口
 
 import sys
 import argparse
+import json
 import signal
 import time
 import os
 import atexit
 import subprocess
 import copy
+import uuid
 from pathlib import Path
 
 from edge.runtime.config.yaml_parser import YAMLParser
@@ -24,7 +26,8 @@ from edge.runtime.orchestrator.startup_coordinator import StartupCoordinator
 from edge.runtime.monitoring.node_monitor import NodeMonitor
 from edge.runtime.utils.logger import setup_logger
 from edge.runtime.utils.errors import *
-from edge.runtime.utils.constants import BUFFERS_DIR
+from edge.runtime.utils import constants
+from edge.sdk.shared_buffer_lite import IPC_VERSION
 
 logger = setup_logger("nodeflow")
 
@@ -47,6 +50,7 @@ class NodeFlowRuntime:
         self.duration = duration
         self.clean_buffers = clean_buffers
         self.start_time = None
+        self.run_id = None  # 当前数据流轮次（W2-2，start_dataflow 生成）
 
         # 框架组件（一次性初始化）
         self.config = None
@@ -168,15 +172,8 @@ class NodeFlowRuntime:
             # 清理 PID 文件
             self._cleanup_pid_file()
 
-            # 清理共享缓冲区（尽力而为）
-            try:
-                from shutil import rmtree
-                buf_dir = Path(BUFFERS_DIR)
-                if buf_dir.exists():
-                    rmtree(buf_dir)
-                    logger.info(f"Emergency cleanup: removed buffer directory {buf_dir}")
-            except Exception as e:
-                logger.warning(f"Emergency cleanup: failed to remove buffers: {e}")
+            # 注：不再删除共享缓冲区目录——run 目录化后下一轮 run 天然空目录，
+            # 旧 run 目录是死亡事故的现场证据，必须活过异常退出（W3-2 保留策略）
 
             logger.info("Emergency cleanup completed")
 
@@ -188,8 +185,12 @@ class NodeFlowRuntime:
                 pass  # 此时甚至日志记录也可能失败
 
     def _clean_buffers(self):
-        """清理共享缓冲区（写满0以重置序列号和数据）"""
-        buf_dir = Path(BUFFERS_DIR)
+        """清理共享缓冲区（写满0以重置序列号和数据）
+
+        run 目录化后新 run 天然是空目录，此方法仅作为兼容保留；
+        仅当 run 目录内已有残留文件（异常场景复用同 run_id）时才有实际效果。
+        """
+        buf_dir = Path(constants.get_buffers_dir())
         if not buf_dir.exists():
             logger.info("Buffer directory does not exist, skip cleaning")
             return
@@ -367,7 +368,15 @@ class NodeFlowRuntime:
             logger.info("Starting Dataflow")
             logger.info("=" * 60)
 
-            # 清理buffer（如果需要）
+            # 生成本轮 run_id 并切换到 run 作用域资源目录（W2-2）
+            run_id = uuid.uuid4().hex[:12]
+            constants.set_current_run(run_id)
+            run_buffers_dir = Path(constants.get_buffers_dir())
+            run_buffers_dir.mkdir(parents=True, exist_ok=True)
+            self.run_id = run_id
+            logger.info(f"Run id: {run_id} (buffers: {run_buffers_dir})")
+
+            # 清理buffer（如果需要；run 目录化后通常为空操作）
             if self.clean_buffers:
                 self._clean_buffers()
 
@@ -378,12 +387,12 @@ class NodeFlowRuntime:
             )
             self.coordinator = StartupCoordinator(self.launcher, self.registry)
 
-            # 启动所有节点
+            # 启动所有节点（readiness 驱动等待，W2-5）
             self.processes = self.coordinator.startup_nodes(
                 self.topology_layers,
                 self.nodes_dict,
-                startup_timeout=2.0,  # 减少等待时间，仅用于检测启动初期崩溃
-                startup_delay=1.0,
+                startup_timeout=10.0,  # readiness 上限；超时告警放行
+                startup_delay=0.1,
                 should_cancel=lambda: not self.running,
             )
 
@@ -416,10 +425,13 @@ class NodeFlowRuntime:
                     logger.error(f"Error restarting node '{node_id}': {e}")
                     return None
 
-            self.monitor = NodeMonitor(self.config.restart_policy)
+            self.monitor = NodeMonitor(
+                self.config.restart_policy,
+                incident_recorder=self._make_incident_recorder(),
+            )
             self.monitor.start_monitoring(self.processes, restart_node)
 
-            # 写入PID文件
+            # 写入PID文件（含 run_id，W2-2）
             self.start_time = time.time()
             self._write_pid_file()
 
@@ -466,6 +478,10 @@ class NodeFlowRuntime:
 
             # 注意：不删除 PID 文件，因为在守护进程模式下 Runtime 还在运行
             # PID 文件只在 Runtime 完全退出时才删除
+
+            # 结束当前 run 作用域（下一轮 start_dataflow 生成新 run_id）
+            constants.set_current_run(None)
+            self.run_id = None
 
             self.dataflow_running = False
             logger.info("Dataflow stopped successfully")
@@ -692,6 +708,7 @@ class NodeFlowRuntime:
                     "active_task_id": active_task_id,
                     "graph_id": self.config.graph_id if self.config else "",
                     "config_path": self.config_path,
+                    "run_id": self.run_id or "",
                     "command_status": command_status,
                     "error": error,
                     "timestamp": time.time(),
@@ -806,12 +823,87 @@ class NodeFlowRuntime:
             logger.error(f"Fatal error in daemon mode: {e}", exc_info=True)
             return 1
 
+    def _make_incident_recorder(self):
+        """构建死亡记录回调（W2-4）：组装 will/witness 并落盘验尸报告"""
+        def record(node_id, exit_code, stderr_tail, retry_count):
+            try:
+                from edge.runtime.monitoring import incident_store
+                from edge.sdk.health_reader import read_node_health
+
+                node = self.nodes_dict.get(node_id)
+                package = node.package if node else ""
+
+                manifest = None
+                if package and self.registry:
+                    try:
+                        manifest = self.registry.get_manifest(package)
+                    except Exception:
+                        manifest = None
+                output_ports = list(manifest.outputs) if manifest else []
+
+                # will：冻结 health 的摘录（节点生前证词）
+                frozen = read_node_health(node_id)
+
+                # witness：框架在检测时刻观测到的端口年龄（旁证）
+                output_ages = {
+                    p.name: incident_store.buffer_write_age_ms(f"{node_id}.{p.name}")
+                    for p in output_ports
+                }
+                input_ages = {}
+                if self.launcher:
+                    for e in self.launcher.edges:
+                        if e.to_node == node_id:
+                            input_ages[e.to_port] = incident_store.buffer_write_age_ms(
+                                f"{e.from_node}.{e.from_port}"
+                            )
+
+                # 框架办后事（P1）：隔离死亡节点的损坏输出 buffer
+                incarnation = self.launcher.get_incarnation(node_id) if self.launcher else 1
+                quarantined = []
+                for p in output_ports:
+                    dead = incident_store.inspect_and_quarantine(
+                        f"{node_id}.{p.name}", p.buffer_size, incarnation
+                    )
+                    if dead:
+                        quarantined.append(dead)
+
+                record_dict = incident_store.build_death_record(
+                    run_id=self.run_id or "",
+                    node_id=node_id,
+                    package=package,
+                    incarnation=incarnation,
+                    retry_count=retry_count,
+                    exit_code=exit_code,
+                    stderr_tail=stderr_tail or "",
+                    frozen_health=frozen,
+                    output_ages_ms=output_ages,
+                    input_ages_ms=input_ages,
+                    quarantined_buffers=quarantined,
+                )
+                path = incident_store.append_incident(record_dict)
+                logger.warning(
+                    f"Death incident recorded for '{node_id}' "
+                    f"(incarnation={incarnation}, exit_code={exit_code}) -> {path}"
+                )
+            except Exception:
+                logger.exception(f"Failed to record death incident for '{node_id}'")
+
+        return record
+
     def _write_pid_file(self):
-        """写入 PID 文件"""
+        """写入 PID 文件（JSON：pid/run_id/started_at/graph_id/ipc_version/buffers_dir）"""
         try:
             pid_file = Path("/tmp/nodeflow_runtime.pid")
+            payload = {
+                "pid": os.getpid(),
+                "run_id": self.run_id,
+                "started_at": self.start_time if self.start_time else time.time(),
+                "graph_id": self.config.graph_id if self.config else None,
+                "ipc_version": IPC_VERSION,
+                "buffers_dir": constants.get_buffers_dir(),
+            }
             with open(pid_file, 'w') as f:
-                f.write(f"{os.getpid()}\n{self.start_time if self.start_time else time.time()}")
+                json.dump(payload, f)
             logger.debug(f"PID file written: {os.getpid()}")
         except Exception as e:
             logger.error(f"Failed to write PID file: {e}")

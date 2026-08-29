@@ -577,6 +577,10 @@ def main():
 
     # 路由到对应的命令处理器
     try:
+        # 定位当前 run 的 buffer 目录（runtime 运行时经 PID 文件解析，W2-2）
+        from tools.cli.commands.runtime_cmd import bootstrap_buffers_dir
+        bootstrap_buffers_dir()
+
         if args.command == 'node':
             from tools.cli.commands.node_cmd import handle_node_command
             exit_code = handle_node_command(args)

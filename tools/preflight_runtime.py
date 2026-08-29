@@ -20,6 +20,7 @@ import zmq
 from edge.sdk.shared_buffer_lite import SharedBufferLite
 from tools.cli.commands.runtime_cmd import (
     PID_FILE,
+    bootstrap_buffers_dir,
     get_runtime_pid,
     is_runtime_running,
     start_dataflow,
@@ -304,6 +305,9 @@ def run_preflight(
             timeout=startup_timeout,
             description="all dataflow nodes to start",
         )
+
+        # 数据流已启动：经 PID 文件把本进程定位到当前 run 的 buffer 目录（W2-2）
+        bootstrap_buffers_dir()
 
         def all_node_processes_started() -> set[int] | None:
             descendants = _descendant_pids(runtime_pid)

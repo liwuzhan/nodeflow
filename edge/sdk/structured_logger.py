@@ -27,17 +27,19 @@ class JSONFileHandler(logging.Handler):
     将日志记录写入JSONL格式文件（每行一个JSON对象）
     """
 
-    def __init__(self, filepath: str, node_id: str):
+    def __init__(self, filepath: str, node_id: str, run_id: Optional[str] = None):
         """
         初始化JSON文件处理器
 
-        参数:
+        参数：
         - filepath: 日志文件路径
         - node_id: 节点ID
+        - run_id: 运行轮次ID（可选，随 run 生命周期归档日志）
         """
         super().__init__()
         self.filepath = filepath
         self.node_id = node_id
+        self.run_id = run_id
 
         # 确保目录存在
         Path(filepath).parent.mkdir(parents=True, exist_ok=True)
@@ -49,7 +51,7 @@ class JSONFileHandler(logging.Handler):
         """
         处理一条日志记录
 
-        参数:
+        参数：
         - record: 日志记录对象
         """
         try:
@@ -65,6 +67,8 @@ class JSONFileHandler(logging.Handler):
                 'function': record.funcName,
                 'line': record.lineno,
             }
+            if self.run_id:
+                log_entry['run_id'] = self.run_id
 
             # 添加异常信息
             if record.exc_info:
@@ -112,21 +116,24 @@ class StructuredLogger:
         log_level: str = "INFO",
         log_dir: str = LOGS_DIR,
         enable_json: bool = True,
-        enable_console: bool = True
+        enable_console: bool = True,
+        run_id: Optional[str] = None
     ):
         """
         初始化结构化日志器
 
-        参数:
+        参数：
         - node_id: 节点ID
-        - log_level: 日志级别（DEBUG/INFO/WARNING/ERROR/CRITICAL）
+        - log_level: 日志级别（默认INFO/WARNING/ERROR/CRITICAL）
         - log_dir: 日志目录（默认 LOGS_DIR）
         - enable_json: 是否启用JSON文件输出
         - enable_console: 是否启用控制台输出
+        - run_id: 运行轮次ID（可选，写入每条JSON日志）
         """
         self.node_id = node_id
         self.log_level = log_level.upper()
         self.log_dir = log_dir
+        self.run_id = run_id
 
         # 创建底层logger
         self._logger = logging.getLogger(f"nodeflow.node.{node_id}")
@@ -138,7 +145,7 @@ class StructuredLogger:
         # 添加JSON文件处理器
         if enable_json:
             json_file = os.path.join(log_dir, f"{node_id}.jsonl")
-            json_handler = JSONFileHandler(json_file, node_id)
+            json_handler = JSONFileHandler(json_file, node_id, run_id=run_id)
             json_handler.setLevel(self.log_level)
             self._logger.addHandler(json_handler)
 

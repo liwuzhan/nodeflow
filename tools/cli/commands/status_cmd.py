@@ -12,13 +12,12 @@ Status Command - 单命令聚合运行时事实
 - incidents 目录（最近死亡记录摘要）
 """
 
-import json
 import time
 from pathlib import Path
 
 from tools.cli.commands.runtime_cmd import (
-    PID_FILE,
     get_runtime_pid,
+    get_runtime_info,
     is_runtime_running,
 )
 from tools.cli.utils.output import print_json
@@ -37,36 +36,12 @@ def _read_runtime_status_buffer():
         return None
 
 
-def _read_pid_file():
-    """读取 PID 文件，兼容两行文本与 JSON 两种格式"""
-    if not PID_FILE.exists():
-        return None
-    try:
-        raw = PID_FILE.read_text().strip()
-        if raw.startswith("{"):
-            return json.loads(raw)
-        lines = raw.splitlines()
-        return {"pid": int(lines[0]), "started_at": float(lines[1]) if len(lines) > 1 else None}
-    except (ValueError, IOError, json.JSONDecodeError):
-        return None
-
-
 def _read_health(node_id):
-    """读取节点 health 缓冲区并判定新鲜度（与 health status 同一契约：interval*3）"""
+    """读取节点 health 快照（新鲜度契约与 health status 一致）"""
     try:
-        from edge.sdk.shared_buffer_lite import SharedBufferLite
+        from edge.sdk.health_reader import read_node_health
 
-        buf = SharedBufferLite(f"{node_id}.health", create=False)
-        data = buf.read()
-        buf.close()
-        if not isinstance(data, dict):
-            return None
-        interval = max(0.1, float(data.get("heartbeat_interval", 2.0)))
-        ts = float(data.get("timestamp", 0))
-        age = max(0.0, time.time() - ts)
-        data["age_seconds"] = round(age, 1)
-        data["stale"] = age > interval * 3
-        return data
+        return read_node_health(node_id)
     except Exception:
         return None
 
@@ -100,9 +75,9 @@ def _recent_incidents(limit=5):
 
 def collect_status():
     """聚合全部事实，返回 status 字典"""
-    from edge.runtime.utils.constants import BUFFERS_DIR
+    from edge.runtime.utils.constants import get_buffers_dir
 
-    pid_info = _read_pid_file()
+    pid_info = get_runtime_info()
     running = is_runtime_running()
     daemon_status = _read_runtime_status_buffer()
 
@@ -114,17 +89,23 @@ def collect_status():
         started_at = pid_info.get("started_at")
         if started_at:
             runtime["started_at"] = started_at
-            runtime["uptime_seconds"] = round(time.time() - started_at, 1)
+            runtime["uptime_seconds"] = round(time.time() - float(started_at), 1)
+        if pid_info.get("run_id"):
+            runtime["run_id"] = pid_info["run_id"]
+        if pid_info.get("graph_id"):
+            runtime["graph_id"] = pid_info["graph_id"]
     if daemon_status:
         runtime["mode"] = "daemon"
         runtime["dataflow_running"] = bool(daemon_status.get("dataflow_running"))
-        runtime["graph_id"] = daemon_status.get("graph_id", "")
+        runtime["graph_id"] = daemon_status.get("graph_id", "") or runtime.get("graph_id")
         runtime["config_path"] = daemon_status.get("config_path", "")
+
+    buffers_dir = get_buffers_dir()
 
     # 图配置（daemon 可提供 config_path；否则从缓冲区名推导）
     nodes_cfg, edges_cfg = _load_graph(runtime.get("config_path"))
     if nodes_cfg is None:
-        nodes_cfg, edges_cfg = _derive_graph_from_buffers(BUFFERS_DIR)
+        nodes_cfg, edges_cfg = _derive_graph_from_buffers(buffers_dir)
 
     nodes = {}
     problems = []
@@ -147,7 +128,7 @@ def collect_status():
 
         # 输出端口（有配置用配置，没有则跳过）
         entry["outputs"] = {
-            port: _buffer_info(f"{node_id}.{port}", BUFFERS_DIR)
+            port: _buffer_info(f"{node_id}.{port}", buffers_dir)
             for port in sorted(nodes_cfg[node_id])
         }
         for port, info in entry["outputs"].items():
@@ -159,7 +140,7 @@ def collect_status():
         for edge in edges_cfg:
             if edge["to_node"] == node_id:
                 source = f"{edge['from_node']}.{edge['from_port']}"
-                buf = _buffer_info(source, BUFFERS_DIR)
+                buf = _buffer_info(source, buffers_dir)
                 producer = _read_health(edge["from_node"])
                 connected = bool(buf.get("exists") and producer and not producer.get("stale"))
                 inputs[edge["to_port"]] = {
@@ -235,9 +216,9 @@ def _derive_graph_from_buffers(buffers_dir):
 
 
 def _ports_of_node(node_id):
-    from edge.runtime.utils.constants import BUFFERS_DIR
+    from edge.runtime.utils.constants import get_buffers_dir
 
-    buf_dir = Path(BUFFERS_DIR)
+    buf_dir = Path(get_buffers_dir())
     ports = []
     if buf_dir.exists():
         for f in buf_dir.glob(f"{node_id}.*.buf"):

@@ -1,6 +1,12 @@
 """
 启动协调器模块
 按拓扑顺序协调节点启动（纯 SharedBuffer IPC）
+
+启动等待为 readiness 驱动（W2-5）：
+- heartbeat（默认）：{node_id}.health 存在且新鲜即就绪
+- first_output：全部输出 buffer seq>0 即就绪（静态输出节点 opt-in，
+  在 node.yaml 中声明 readiness: first_output）
+- startup_timeout 是 readiness 上限，超时告警放行（与历史宽容度一致）
 """
 
 import time
@@ -85,10 +91,10 @@ class StartupCoordinator:
                 processes.update(layer_processes)
 
                 self._wait_for_layer(
-                    layer_processes, startup_timeout, should_cancel=should_cancel
+                    layer_processes, nodes, startup_timeout, should_cancel=should_cancel
                 )
 
-                # 层之间延迟（给下游读者时间同步到上游已有快照）
+                # 层之间短延迟（下游读者同步上游已有快照；SharedBuffer 无连接建立开销）
                 if layer_idx < len(layers) - 1:
                     logger.debug(f"Waiting {startup_delay}s before starting next layer")
                     delay_deadline = time.time() + startup_delay
@@ -161,58 +167,107 @@ class StartupCoordinator:
     def _wait_for_layer(
         self,
         processes: Dict[str, subprocess.Popen],
+        nodes: Dict[str, NodeInstance],
         timeout: float,
         should_cancel: Optional[Callable[[], bool]] = None,
     ):
         """
-        等待该层节点启动完成
+        等待该层节点就绪（readiness 驱动，W2-5）
 
         策略：
-        - 轮询检查进程是否立即退出（启动失败）
-        - 等待指定时间后认为启动成功
+        - 每 0.1s 轮询：进程立即退出 → 抛错回滚；readiness 达成 → 进入下一层
+        - readiness 信号由节点 manifest 声明（heartbeat | first_output）
+        - 超时告警放行（不阻塞整图启动）
 
         参数：
         - processes: 节点ID -> subprocess.Popen对象的映射
-        - timeout: 超时时间（秒）
+        - nodes: 节点实例字典（用于查 manifest 的 readiness 声明）
+        - timeout: readiness 上限（秒）
 
         异常：
         - NodeStartupError: 节点启动失败（进程立即退出）
         """
         start_time = time.time()
-        check_interval = 0.5  # 每0.5秒检查一次
+        check_interval = 0.1
+        pending = set(processes.keys())
 
-        while time.time() - start_time < timeout:
+        while pending:
             if should_cancel and should_cancel():
                 logger.info("Startup cancelled while waiting for layer")
                 return
 
-            all_alive = True
-
-            # 检查所有进程
-            for node_id, process in processes.items():
-                ret_code = process.poll()
-
+            # 进程退出检查（保留：启动初期崩溃快速失败）
+            for node_id in list(pending):
+                ret_code = processes[node_id].poll()
                 if ret_code is not None:
-                    # 进程已退出（启动失败）
                     logger.error(f"Node '{node_id}' exited immediately with code {ret_code}")
-
-                    # 尝试获取错误输出
                     try:
-                        stdout, stderr = process.communicate(timeout=0.1)
+                        _, stderr = processes[node_id].communicate(timeout=0.1)
                         if stderr:
                             logger.error(f"Node '{node_id}' stderr: {stderr[:500]}")
-                    except:
+                    except Exception:
                         pass
-
                     raise NodeStartupError(
-                        node_id,
-                        f"Process exited with code {ret_code}"
+                        node_id, f"Process exited with code {ret_code}"
                     )
 
-            # 短暂休眠
+            # readiness 检查
+            for node_id in list(pending):
+                if self._node_is_ready(node_id, nodes.get(node_id)):
+                    logger.info(f"  ✓ Node '{node_id}' ready")
+                    pending.discard(node_id)
+
+            if not pending:
+                break
+
+            if time.time() - start_time >= timeout:
+                logger.warning(
+                    f"Layer readiness timeout ({timeout}s), continuing anyway. "
+                    f"Nodes not ready yet: {sorted(pending)}"
+                )
+                return
+
             time.sleep(check_interval)
 
-        logger.debug(f"Layer startup wait completed ({timeout}s)")
+    def _node_is_ready(self, node_id: str, node: Optional[NodeInstance]) -> bool:
+        """节点 readiness 判定（manifest 缺失时不阻塞启动）"""
+        if node is None:
+            return True
+        try:
+            manifest = self.registry.get_manifest(node.package)
+        except Exception:
+            return True
+        if not manifest:
+            return True
+
+        mode = manifest.readiness or "heartbeat"
+        if mode == "first_output":
+            output_names = [f"{node_id}.{p.name}" for p in manifest.outputs]
+            if not output_names:
+                return True
+            return all(self._buffer_has_data(n) for n in output_names)
+
+        # 默认 heartbeat
+        return self._health_is_fresh(node_id)
+
+    def _health_is_fresh(self, node_id: str) -> bool:
+        try:
+            from edge.sdk.health_reader import health_is_fresh, read_node_health
+
+            return health_is_fresh(read_node_health(node_id))
+        except Exception:
+            return False
+
+    def _buffer_has_data(self, buffer_name: str) -> bool:
+        try:
+            from edge.sdk.shared_buffer_lite import SharedBufferLite
+
+            buf = SharedBufferLite(buffer_name, create=False)
+            seq = buf.get_sequence()
+            buf.close()
+            return seq > 0
+        except Exception:
+            return False
 
     def shutdown_nodes(
         self,

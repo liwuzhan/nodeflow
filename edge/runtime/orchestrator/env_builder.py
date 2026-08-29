@@ -6,10 +6,11 @@
 """
 
 import os
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from edge.runtime.config.models import NodeInstance, NodeManifest, Edge
 from edge.runtime.utils.logger import get_logger
+from edge.sdk.shared_buffer_lite import IPC_VERSION
 
 logger = get_logger(__name__)
 
@@ -23,10 +24,23 @@ class EnvBuilder:
         manifest: NodeManifest,
         node_hub_path: str,
         edges: List[Edge],
+        incarnation: int = 1,
     ) -> Dict[str, str]:
         env = os.environ.copy()
 
         env['NODE_ID'] = node.id
+
+        # IPC 版本握手（W2-1）：SDK 初始化断言，不符大声退出
+        env['NODEFLOW_IPC_VERSION'] = str(IPC_VERSION)
+
+        # run 身份与 run 作用域 buffer 目录（W2-2）
+        from edge.runtime.utils import constants
+
+        run_id = constants.get_current_run_id()
+        if run_id:
+            env['NODEFLOW_RUN_ID'] = run_id
+            env['NODEFLOW_BUFFERS_DIR'] = constants.get_buffers_dir()
+        env['NODEFLOW_INCARNATION'] = str(incarnation)
 
         # PYTHONPATH: 项目根目录（node_hub_path 的上两级: edge/nodes/../..)）
         project_root = os.path.abspath(os.path.join(node_hub_path, "../.."))

@@ -47,20 +47,22 @@ class TestFullHeaderSeqlock:
         seq1, d1 = r.read_with_sequence(5)
         assert d1["gen"] == "old"
 
-        # 模拟写入中途：写新 payload 但不更新 seq/length
+        # 模拟写入中途：写新 payload 但不更新 ts/seq/length（header v2: payload 从 16 起）
+        H = SharedBufferLite.HEADER_SIZE
         new_bytes = msgpack.packb({"gen": "new"}, use_bin_type=True)
         with w._lock:
             w.mmap[4:8] = struct.pack('<I', 0)  # tombstone
             w.mmap.flush()
-            w.mmap[8:8 + len(new_bytes)] = new_bytes
-            # 故意不写 seq 和 length——模拟 writer 在中途暂停
+            w.mmap[H:H + len(new_bytes)] = new_bytes
+            # 故意不写 ts/seq/length——模拟 writer 在中途暂停
 
         seq2, d2 = r.read_with_sequence(5)
         # 应返回 None（tombstone 或 header 不匹配）
         assert d2 is None, f"mid-write should return None, got {d2}"
 
-        # 完成写入
+        # 完成写入（ts → seq → length）
         with w._lock:
+            w.mmap[8:16] = struct.pack('<Q', 12345)
             w.mmap[0:4] = struct.pack('<I', 2)
             w.mmap[4:8] = struct.pack('<I', len(new_bytes))
             w.mmap.flush()

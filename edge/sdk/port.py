@@ -2,14 +2,17 @@
 端口抽象模块 — 纯 SharedBuffer IPC
 
 InputPort / OutputPort 基于 SharedBufferLite（mmap）实现进程间通信。
-- OutputPort: 写入 mmap 缓冲区（带 tombstone 协议保证原子性）
-- InputPort:  轮询序列号 + 原子读取最新快照
+- OutputPort: 写入 mmap 缓冲区（带 tombstone 协议保证原子性）；
+  打开旧 buffer 发现损坏（header 非法/尺寸不符）时改名留证并重建（D2）
+- InputPort:  轮询序列号 + 原子读取最新快照；
+  DISCONNECTED→CONNECTED 自愈 + 重同步安全网（seq 回跳/ts 倒退/inode 变化）
 - 无 ZMQ / 无 fcntl 文件锁 / 无网络层
 
 缓冲区命名约定: {node_id}.{port_name}
 """
 
 import os
+import struct
 import time
 from pathlib import Path
 from typing import Optional, Dict, Any, Type, Union
@@ -23,7 +26,7 @@ except ImportError:
 
 from edge.sdk.shared_buffer_lite import SharedBufferLite
 from edge.runtime.utils.logger import get_logger
-from edge.runtime.utils.constants import BUFFERS_DIR
+from edge.runtime.utils.constants import get_buffers_dir
 
 logger = get_logger(__name__)
 
@@ -50,9 +53,57 @@ class OutputPort:
 
         self._setup()
 
+    def _buffer_path(self) -> Path:
+        return Path(get_buffers_dir(self.buffer_name)) / f"{self.buffer_name}.buf"
+
+    def _inspect_existing(self, path: Path) -> Optional[str]:
+        """检查已存在的 buffer 文件是否可用；返回 None 表示可复用，否则返回损坏原因"""
+        try:
+            st = path.stat()
+        except OSError as e:
+            return f"stat_failed: {e}"
+
+        if st.st_size != self.buffer_size:
+            return f"size_mismatch: file={st.st_size} configured={self.buffer_size}"
+
+        try:
+            with open(path, 'rb', buffering=0) as f:
+                header = f.read(SharedBufferLite.HEADER_SIZE)
+            if len(header) >= 8:
+                length = struct.unpack('<I', header[4:8])[0]
+                if length > (st.st_size - SharedBufferLite.HEADER_SIZE):
+                    return f"illegal_header: length={length}"
+        except OSError as e:
+            return f"read_failed: {e}"
+
+        return None
+
+    def _quarantine(self, path: Path, reason: str):
+        """损坏 buffer 改名留证（不删除），后续新建同名池（D2）"""
+        incarnation = os.getenv('NODEFLOW_INCARNATION', '1')
+        dead_path = path.with_name(f"{path.stem}.dead.{incarnation}.buf")
+        suffix = 0
+        while dead_path.exists():
+            suffix += 1
+            dead_path = path.with_name(f"{path.stem}.dead.{incarnation}.{suffix}.buf")
+        try:
+            path.rename(dead_path)
+            logger.warning(
+                f"OutputPort '{self.name}' quarantined corrupt buffer "
+                f"'{path.name}' -> '{dead_path.name}' (reason: {reason})"
+            )
+        except OSError as e:
+            logger.error(f"Failed to quarantine buffer '{path.name}': {e}")
+
     def _setup(self):
-        buffer_path = Path(f"{BUFFERS_DIR}/{self.buffer_name}.buf")
-        create = not buffer_path.exists()
+        path = self._buffer_path()
+        create = not path.exists()
+
+        if not create:
+            problem = self._inspect_existing(path)
+            if problem:
+                self._quarantine(path, problem)
+                create = True
 
         self.buffer = SharedBufferLite(self.buffer_name, size=self.buffer_size, create=create)
         logger.info(
@@ -122,6 +173,7 @@ class OutputPort:
                 self.buffer.close()
             except Exception as e:
                 logger.warning(f"Error closing OutputPort buffer '{self.name}': {e}")
+            self.buffer = None
         logger.debug(f"OutputPort '{self.name}' closed")
 
     def __del__(self):
@@ -132,7 +184,18 @@ class OutputPort:
 
 
 class InputPort:
-    """输入端口 — 轮询序列号 + 原子读取"""
+    """输入端口 — 轮询序列号 + 原子读取，含自愈与重同步安全网
+
+    状态机: DISCONNECTED → CONNECTED（buffer 为 None 时 recv_latest 按退避重开）
+    重同步触发（安全网而非主路径——默认复用型重启在数据面无痕迹，见 N-1）:
+    - seq 大幅回跳（新池从 0 重新计数）
+    - write_ts 倒退
+    - buffer 文件 inode / 尺寸变化（改名留证重建、外部删除场景）
+    """
+
+    REOPEN_BACKOFF_START = 0.2
+    REOPEN_BACKOFF_MAX = 2.0
+    SEQ_BACKWARD_THRESHOLD = 0x10000
 
     def __init__(self, name: str, buffer_name: str, source_port: Optional[str] = None):
         """
@@ -159,47 +222,157 @@ class InputPort:
         self.last_sequence = 0
         self._cached_history: Optional[Dict[str, Any]] = None
 
+        # 自愈/重同步状态
+        self.state = "DISCONNECTED"
+        self.generation = 0
+        self._reopen_backoff = self.REOPEN_BACKOFF_START
+        self._reopen_deadline = 0.0
+        self._inode: Optional[int] = None
+        self._file_size: Optional[int] = None
+        self._last_ts: int = 0
+
         self._connect()
+
+    def _buffer_path(self) -> Path:
+        return Path(get_buffers_dir(self.buffer_name)) / f"{self.buffer_name}.buf"
 
     def _connect(self):
         for attempt in range(10):
-            buffer_path = Path(f"{BUFFERS_DIR}/{self.buffer_name}.buf")
-            if buffer_path.exists():
-                self.buffer = SharedBufferLite(self.buffer_name, create=False)
-                logger.debug(f"InputPort '{self.name}' opened buffer: {self.buffer_name}")
-                break
+            path = self._buffer_path()
+            if path.exists():
+                if self._open_buffer(sync_history=True):
+                    logger.info(
+                        f"InputPort '{self.name}' connected to {self.source_node}.{self.source_port}"
+                    )
+                    return
+                # 打开失败（损坏）→ 等退避后重试打开
             if attempt < 9:
                 logger.debug(f"InputPort '{self.name}' waiting for buffer ({attempt + 1}/10)...")
                 time.sleep(0.2)
 
-        if not self.buffer:
-            logger.warning(
-                f"InputPort '{self.name}': buffer '{self.buffer_name}' not found after 10 attempts. "
-                f"Upstream node may not have started yet. Data on this port will be dropped."
-            )
-            return
-
-        # 首次连接：读取历史序列号和数据（Late-Joiner）
-        current_seq, history_data = self.buffer.read_with_sequence()
-        self.last_sequence = current_seq
-        if history_data is not None:
-            self._cached_history = history_data
-            logger.info(
-                f"InputPort '{self.name}' read history (seq={current_seq})"
-            )
-        else:
-            logger.debug(f"InputPort '{self.name}' synced to seq={current_seq} (no data)")
-
-        logger.info(
-            f"InputPort '{self.name}' connected to {self.source_node}.{self.source_port}"
+        logger.warning(
+            f"InputPort '{self.name}': buffer '{self.buffer_name}' not found after 10 attempts. "
+            f"Upstream node may not have started yet. Will keep retrying with backoff."
         )
 
-    def recv_latest(self) -> Optional[Dict[str, Any]]:
-        """非阻塞：无新数据时返回 None"""
+    def _open_buffer(self, sync_history: bool) -> bool:
+        """打开（或重开）buffer 并记录 inode/size；成功返回 True"""
+        try:
+            self.buffer = SharedBufferLite(self.buffer_name, create=False)
+        except Exception as e:
+            logger.warning(f"InputPort '{self.name}' failed to open buffer: {e}")
+            self.buffer = None
+            return False
+
+        try:
+            st = self._buffer_path().stat()
+            self._inode = st.st_ino
+            self._file_size = st.st_size
+        except OSError:
+            self._inode = None
+            self._file_size = None
+
+        self.state = "CONNECTED"
+        self._reopen_backoff = self.REOPEN_BACKOFF_START
+
+        if sync_history:
+            current_seq, history_data = self.buffer.read_with_sequence()
+            self.last_sequence = current_seq
+            if history_data is not None:
+                self._cached_history = history_data
+                logger.info(
+                    f"InputPort '{self.name}' read history (seq={current_seq})"
+                )
+            else:
+                logger.debug(f"InputPort '{self.name}' synced to seq={current_seq} (no data)")
+        return True
+
+    def _try_reopen(self):
+        """DISCONNECTED 状态下的退避重开（0.2s 起、上限 2s）"""
+        now = time.monotonic()
+        if now < self._reopen_deadline:
+            return
+        self._reopen_deadline = now + self._reopen_backoff
+        self._reopen_backoff = min(self._reopen_backoff * 2, self.REOPEN_BACKOFF_MAX)
+
+        if self._buffer_path().exists() and self._open_buffer(sync_history=True):
+            logger.info(
+                f"InputPort '{self.name}' reconnected to {self.source_node}.{self.source_port} "
+                f"(generation={self.generation})"
+            )
+
+    def _needs_resync(self) -> Optional[str]:
+        """检测是否需要重开 mmap；返回触发原因或 None
+
+        注意：inode/size stat 不做节流——重建窗口可能落在任何两次轮询之间，
+        安全网必须每次都看（stat 单次 ~1µs，相对既有 get_sequence 的
+        seek+read 两次 syscall 成本可忽略，见 N-3）。
+        """
         if not self.buffer:
             return None
 
         try:
+            seq, _, ts = self.buffer.get_header()
+        except Exception as e:
+            return f"header_read_failed: {e}"
+
+        # seq 大幅回跳：新池从 0 重新计数（复用型重启 seq 连续，不触发，N-1）
+        backward = (self.last_sequence - seq) & 0xFFFFFFFF
+        if 0 < backward < self.SEQ_BACKWARD_THRESHOLD:
+            return f"seq_backward: {self.last_sequence} -> {seq}"
+
+        # write_ts 倒退（同 boot 单调时钟下不应出现；出现即换池）
+        if ts != 0 and self._last_ts != 0 and ts < self._last_ts:
+            return f"ts_backward: {self._last_ts} -> {ts}"
+
+        # inode / 尺寸变化（改名留证重建、外部删除场景）
+        try:
+            st = self._buffer_path().stat()
+            if self._inode is not None and st.st_ino != self._inode:
+                return f"inode_changed: {self._inode} -> {st.st_ino}"
+            if self._file_size is not None and st.st_size != self._file_size:
+                return f"size_changed: {self._file_size} -> {st.st_size}"
+        except OSError:
+            return "stat_failed"
+
+        return None
+
+    def _resync(self, reason: str):
+        """重开 mmap、重置序列号基准、generation 递增"""
+        self.generation += 1
+        logger.info(
+            f"InputPort '{self.name}' resync (generation={self.generation}): {reason}"
+        )
+        if self.buffer:
+            try:
+                self.buffer.close()
+            except Exception:
+                pass
+            self.buffer = None
+
+        self._cached_history = None  # 旧世代历史不重放
+        self.state = "DISCONNECTED"
+        self._last_ts = 0
+        self._reopen_deadline = 0.0
+
+        if not self._open_buffer(sync_history=True):
+            # 文件已不存在等场景 → 回到 DISCONNECTED 退避重开
+            logger.warning(f"InputPort '{self.name}' resync open failed, entering reconnect loop")
+
+    def recv_latest(self) -> Optional[Dict[str, Any]]:
+        """非阻塞：无新数据时返回 None"""
+        if not self.buffer:
+            self._try_reopen()
+            if not self.buffer:
+                return None
+
+        try:
+            reason = self._needs_resync()
+            if reason:
+                self._resync(reason)
+                if not self.buffer:
+                    return None
+
             # 优先返回首次连接的缓存历史
             if self._cached_history is not None:
                 data = self._cached_history
@@ -217,12 +390,23 @@ class InputPort:
             diff = (seq - self.last_sequence) & 0xFFFFFFFF
             if 0 < diff < 0x80000000 and data is not None:
                 self.last_sequence = seq
+                _, _, ts = self.buffer.get_header()
+                if ts:
+                    self._last_ts = ts
                 return data
 
             return None
         except Exception as e:
             logger.error(f"InputPort '{self.name}' read error: {e}")
+            # mmap 可能已失效（文件被删/截断）→ 触发重开而非永久静默
+            self._resync(f"read_error: {e}")
             return None
+
+    def last_write_age_ms(self) -> Optional[float]:
+        """上游最后一次写入距现在的毫秒数；未连接或从未写入返回 None"""
+        if not self.buffer:
+            return None
+        return self.buffer.get_write_age_ms()
 
     def recv_latest_blocking(self, timeout: Optional[float] = None) -> Optional[Dict[str, Any]]:
         """阻塞等待，直到有新数据或超时"""
@@ -240,7 +424,18 @@ class InputPort:
         return self.buffer is not None
 
     def get_connection_state(self) -> str:
-        return "connected" if self.buffer is not None else "disconnected"
+        return self.state.lower()
+
+    def get_stats(self) -> Dict[str, Any]:
+        """端口观测状态（health v2 / status 消费）"""
+        return {
+            "state": self.state.lower(),
+            "source_write_age_ms": (
+                round(self.buffer.get_write_age_ms(), 1)
+                if self.buffer else None
+            ),
+            "generation": self.generation,
+        }
 
     def close(self):
         if self.buffer:
@@ -248,6 +443,8 @@ class InputPort:
                 self.buffer.close()
             except Exception as e:
                 logger.warning(f"Error closing InputPort buffer '{self.name}': {e}")
+            self.buffer = None
+        self.state = "DISCONNECTED"
         logger.debug(f"InputPort '{self.name}' closed")
 
     def __del__(self):

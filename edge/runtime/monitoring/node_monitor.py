@@ -18,15 +18,18 @@ logger = get_logger(__name__)
 class NodeMonitor:
     """节点监控器"""
 
-    def __init__(self, restart_policy: RestartPolicyConfig):
+    def __init__(self, restart_policy: RestartPolicyConfig, incident_recorder: Optional[Callable] = None):
         """
         初始化节点监控器
 
         参数：
         - restart_policy: RestartPolicyConfig对象
+        - incident_recorder: 死亡记录回调 recorder(node_id, exit_code, stderr_tail, retry_count)，
+          由 runtime 注入（W2-4）；None 表示不记录
         """
         self.restart_policy = restart_policy
         self.retry_tracker = RetryTracker(restart_policy)
+        self.incident_recorder = incident_recorder
 
         self.processes: Dict[str, subprocess.Popen] = {}
         self.running = False
@@ -135,22 +138,31 @@ class NodeMonitor:
         """
         logger.warning(f"Node '{node_id}' crashed with exit code {exit_code}")
 
-        # 从进程字典中移除
+        # 从进程字典中移除，并抢救 stderr 遗言
+        stderr_tail = ""
         if node_id in self.processes:
             process = self.processes[node_id]
 
-            # 尝试获取输出
             try:
-                stdout, stderr = process.communicate(timeout=0.1)
+                _, stderr = process.communicate(timeout=0.1)
                 if stderr:
-                    logger.error(f"Node '{node_id}' stderr: {stderr[:500]}")
-            except:
+                    stderr_tail = stderr[-500:]
+                    logger.error(f"Node '{node_id}' stderr: {stderr_tail}")
+            except Exception:
                 pass
 
             del self.processes[node_id]
 
         # 记录失败
         self.retry_tracker.record_failure(node_id)
+        retry_count = self.retry_tracker.get_retry_count(node_id)
+
+        # 死亡记录（W2-4）：监控线程是幸存目击者，在此落验尸报告
+        if self.incident_recorder:
+            try:
+                self.incident_recorder(node_id, exit_code, stderr_tail, retry_count)
+            except Exception:
+                logger.exception(f"Failed to record death incident for '{node_id}'")
 
         # 检查是否可以重启
         if not self.retry_tracker.can_retry(node_id):

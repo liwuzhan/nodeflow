@@ -21,20 +21,56 @@ from tools.cli.utils.output import print_json
 PID_FILE = Path("/tmp/nodeflow_runtime.pid")
 
 
-def get_runtime_pid():
-    """获取运行时进程的 PID"""
+def _read_pid_payload():
+    """读取 PID 文件内容，兼容 JSON（W2-2）与旧两行文本格式；返回 dict 或 None"""
     if not PID_FILE.exists():
         return None
-
     try:
-        with open(PID_FILE, 'r') as f:
-            lines = f.readlines()
-            if lines:
-                return int(lines[0].strip())
-    except (ValueError, IOError):
+        raw = PID_FILE.read_text().strip()
+        if raw.startswith("{"):
+            payload = json.loads(raw)
+            if isinstance(payload, dict):
+                return payload
+            return None
+        lines = raw.splitlines()
+        if lines:
+            payload = {"pid": int(lines[0].strip())}
+            if len(lines) > 1:
+                payload["started_at"] = float(lines[1].strip())
+            return payload
+    except (ValueError, IOError, json.JSONDecodeError):
         pass
-
     return None
+
+
+def get_runtime_pid():
+    """获取运行时进程的 PID"""
+    payload = _read_pid_payload()
+    if payload is None:
+        return None
+    try:
+        return int(payload.get("pid"))
+    except (TypeError, ValueError):
+        return None
+
+
+def get_runtime_info():
+    """获取 PID 文件完整信息（run_id/graph_id/buffers_dir 等，W2-2）"""
+    return _read_pid_payload()
+
+
+def bootstrap_buffers_dir():
+    """CLI 进程内定位当前 run 的 buffer 目录（写进环境变量供 SharedBufferLite 解析）。
+
+    控制面缓冲区固定在根目录，不受影响；仅在 runtime 运行且 PID 文件
+    提供 buffers_dir 时设置。
+    """
+    payload = _read_pid_payload()
+    if not payload:
+        return
+    buffers_dir = payload.get("buffers_dir")
+    if buffers_dir and is_runtime_running():
+        os.environ["NODEFLOW_BUFFERS_DIR"] = str(buffers_dir)
 
 
 def is_runtime_running():
@@ -347,6 +383,8 @@ def get_runtime_status():
 
     if running and pid:
         try:
+            payload = _read_pid_payload() or {}
+
             # 读取进程信息
             with open(f'/proc/{pid}/status', 'r') as f:
                 for line in f:
@@ -354,16 +392,16 @@ def get_runtime_status():
                         memory = line.split()[1]
                         result["memory_mb"] = int(memory) / 1024
 
-            # 读取启动时间
-            pid_file = Path("/tmp/nodeflow_runtime.pid")
-            if pid_file.exists():
-                with open(pid_file, 'r') as f:
-                    lines = f.readlines()
-                    if len(lines) > 1:
-                        start_time = float(lines[1])
-                        result["started_at"] = datetime.fromtimestamp(start_time).isoformat()
-                        result["uptime_seconds"] = time.time() - start_time
-        except:
+            # 读取启动时间与 run 信息（JSON PID 文件，W2-2）
+            start_time = payload.get("started_at")
+            if start_time:
+                result["started_at"] = datetime.fromtimestamp(float(start_time)).isoformat()
+                result["uptime_seconds"] = time.time() - float(start_time)
+            if payload.get("run_id"):
+                result["run_id"] = payload["run_id"]
+            if payload.get("graph_id"):
+                result["graph_id"] = payload["graph_id"]
+        except Exception:
             pass
 
     return result

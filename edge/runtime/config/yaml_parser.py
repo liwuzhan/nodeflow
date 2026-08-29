@@ -189,7 +189,8 @@ class YAMLParser:
                 entrypoints=entrypoints,
                 inputs=inputs,
                 outputs=outputs,
-                params=params
+                params=params,
+                readiness=data.get('readiness', 'heartbeat'),
             )
 
             logger.debug(f"Parsed node manifest: {manifest.name} (version {manifest.version})")

@@ -5,6 +5,7 @@ NodeFlow SDK主入口
 
 import os
 import sys
+import json
 import time
 import threading
 from typing import Dict, Any, Optional, Type, TYPE_CHECKING
@@ -17,7 +18,7 @@ if TYPE_CHECKING:
 
 from edge.sdk.param_parser import ParamParser
 from edge.sdk.port import InputPort, OutputPort
-from edge.sdk.shared_buffer_lite import SharedBufferLite
+from edge.sdk.shared_buffer_lite import SharedBufferLite, IPC_VERSION
 from edge.sdk.structured_logger import StructuredLogger
 
 logger = None  # 框架日志（进程级）
@@ -157,6 +158,33 @@ class NodeFlowSDK:
         if not self.node_id:
             raise ValueError("NODE_ID environment variable not set")
 
+        # IPC 版本握手（W2-1）：launcher 注入 NODEFLOW_IPC_VERSION，
+        # 不符则大声退出——杜绝旧读者把 ts 字节当 payload 的静默混读窗口。
+        # env 缺失（手动启动/单测）视为兼容。
+        env_ver = os.getenv('NODEFLOW_IPC_VERSION')
+        if env_ver is not None:
+            try:
+                declared = int(env_ver)
+            except ValueError:
+                declared = -1
+            if declared != IPC_VERSION:
+                sys.stderr.write(json.dumps({
+                    "event": "ipc_version_mismatch",
+                    "node_id": self.node_id,
+                    "declared_version": env_ver,
+                    "sdk_version": IPC_VERSION,
+                    "action": "exiting loudly",
+                }) + "\n")
+                sys.stderr.flush()
+                os._exit(86)
+
+        # run / 世代身份（W2-2；env 缺失时为默认值，兼容手动启动）
+        self.run_id = os.getenv('NODEFLOW_RUN_ID') or ""
+        try:
+            self.incarnation = int(os.getenv('NODEFLOW_INCARNATION', '1'))
+        except ValueError:
+            self.incarnation = 1
+
         # 设置结构化日志（包括JSON文件 + 控制台输出）
         from edge.runtime.utils.constants import LOGS_DIR
         log_dir = os.getenv('NODEFLOW_LOG_DIR', LOGS_DIR)
@@ -165,7 +193,8 @@ class NodeFlowSDK:
             log_level=log_level,
             log_dir=log_dir,
             enable_json=True,
-            enable_console=True
+            enable_console=True,
+            run_id=self.run_id or None,
         )
 
         self.logger.info(f"NodeFlow SDK initialized for node '{self.node_id}'", log_dir=log_dir)
@@ -310,9 +339,10 @@ class NodeFlowSDK:
 
     def report_health(self):
         """
-        报告节点健康状态到共享缓冲区
+        报告节点健康状态到共享缓冲区（health payload v2）
 
-        创建/写入 {node_id}.health 缓冲区，包含状态、时间戳、端口连接状态
+        创建/写入 {node_id}.health 缓冲区，包含状态、时间戳、incarnation、
+        端口连接状态与观测年龄（inputs v2: connected/last_seq_seen/source_write_age_ms）
         """
         try:
             buffer_name = f"{self.node_id}.health"
@@ -322,8 +352,14 @@ class NodeFlowSDK:
                 "node_id": self.node_id,
                 "timestamp": time.time(),
                 "heartbeat_interval": self._health_interval,
+                "incarnation": self.incarnation,
+                "run_id": self.run_id,
                 "inputs": {
-                    port_name: port.is_connected()
+                    port_name: {
+                        "connected": port.is_connected(),
+                        "last_seq_seen": port.last_sequence,
+                        "source_write_age_ms": port.last_write_age_ms(),
+                    }
                     for port_name, port in self.inputs.items()
                 },
                 "outputs": {
