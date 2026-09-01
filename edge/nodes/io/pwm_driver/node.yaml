@@ -29,6 +29,27 @@ ports:
 input_watchdog:
   velocity_cmd: 0.5
 
+# 异常退出安全契约（2026-09-01 草案 §5.4）：本节点死亡后由框架执行
+# drive_pwm.neutral 资源动作（需图级 safety_resources 绑定，默认 dry-run）。
+# pwm_status 的 typed invalidate 语义未定义（§5.3），首期 strategy 为 none。
+# anti_replay：重启后不消费启动前缓存的历史非零命令（§6.10）。
+# rearm：manual_then_fresh —— 人工授权前不得恢复运动（DEC-11 草案倾向）。
+failure_policy:
+  apply_on:
+    - abnormal_exit
+  outputs:
+    pwm_status:
+      strategy: none
+  resources:
+    drive_pwm:
+      action: neutral
+  anti_replay:
+    velocity_cmd: require_new_commit
+  rearm:
+    mode: manual_then_fresh
+    input: velocity_cmd
+  deadline_ms: null
+
 
 
 # 节点参数

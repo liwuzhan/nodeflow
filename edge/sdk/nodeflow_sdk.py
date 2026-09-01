@@ -303,6 +303,17 @@ class NodeFlowSDK:
             self._input_watchdog_thread.start()
             self.logger.info("Input watchdog enabled", ports=self._input_watchdog_cfg)
 
+        # 输入 anti-replay（2026-09-01 草案）：声明端口重启后不消费启动前历史命令
+        self._input_anti_replay: Dict[str, str] = {}
+        anti_replay_env = os.getenv('NODEFLOW_INPUT_ANTI_REPLAY')
+        if anti_replay_env:
+            try:
+                self._input_anti_replay = {
+                    str(k): str(v) for k, v in json.loads(anti_replay_env).items()
+                }
+            except (ValueError, TypeError):
+                self.logger.warning("Invalid NODEFLOW_INPUT_ANTI_REPLAY, ignored")
+
         # 登记为活动 SDK（模块级 die() 由此补充端口观测）
         global _ACTIVE_SDK
         _ACTIVE_SDK = self
@@ -359,7 +370,10 @@ class NodeFlowSDK:
                 f"Environment variable '{env_var_name}' not found."
             )
 
-        port = InputPort(port_name, buffer_name)
+        port = InputPort(
+            port_name, buffer_name,
+            require_new_commit=(self._input_anti_replay.get(port_name) == "require_new_commit"),
+        )
         self.inputs[port_name] = port
 
         self.logger.info(f"Created input port: {port_name} (buffer={buffer_name})")

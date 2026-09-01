@@ -197,15 +197,20 @@ class InputPort:
     REOPEN_BACKOFF_MAX = 2.0
     SEQ_BACKWARD_THRESHOLD = 0x10000
 
-    def __init__(self, name: str, buffer_name: str, source_port: Optional[str] = None):
+    def __init__(self, name: str, buffer_name: str, source_port: Optional[str] = None,
+                 require_new_commit: bool = False):
         """
         Args:
             name: 本地端口名
             buffer_name: 缓冲区名称 (如 'sim_output.rtk_fix')
             source_port: 源端口名（可选，用于日志）
+            require_new_commit: anti-replay 语义（2026-09-01 草案 §6.10）——
+                打开/重同步时丢弃缓存的历史快照并以其 seq 为基线，
+                只返回基线之后的新提交；buffer 换代时同样重建基线
         """
         self.name = name
         self.buffer_name = buffer_name
+        self.require_new_commit = require_new_commit
 
         if source_port is not None:
             self.source_node = buffer_name.rsplit('.', 1)[0] if '.' in buffer_name else buffer_name
@@ -279,10 +284,18 @@ class InputPort:
             current_seq, history_data = self.buffer.read_with_sequence()
             self.last_sequence = current_seq
             if history_data is not None:
-                self._cached_history = history_data
-                logger.info(
-                    f"InputPort '{self.name}' read history (seq={current_seq})"
-                )
+                if self.require_new_commit:
+                    # anti-replay：连接/重同步时刻的快照属于"启动前历史"，
+                    # 丢弃不回放，以其 seq 为基线等待下一次提交
+                    logger.info(
+                        f"InputPort '{self.name}' anti-replay: dropped history "
+                        f"snapshot (seq={current_seq}), awaiting new commit"
+                    )
+                else:
+                    self._cached_history = history_data
+                    logger.info(
+                        f"InputPort '{self.name}' read history (seq={current_seq})"
+                    )
             else:
                 logger.debug(f"InputPort '{self.name}' synced to seq={current_seq} (no data)")
         return True
@@ -435,6 +448,7 @@ class InputPort:
                 if self.buffer else None
             ),
             "generation": self.generation,
+            "anti_replay": self.require_new_commit,
         }
 
     def close(self):

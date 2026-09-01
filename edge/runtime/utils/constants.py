@@ -19,10 +19,11 @@ from typing import Optional
 
 TMP_ROOT = "/tmp/nodeflow"
 
-# 控制面缓冲区：固定根目录，不随 run 隔离（CLI 查活体依赖）
+# 控制面缓冲区：固定根目录，不随 run 隔离（CLI 查活体/锁存读取依赖）
 CONTROL_PLANE_BUFFERS = frozenset({
     "runtime.control",
     "runtime.status",
+    "runtime.safety",
     "control.shutdown_request",
 })
 

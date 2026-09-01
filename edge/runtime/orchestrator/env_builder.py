@@ -47,6 +47,13 @@ class EnvBuilder:
             import json as _json
             env['NODEFLOW_INPUT_WATCHDOG'] = _json.dumps(manifest.input_watchdog)
 
+        # 输入 anti-replay（2026-09-01 草案 §6.10）：声明端口在重启后
+        # 不得消费启动前缓存的历史命令，只接受新提交
+        anti_replay = getattr(manifest.failure_policy, "anti_replay", None) if manifest.failure_policy else None
+        if anti_replay:
+            import json as _json
+            env['NODEFLOW_INPUT_ANTI_REPLAY'] = _json.dumps(anti_replay)
+
         # PYTHONPATH: 项目根目录（node_hub_path 的上两级: edge/nodes/../..)）
         project_root = os.path.abspath(os.path.join(node_hub_path, "../.."))
         existing = env.get('PYTHONPATH', '')

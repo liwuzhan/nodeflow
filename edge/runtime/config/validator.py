@@ -107,6 +107,42 @@ class ConfigValidator:
         if overlap:
             result.add_error(f"Port names overlap between inputs and outputs: {overlap}")
 
+        # 7. 验证异常退出安全契约的结构（2026-09-01 草案 §5.5）
+        if manifest.failure_policy is not None:
+            policy = manifest.failure_policy
+            for port_name in policy.outputs:
+                if port_name not in output_names:
+                    result.add_error(
+                        f"failure_policy.outputs references unknown output port '{port_name}'"
+                    )
+            for port_name, out_policy in policy.outputs.items():
+                if out_policy.strategy == "replace" and not isinstance(out_policy.value, dict):
+                    result.add_error(
+                        f"failure_policy.outputs.{port_name}: replace requires a value mapping"
+                    )
+                if out_policy.strategy == "replace":
+                    # 动态字段可解析性（$event.* 拼写错误在此暴露，不静默写入占位符）
+                    try:
+                        from edge.runtime.config.models import resolve_event_fields
+
+                        resolve_event_fields(
+                            out_policy.value, wall_time=0.0, node_id="", run_id="",
+                        )
+                    except ValueError as e:
+                        result.add_error(
+                            f"failure_policy.outputs.{port_name}.value: {e}"
+                        )
+                if out_policy.strategy == "retain":
+                    result.add_warning(
+                        f"failure_policy.outputs.{port_name}: retain 对安全关键命令无效，"
+                        f"请确认该端口不参与运行态控制"
+                    )
+            for port_name in policy.anti_replay:
+                if port_name not in input_names:
+                    result.add_error(
+                        f"failure_policy.anti_replay references unknown input port '{port_name}'"
+                    )
+
         logger.debug(f"Node manifest validation for '{manifest.name}': {'PASSED' if result.is_valid else 'FAILED'}")
         if not result.is_valid:
             logger.debug(f"Validation errors: {result.errors}")

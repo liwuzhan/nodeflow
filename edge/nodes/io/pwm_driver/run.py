@@ -14,6 +14,64 @@ from edge.sdk.nodeflow_sdk import NodeFlowSDK
 import atom
 
 
+class DriveLatchGuard:
+    """资源安全锁存守卫（2026-09-01 草案 §5.4 路径一）。
+
+    runtime 在上游控制链故障时断言 drive_pwm 锁存；本节点在每次应用
+    速度命令前检查锁存——锁存期间只允许中位，拒绝一切非零命令。
+    读取控制面 runtime.safety buffer（固定根目录），seq 未变化时零解码。
+    """
+
+    def __init__(self, logger, resource: str = "drive_pwm", reopen_interval: float = 2.0):
+        self.logger = logger
+        self.resource = resource
+        self.reopen_interval = reopen_interval
+        self._buf = None
+        self._last_seq = -1
+        self._latched = False
+        self._next_open_attempt = 0.0
+
+    def is_latched(self) -> bool:
+        buf = self._acquire()
+        if buf is None:
+            return False
+        try:
+            seq = buf.get_sequence()
+            if seq != self._last_seq:
+                self._last_seq = seq
+                data = buf.read()
+                resources = (data or {}).get("resources", {})
+                entry = resources.get(self.resource) or {}
+                self._latched = bool(entry.get("latched"))
+            return self._latched
+        except Exception:
+            self._buf = None  # 下次重开
+            return self._latched
+
+    def _acquire(self):
+        if self._buf is not None:
+            return self._buf
+        now = time.monotonic()
+        if now < self._next_open_attempt:
+            return None
+        self._next_open_attempt = now + self.reopen_interval
+        try:
+            from edge.sdk.shared_buffer_lite import SharedBufferLite
+
+            self._buf = SharedBufferLite("runtime.safety", create=False)
+            return self._buf
+        except Exception:
+            return None  # 锁存 buffer 不存在 = 从未断言
+
+    def close(self):
+        if self._buf is not None:
+            try:
+                self._buf.close()
+            except Exception:
+                pass
+            self._buf = None
+
+
 class PWMDriverNode:
     """PWM驱动节点 (L3) - sysfs 接口版本"""
 
@@ -91,6 +149,10 @@ class PWMDriverNode:
 
         # 命令超时检查
         self.last_command_time = time.time()
+
+        # 资源安全锁存守卫（2026-09-01 草案）：锁存期间拒绝非零命令
+        self.latch_guard = DriveLatchGuard(sdk.logger, resource="drive_pwm")
+        self._latch_logged = False
 
         # 日志配置
         self.sdk.logger.info("PWM Driver initialized (sysfs mode)")
@@ -234,6 +296,25 @@ class PWMDriverNode:
             )
             self._watchdog_stop_logged = True
 
+    def _apply_safety_stop(self, cmd_timestamp: float) -> dict:
+        """安全停止命令（safety_stop 语义，草案 §3.8）。
+
+        零线速/零角速在存在 angular_velocity_bias、deadzone 等补偿时仍可能
+        产生差速输出——安全停止必须绕过一切补偿，直接输出中位。
+        """
+        center_duty = self._pulse_to_duty_ns(self.pwm_center_ns)
+        self._write_pwm_ns(center_duty, center_duty)
+        self.sdk.logger.warning("Safety stop command applied (center PWM, bypassing bias/deadzone)")
+        return {
+            'timestamp': time.time(),
+            'left_duty_ns': center_duty,
+            'right_duty_ns': center_duty,
+            'linear_velocity': 0.0,
+            'angular_velocity': 0.0,
+            'safety_stop': True,
+            'command_age': time.time() - cmd_timestamp,
+        }
+
     def run(self) -> None:
         """主循环"""
         self.sdk.logger.info("PWM Driver node started")
@@ -248,6 +329,30 @@ class PWMDriverNode:
                     time.sleep(0.1)
                     continue
 
+                # 资源安全锁存（草案 §5.4 路径一）：锁存期间拒绝一切非零命令，
+                # 持续中位；唯一解除路径是人工 rearm（runtime.safety epoch 递增）
+                if self.latch_guard.is_latched():
+                    center_duty = self._pulse_to_duty_ns(self.pwm_center_ns)
+                    self._write_pwm_ns(center_duty, center_duty)
+                    if not self._latch_logged:
+                        self.sdk.logger.warning(
+                            "Drive latch asserted: rejecting commands until manual rearm"
+                        )
+                        self._latch_logged = True
+                    self.pwm_status_port.send({
+                        'timestamp': time.time(),
+                        'left_duty_ns': center_duty,
+                        'right_duty_ns': center_duty,
+                        'linear_velocity': 0.0,
+                        'angular_velocity': 0.0,
+                        'latched': True,
+                    })
+                    time.sleep(0.005)
+                    continue
+                if self._latch_logged:
+                    self.sdk.logger.info("Drive latch released (rearmed)")
+                    self._latch_logged = False
+
                 # 读取速度命令（非阻塞）
                 velocity_data = self.velocity_cmd_port.recv_latest()
 
@@ -260,7 +365,10 @@ class PWMDriverNode:
                     w_angular = velocity_data.get('angular_velocity', 0.0)
                     cmd_timestamp = velocity_data.get('timestamp', time.time())
 
-                    if self.drive_mode == 'direct':
+                    if velocity_data.get('safety_stop'):
+                        # 框架 failsafe 命令（草案 §3.8）：绕过 bias/deadzone 直接中位
+                        pwm_status = self._apply_safety_stop(cmd_timestamp)
+                    elif self.drive_mode == 'direct':
                         # ---- direct 模式：通道1=油门，通道2=转向 ----
                         # 安全检查：限制速度范围
                         if self.enable_safety_check:
@@ -380,6 +488,7 @@ class PWMDriverNode:
         """清理资源"""
         try:
             self._stop_motors()
+            self.latch_guard.close()
             self.sdk.logger.info("PWM Driver cleanup complete")
         except Exception as e:
             self.sdk.logger.error(f"Error during cleanup: {e}")

@@ -129,6 +129,7 @@ def build_death_record(
     output_ages_ms: Dict[str, Optional[float]],
     input_ages_ms: Dict[str, Optional[float]],
     quarantined_buffers: List[str],
+    failure_policy_actions: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """组装一条死亡记录（will 取自冻结 health，witness 取自框架观测）"""
     sig = None
@@ -161,7 +162,32 @@ def build_death_record(
             "input_ages_ms": input_ages_ms,
         },
         "quarantined_buffers": quarantined_buffers,
+        # 异常退出安全契约的执行结果（2026-09-01 草案；None = 未声明契约）
+        "failure_policy_actions": failure_policy_actions or {},
     }
+
+
+# ── 安全处置快照持久化（2026-09-01 草案 P2：动作先行，取证随后） ──────
+
+def persist_preimage(run_id: str, preimage: Dict[str, Any]) -> Optional[str]:
+    """把覆盖前的有界端口快照落盘到 incidents/snapshots/<run_id>/。
+
+    返回文件名；无 payload 或写失败返回 None（取证失败只告警，不反向撤销安全动作）。
+    """
+    payload = preimage.get("payload")
+    if payload is None:
+        return None
+    try:
+        import msgpack
+
+        snap_dir = resolve_incident_dir() / "snapshots" / (run_id or "norun")
+        snap_dir.mkdir(parents=True, exist_ok=True)
+        name = f"{preimage['buffer']}.preimage.msgpack"
+        (snap_dir / name).write_bytes(msgpack.packb(preimage, use_bin_type=True))
+        return name
+    except Exception as e:
+        logger.warning(f"Preimage persist failed for '{preimage.get('buffer')}': {e}")
+        return None
 
 
 # ── 现场保留（W3-2）─────────────────────────────────────────────────

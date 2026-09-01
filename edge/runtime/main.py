@@ -78,6 +78,11 @@ class NodeFlowRuntime:
         # 框架是否已初始化
         self._framework_initialized = False
 
+        # 资源安全锁存（2026-09-01 草案）：daemon 生命周期内跨数据流轮次持久，
+        # fault 集合非空即 latched，唯一解除路径是人工 rearm
+        from edge.runtime.monitoring.safety_phase import SafetyLatch
+        self.safety_latch = SafetyLatch()
+
         # 设置信号处理（只设置一次）
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
@@ -241,7 +246,8 @@ class NodeFlowRuntime:
             logger.info("Validating graph...")
             graph_validator = GraphValidator()
             graph_result = graph_validator.validate(
-                self.config.nodes, self.config.edges, self.registry
+                self.config.nodes, self.config.edges, self.registry,
+                safety_resources=self.config.safety_resources,
             )
 
             if not graph_result.is_valid:
@@ -770,6 +776,20 @@ class NodeFlowRuntime:
                             self.running = False
                             break
 
+                        elif command == "safety_rearm":
+                            # 人工 rearm（manual_then_fresh）：唯一解除资源锁存的路径
+                            resource = str(cmd_pkt.get("resource", ""))
+                            if resource:
+                                entry = self.safety_latch.rearm(resource)
+                                publish_status("rearm_ok")
+                                logger.info(
+                                    f"✓ Safety resource '{resource}' rearmed by CLI "
+                                    f"(epoch={entry.get('epoch')})"
+                                )
+                            else:
+                                publish_status("failed", "safety_rearm requires 'resource'")
+                                logger.warning("safety_rearm command missing 'resource'")
+
                         else:
                             logger.warning(f"Unknown command: {command}")
 
@@ -808,10 +828,15 @@ class NodeFlowRuntime:
             return 1
 
     def _make_incident_recorder(self):
-        """构建死亡记录回调（W2-4）：组装 will/witness 并落盘验尸报告"""
+        """构建死亡记录回调（W2-4 + 安全契约 2026-09-01）。
+
+        执行顺序（草案 §6）：安全处置先行（有界快照→数据面/资源动作→锁存），
+        之后组装 will/witness 并持久化；monitor 在本回调返回后才调度重启。
+        """
         def record(node_id, exit_code, stderr_tail, retry_count):
             try:
                 from edge.runtime.monitoring import incident_store
+                from edge.runtime.monitoring.safety_phase import SafetyPhase
                 from edge.sdk.health_reader import read_node_health
 
                 node = self.nodes_dict.get(node_id)
@@ -825,10 +850,28 @@ class NodeFlowRuntime:
                         manifest = None
                 output_ports = list(manifest.outputs) if manifest else []
 
-                # will：冻结 health 的摘录（节点生前证词）
-                frozen = read_node_health(node_id)
+                # ── 安全相位（先行，有界时间；无声明契约 = 空结果） ──
+                incarnation = self.launcher.get_incarnation(node_id) if self.launcher else 1
+                safety_phase = SafetyPhase(
+                    registry=self.registry,
+                    nodes_dict=self.nodes_dict,
+                    safety_resources=self.config.safety_resources if self.config else {},
+                    processes_ref=self.processes,
+                    run_id=self.run_id or "",
+                    latch=self.safety_latch,
+                )
+                actions = safety_phase.handle_crash(node_id, incarnation)
 
-                # witness：框架在检测时刻观测到的端口年龄（旁证）
+                # 覆盖前快照持久化（动作已完成，取证失败不影响安全结果）
+                for port_name, entry in (actions.get("outputs") or {}).items():
+                    preimage = entry.get("preimage")
+                    if preimage:
+                        persisted = incident_store.persist_preimage(self.run_id or "", preimage)
+                        if persisted:
+                            preimage["persisted_as"] = persisted
+
+                # ── will / witness / 隔离（原 W2-4 逻辑） ──
+                frozen = read_node_health(node_id)
                 output_ages = {
                     p.name: incident_store.buffer_write_age_ms(f"{node_id}.{p.name}")
                     for p in output_ports
@@ -842,7 +885,6 @@ class NodeFlowRuntime:
                             )
 
                 # 框架办后事（P1）：隔离死亡节点的损坏输出 buffer
-                incarnation = self.launcher.get_incarnation(node_id) if self.launcher else 1
                 quarantined = []
                 for p in output_ports:
                     dead = incident_store.inspect_and_quarantine(
@@ -863,6 +905,7 @@ class NodeFlowRuntime:
                     output_ages_ms=output_ages,
                     input_ages_ms=input_ages,
                     quarantined_buffers=quarantined,
+                    failure_policy_actions=actions,
                 )
                 path = incident_store.append_incident(record_dict)
                 logger.warning(

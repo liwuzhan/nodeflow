@@ -429,6 +429,34 @@ def create_parser() -> argparse.ArgumentParser:
         help='以 JSON 格式输出结果'
     )
 
+    # ========== safety 命令组（资源安全锁存） ==========
+    safety_parser = subparsers.add_parser(
+        'safety',
+        help='资源安全锁存',
+        description='查看 drive 等资源的安全锁存状态，人工 rearm 授权恢复运动'
+    )
+    safety_subparsers = safety_parser.add_subparsers(
+        dest='subcommand',
+        help='safety 子命令',
+        metavar='SUBCOMMAND'
+    )
+    safety_status_parser = safety_subparsers.add_parser(
+        'status',
+        help='查看锁存状态',
+        description='读取 runtime.safety 控制面 buffer，展示各资源锁存与 fault'
+    )
+    _add_json_argument(safety_status_parser)
+    safety_rearm_parser = safety_subparsers.add_parser(
+        'rearm',
+        help='人工解除锁存',
+        description='manual_then_fresh：授权后仅接受新提交，不重放锁存期命令'
+    )
+    safety_rearm_parser.add_argument(
+        'resource',
+        help='资源名（如 drive_pwm）'
+    )
+    _add_json_argument(safety_rearm_parser)
+
     # ========== task 命令 ==========
     task_parser = subparsers.add_parser(
         'task',
@@ -608,6 +636,10 @@ def main():
         elif args.command == 'status':
             from tools.cli.commands.status_cmd import handle_status_command
             exit_code = handle_status_command(args)
+            sys.exit(exit_code)
+        elif args.command == 'safety':
+            from tools.cli.commands.safety_cmd import handle_safety_command
+            exit_code = handle_safety_command(args)
             sys.exit(exit_code)
         elif args.command == 'logs':
             from tools.cli.commands.logs_cmd import handle_logs_command

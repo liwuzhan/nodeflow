@@ -38,6 +38,28 @@ ports:
         速度控制命令
         - linear_velocity: 线速度（m/s），正=前进
         - angular_velocity: 角速度（rad/s），正=CCW（逆时针）
+
+# 异常退出安全契约（2026-09-01 草案 §5.2）：死亡后框架向 velocity_cmd 写入
+# 明确的安全停止命令（safety_stop 语义，下游 pwm_driver 绕过一切补偿直接中位），
+# 并断言 drive_pwm 资源锁存。deadline_ms 待边侧停车预算冻结前保持 null
+# （真实输出模式由图级 safety_resources 绑定 + 校验门槛控制）。
+failure_policy:
+  apply_on:
+    - abnormal_exit
+  outputs:
+    velocity_cmd:
+      strategy: replace
+      value:
+        linear_velocity: 0.0
+        angular_velocity: 0.0
+        safety_stop: true
+        timestamp: "$event.wall_time"
+        status: "framework_failsafe"
+      completion:
+        resource: drive_pwm
+        require:
+          latch: asserted
+  deadline_ms: null
 params:
   max_speed:
     type: float
