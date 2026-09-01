@@ -135,6 +135,9 @@ class SafetyPhase:
         results["applied"] = True
         fault_source = f"{node_id}#{incarnation}"
 
+        # 端口声明尺寸（buffer 缺失时按此新建，§3.4）
+        port_sizes = {p.name: p.buffer_size for p in manifest.outputs} if manifest else {}
+
         # ── 数据面处置（先有界快照，后覆盖） ─────────────────────
         for port_name, out_policy in policy.outputs.items():
             buffer_name = f"{node_id}.{port_name}"
@@ -144,17 +147,18 @@ class SafetyPhase:
                 entry["preimage"] = self._snapshot_preimage(buffer_name)
                 entry["write"] = self._write_safe_value(
                     buffer_name, out_policy.value, node_id=node_id, run_id=self.run_id,
+                    fallback_size=port_sizes.get(port_name),
                 )
-                # completion → 资源锁存断言（§5.2）
+                # completion → 资源锁存断言（§5.2）；锁存故障不得连累数据面结果
                 completion = out_policy.completion or {}
                 res = completion.get("resource")
                 if res:
-                    self.latch.assert_fault(
+                    ok = self._safe_assert_latch(
                         res, fault_source,
                         detail={"trigger": f"{buffer_name}.replace", "run_id": self.run_id},
                     )
                     entry["completion_resource"] = res
-                    results["latch"][res] = "asserted"
+                    results["latch"][res] = "asserted" if ok else "assert_failed"
             elif out_policy.strategy == "invalidate":
                 # typed invalidate 语义未定义（§5.3）：首期不写数据面，只记录
                 entry["note"] = "invalidate semantics pending downstream contract; no data-plane write"
@@ -173,6 +177,15 @@ class SafetyPhase:
 
         results["fault_source"] = fault_source
         return results
+
+    def _safe_assert_latch(self, resource: str, fault_source: str, detail: Optional[Dict] = None):
+        """锁存断言的失败隔离：控制面故障只记录，不影响数据面处置结果"""
+        try:
+            self.latch.assert_fault(resource, fault_source, detail=detail)
+            return True
+        except Exception as e:
+            logger.error(f"Safety latch assert failed for '{resource}': {e}")
+            return False
 
     # ── 数据面 ──────────────────────────────────────────────────
 
@@ -208,8 +221,14 @@ class SafetyPhase:
                     pass
 
     def _write_safe_value(self, buffer_name: str, value: Optional[Dict[str, Any]],
-                          node_id: str, run_id: str) -> Dict[str, Any]:
-        """旧 writer 已确认死亡后，框架临时接管写入安全 payload（create=False）"""
+                          node_id: str, run_id: str,
+                          fallback_size: Optional[int] = None) -> Dict[str, Any]:
+        """旧 writer 已确认死亡后，框架临时接管写入安全 payload。
+
+        - buffer 存在：create=False 打开（绝不重建清零完好文件）
+        - buffer 不存在（节点首次写出前即崩溃）：按 manifest 声明尺寸新建后写入，
+          保证下游仍能收到声明的安全态（§3.4 允许的两种新建场景之一）
+        """
         if not isinstance(value, dict):
             return {"result": "failed", "error": "replace strategy requires a value mapping"}
         try:
@@ -218,7 +237,16 @@ class SafetyPhase:
             resolved = resolve_event_fields(
                 value, wall_time=time.time(), node_id=node_id, run_id=run_id,
             )
-            buf = SharedBufferLite(buffer_name, create=False)
+            try:
+                buf = SharedBufferLite(buffer_name, create=False)
+            except FileNotFoundError:
+                if fallback_size is None:
+                    raise
+                buf = SharedBufferLite(buffer_name, size=fallback_size, create=True)
+                logger.warning(
+                    f"Buffer '{buffer_name}' absent at crash (node died before first "
+                    f"output); created at declared size {fallback_size} for failsafe write"
+                )
             try:
                 seq = buf.write(resolved)
             finally:
@@ -239,11 +267,12 @@ class SafetyPhase:
             # 未绑定：无法触达设备接口；仍断言锁存（保守方向）并记录
             entry["level"] = "unbound"
             entry["note"] = "no safety_resources binding; executor not run"
-            self.latch.assert_fault(
-                res_name, fault_source,
-                detail={"trigger": "resource_action", "run_id": self.run_id},
+            entry["latch"] = (
+                "asserted" if self._safe_assert_latch(
+                    res_name, fault_source,
+                    detail={"trigger": "resource_action", "run_id": self.run_id},
+                ) else "assert_failed"
             )
-            entry["latch"] = "asserted"
             return entry
 
         owner_alive = (
@@ -254,11 +283,12 @@ class SafetyPhase:
             # 硬件写前检查锁存并拒绝非零命令；executor 不得与活 owner 并写 sysfs
             entry["level"] = "latch_only"
             entry["note"] = f"owner '{binding.owner}' alive; executor skipped (P4 单写者)"
-            self.latch.assert_fault(
-                res_name, fault_source,
-                detail={"trigger": "owner_alive_latch", "run_id": self.run_id},
+            entry["latch"] = (
+                "asserted" if self._safe_assert_latch(
+                    res_name, fault_source,
+                    detail={"trigger": "owner_alive_latch", "run_id": self.run_id},
+                ) else "assert_failed"
             )
-            entry["latch"] = "asserted"
             return entry
 
         # §5.4 路径二：owner 即死亡节点 → 进程已确认退出（monitor 前提），
@@ -282,9 +312,10 @@ class SafetyPhase:
                 entry["level"] = "failed"
                 entry["error"] = f"handler '{binding.handler}' not implemented"
 
-        self.latch.assert_fault(
-            res_name, fault_source,
-            detail={"trigger": "owner_dead_executor", "run_id": self.run_id},
+        entry["latch"] = (
+            "asserted" if self._safe_assert_latch(
+                res_name, fault_source,
+                detail={"trigger": "owner_dead_executor", "run_id": self.run_id},
+            ) else "assert_failed"
         )
-        entry["latch"] = "asserted"
         return entry

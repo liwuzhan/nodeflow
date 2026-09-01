@@ -852,15 +852,20 @@ class NodeFlowRuntime:
 
                 # ── 安全相位（先行，有界时间；无声明契约 = 空结果） ──
                 incarnation = self.launcher.get_incarnation(node_id) if self.launcher else 1
-                safety_phase = SafetyPhase(
-                    registry=self.registry,
-                    nodes_dict=self.nodes_dict,
-                    safety_resources=self.config.safety_resources if self.config else {},
-                    processes_ref=self.processes,
-                    run_id=self.run_id or "",
-                    latch=self.safety_latch,
-                )
-                actions = safety_phase.handle_crash(node_id, incarnation)
+                try:
+                    safety_phase = SafetyPhase(
+                        registry=self.registry,
+                        nodes_dict=self.nodes_dict,
+                        safety_resources=self.config.safety_resources if self.config else {},
+                        processes_ref=self.processes,
+                        run_id=self.run_id or "",
+                        latch=self.safety_latch,
+                    )
+                    actions = safety_phase.handle_crash(node_id, incarnation)
+                except Exception:
+                    # 安全相位的任何缺陷不得连累死亡记录本身
+                    logger.exception(f"Safety phase failed for '{node_id}' (incident continues)")
+                    actions = {"applied": False, "error": "safety_phase_exception"}
 
                 # 覆盖前快照持久化（动作已完成，取证失败不影响安全结果）
                 for port_name, entry in (actions.get("outputs") or {}).items():

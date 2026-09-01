@@ -312,13 +312,81 @@ class TestDataPlaneFailsafe:
         snapshot = phase.latch.read()
         assert snapshot["resources"]["drive_pwm"]["latched"] is True
 
-    def test_replace_never_recreates_buffer(self):
-        """buffer 不存在时 replace 失败记录在案，不得 create=True 重建"""
+    def test_crash_before_first_output_creates_buffer(self):
+        """节点首次输出前即崩溃（buffer 不存在）：按声明尺寸新建并写入安全值（§3.4）"""
         phase = _make_phase(self._controller_policy())
         results = phase.handle_crash("controller", incarnation=1)
+
         entry = results["outputs"]["velocity_cmd"]
-        assert entry["write"]["result"] == "failed"
-        assert not (Path(constants.get_buffers_dir()) / "controller.velocity_cmd.buf").exists()
+        assert entry["write"]["result"] == "written"
+        assert entry["preimage"].get("error") or entry["preimage"].get("payload") is None
+
+        buf = SharedBufferLite("controller.velocity_cmd", create=False)
+        data = buf.read()
+        size = buf.size
+        buf.close()
+        assert data["safety_stop"] is True
+        assert size == 1024 * 1024, "新建池必须用 manifest 声明尺寸"
+
+    def test_downstream_receives_framework_safe_value(self):
+        """端到端数据面：下游 InputPort 在生产者死亡后收到框架代写的安全值"""
+        out = OutputPort(name="velocity_cmd", buffer_name="controller.velocity_cmd")
+        out.send({"linear_velocity": 1.5})
+        down = InputPort(name="velocity_cmd", buffer_name="controller.velocity_cmd")
+        assert down.recv_latest() == {"linear_velocity": 1.5}  # 正常消费一帧
+
+        # 生产者死亡 → 框架代写
+        results = _make_phase(self._controller_policy()).handle_crash("controller", 1)
+        assert results["outputs"]["velocity_cmd"]["write"]["result"] == "written"
+
+        data = down.recv_latest()
+        assert data is not None, "下游必须能收到框架代写的安全值"
+        assert data["safety_stop"] is True
+        assert data["linear_velocity"] == 0.0
+        out.close()
+        down.close()
+
+    def test_corrupt_buffer_still_replaced(self):
+        """buffer header 撕裂（死亡瞬间半写）→ replace 仍能写入且下游可读"""
+        import struct as _struct
+
+        out = OutputPort(name="velocity_cmd", buffer_name="controller.velocity_cmd")
+        out.send({"linear_velocity": 1.0})
+        # 写坏 header：length 越界
+        with open(out.buffer.buffer_path, "r+b") as f:
+            import mmap as _mmap
+            with _mmap.mmap(f.fileno(), 0) as m:
+                m[4:8] = _struct.pack('<I', 10 ** 9)
+        out.close()
+
+        phase = _make_phase(self._controller_policy())
+        results = phase.handle_crash("controller", 1)
+        assert results["outputs"]["velocity_cmd"]["write"]["result"] == "written"
+
+        buf = SharedBufferLite("controller.velocity_cmd", create=False)
+        data = buf.read()
+        buf.close()
+        assert data is not None and data["safety_stop"] is True
+
+    def test_latch_failure_does_not_break_replace(self, monkeypatch):
+        """锁存等控制面故障不得连累数据面写入"""
+        from edge.runtime.monitoring.safety_phase import SafetyLatch
+
+        def broken_assert(self, resource, fault_source, detail=None):
+            raise OSError("control plane down")
+
+        monkeypatch.setattr(SafetyLatch, "assert_fault", broken_assert)
+
+        out = OutputPort(name="velocity_cmd", buffer_name="controller.velocity_cmd")
+        out.send({"linear_velocity": 1.0})
+        out.close()
+
+        phase = _make_phase(self._controller_policy())
+        results = phase.handle_crash("controller", 1)
+
+        entry = results["outputs"]["velocity_cmd"]
+        assert entry["write"]["result"] == "written", "锁存故障时 replace 必须照常完成"
+        assert results["latch"].get("drive_pwm") in (None, "assert_failed")
 
     def test_forensics_failure_does_not_cancel_safety_actions(self, monkeypatch, tmp_path):
         """§10.1：incident 目录不可写时安全动作仍被调度"""
