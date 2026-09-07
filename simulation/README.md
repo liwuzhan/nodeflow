@@ -1,151 +1,101 @@
-# NodeFlow 仿真器
+# NodeFlow 农田仿真器
 
-农田机器人物理仿真系统
+`simulation/` 是独立的 2D 农田机器人仿真服务。它模拟地块、差速/履带车辆运动、打滑与地形扰动，以及 GPS、RTK、IMU 和里程计；NodeFlow 通过 `sensing/sim_output` 与 `io/sim_input` 两个节点桥接。
 
-## 📁 目录结构
+纯 RTK 直线摆动的对照实验、覆盖评价及本轮修改见 [仿真闭环与纯 RTK 复现实验](../docs/SIMULATION_RTK_EXPERIMENTS.md)。
 
-```
-simulator/
-├── server.py              # 仿真器主服务（ZMQ服务器）
-├── physics.py             # 运动学引擎（差速驱动+打滑+地形噪声）
-├── sensors.py             # 传感器模拟（GPS/RTK/IMU/里程计）
-├── state.py               # 机器人状态定义
-├── field_generator.py     # 田地生成器（矩形/不规则）
-├── config.yaml            # 配置文件
-├── example_usage.py       # 使用示例
-│
-├── docs/                  # 📚 文档
-│   ├── README.md          # 主文档
-│   ├── QUICKSTART.md      # 快速启动指南
-│   ├── INTEGRATION_GUIDE.md
-│   ├── NODEFLOW_INTEGRATION.md
-│   └── ...
-│
-├── tests/                 # 🧪 测试
-│   ├── test_core.py       # 核心功能测试
-│   ├── test_integration.py
-│   ├── run_tests.sh       # 测试脚本
-│   └── ...
-│
-└── utils/                 # 🛠️ 工具模块
-    ├── coordinates.py     # 坐标系转换
-    ├── random_parcel_generator.py  # 随机地块生成
-    └── __init__.py
+大半径隔行回转、现成螺旋候选和整田跟踪实验见 [连续旋耕规划器](../docs/CONTINUOUS_TILLAGE_PLANNERS.md)。
+
+## 目录
+
+```text
+simulation/
+├── server.py              # ZMQ REQ/REP 服务与仿真循环
+├── physics.py             # 运动学、打滑和地形噪声
+├── sensors.py             # GPS / RTK / IMU / odometry
+├── state.py               # 车辆状态与有限历史
+├── field_generator.py     # 地块、障碍物与孔洞生成
+├── evaluation.py          # 机具扫掠与累计覆盖评价
+├── rtk_experiment.py      # 复用节点算法的直线闭环实验
+├── experiments/           # 无扰动、噪声、延迟与响应滞后对照
+├── config.yaml            # 当前默认参数
+├── example_usage.py       # 客户端示例
+├── docs/                  # 详细协议和专题说明
+├── tests/                 # 独立仿真测试
+└── utils/                 # 坐标和随机地块工具
 ```
 
-## 🚀 快速启动
+## 启动
 
-### 1. 启动仿真器
+从仓库根目录：
 
 ```bash
-python3 server.py
+python3 simulation/server.py
+
+# 可选
+python3 simulation/server.py --config path/to/config.yaml
+python3 simulation/server.py --port 5556 --dt 0.02
+python3 simulation/server.py --no-realtime
 ```
 
-### 2. 使用示例
+服务默认监听 ZMQ 5555。当前 `config.yaml` 使用 10 ms 物理步长和 50 Hz RTK；配置文件中的值优先于文档示例。
+
+无界面、可重复实验：
 
 ```bash
-python3 example_usage.py
+python3 -m pip install -r simulation/requirements.txt
+python3 -m simulation.rtk_experiment --output /tmp/nodeflow-rtk-experiment
 ```
 
-### 3. 运行测试
+多进程闭环保持实时模式。`--no-realtime` 不会同步加速其他节点；固定时间步实验使用上述单进程入口。
+
+启动 NodeFlow 规划闭环：
 
 ```bash
-cd tests
-bash run_tests.sh
+# 终端 1
+python3 simulation/server.py
+
+# 终端 2，仓库根目录
+python3 -m edge.runtime.main configs/graphs/planning_simulation.yaml
 ```
 
-## 📖 详细文档
+## API
 
-请查看 `docs/` 目录：
+请求和响应使用 JSON：
 
-- **README.md** - 完整功能说明
-- **QUICKSTART.md** - 快速启动指南
-- **NODEFLOW_INTEGRATION.md** - NodeFlow 集成说明
+| 请求 `type` | 行为 |
+|---|---|
+| `get_field` | 获取地块边界、孔洞、入口和版本 |
+| `get_sensor` | 获取 `gps`、`rtk_gps`、`imu` 或 `odometry` |
+| `set_actuator` | 写 `velocity`、`motor` 或 `implement` 控制 |
+| `get_state` | 获取完整车辆/仿真状态 |
+| `reset` | 保留当前地块，清除车辆、命令、机具、采样队列和历史 |
 
-## 🔧 配置
-
-编辑 `config.yaml` 修改仿真参数：
-
-```yaml
-# 田地配置
-field:
-  type: rectangular
-  width: 100.0
-  length: 200.0
-
-# 运动学配置
-kinematics:
-  max_speed: 2.0
-  slip:
-    enabled: true
-    ratio: 0.05
+```json
+{
+  "type": "set_actuator",
+  "actuator": "velocity",
+  "data": {
+    "linear_velocity": 1.0,
+    "angular_velocity": 0.1
+  }
+}
 ```
 
-## 📡 API
+更完整的字段说明见 [docs/INTEGRATION_GUIDE.md](docs/INTEGRATION_GUIDE.md) 和 [docs/README.md](docs/README.md)。
 
-仿真器提供 ZMQ REQ/REP 协议：
-
-- `get_sensor` - 获取传感器数据（gps/rtk_gps/imu/odometry）
-- `set_actuator` - 设置执行器（motor/velocity）
-- `get_field` - 获取田地信息
-- `get_state` - 获取完整状态
-- `reset` - 重置仿真
-
-详见 `docs/INTEGRATION_GUIDE.md`
-
-## 🛠️ 工具
-
-### 坐标转换
-
-```python
-from utils.coordinates import CoordinateConverter
-
-converter = CoordinateConverter(ref_lon=121.5, ref_lat=31.2)
-lon, lat = converter.meter_to_gps(100, 200)  # 米 → GPS
-x, y = converter.gps_to_meter(121.5, 31.2)   # GPS → 米
-```
-
-### 随机地块生成
-
-```python
-from utils.random_parcel_generator import RandomParcelGenerator
-
-generator = RandomParcelGenerator(base_lon=121.5, base_lat=31.2)
-generator.generate_parcel_file("output.txt", num_outer_points=6)
-```
-
-## 📦 NodeFlow 集成
-
-仿真器已完全集成到 NodeFlow 系统：
-
-- **sim_output** - 仿真器输出节点（传感器+地块）
-- **sim_input** - 仿真器输入节点（控制命令）
-
-详见 `examples/planning_simulation.yaml`
-
-## 🧪 测试
-
-运行所有测试：
+## 测试
 
 ```bash
-cd tests && bash run_tests.sh
+python3 -m pytest tests/unit/test_simulation_*.py -q
 ```
 
-单独测试：
+新回归在仓库 `tests/unit` 中。旧 `simulation/tests/run_tests.sh` 会占用并清理 5555 端口，不应与正在进行的仿真会话并行执行；默认 pytest 仍排除该历史目录。
 
-```bash
-python3 tests/test_core.py
-python3 tests/test_integration.py
-```
+## 边界
 
-## 📊 性能
+- 仿真器是功能和回归验证工具，不是精确的土壤、液压、履带接地或 GNSS 射频模型。
+- 随机噪声、地块和初始位姿由配置与随机种子控制。
+- 仿真成功不代表实机速度、转角、PWM、急停或机具时序已经安全标定。
 
-- 内部仿真频率: 100 Hz
-- RTK GPS 输出: 20 Hz
-- 普通 GPS: 无限制
-- IMU: 无限制
-- 实时模式 / 加速模式
-
-## 🤝 贡献
-
-欢迎提交 Issue 和 Pull Request
+系统级说明见 [仿真、CLI 与开发工具](../docs/SIMULATION_AND_TOOLS.md)。

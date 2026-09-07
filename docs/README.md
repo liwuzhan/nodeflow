@@ -1,176 +1,51 @@
-# 文档目录
+# NodeFlow 文档索引
 
-NodeFlow农业机器人仿真系统的完整文档。
+本页区分“当前入口文档”“专题说明”和“历史材料”。判断当前系统行为时，优先阅读根 [README](../README.md)、本页列出的当前入口文档以及对应源码；带日期的评审、计划和复盘只代表其生成时的快照。
 
-## 📖 当前文档
+## 当前入口文档
 
-### ⭐ SDK文档（新增）
+| 文档 | 回答的问题 |
+|---|---|
+| [系统架构](ARCHITECTURE.md) | NodeFlow 由哪些子系统组成？数据面、控制面和部署边界是什么？ |
+| [运行时、SDK 与可靠性](RUNTIME_SDK_AND_RELIABILITY.md) | 图如何启动？节点如何开发？崩溃、重启、断流和死亡记录如何处理？ |
+| [节点与预置图目录](NODES_AND_GRAPHS.md) | 当前有哪些节点和可运行配置？它们分别做什么？ |
+| [云边任务系统](CLOUD_EDGE_TASKS.md) | Cloud、MQTT、Edge Agent 和 Runtime 如何协作？部署限制是什么？ |
+| [仿真、CLI 与开发工具](SIMULATION_AND_TOOLS.md) | 如何运行仿真和诊断命令？编辑器、GUI、Monitor、MCP 的定位是什么？ |
+| [仿真闭环与纯 RTK 复现实验](SIMULATION_RTK_EXPERIMENTS.md) | 如何区分 RTK 抖动与真实画龙，比较延迟/车辆响应，并评价机具实际覆盖？ |
+| [连续旋耕规划器](CONTINUOUS_TILLAGE_PLANNERS.md) | 如何连续落机具大半径回转？现成螺旋候选的限制和整田验证结果是什么？ |
+| [主体大回转与沿边补作业](HYBRID_BOUNDARY_COVERAGE.md) | 如何组合主体与补边规划，调整覆盖目标并执行抬机具转场？ |
+| [测试说明](../tests/README.md) | 当前测试如何收集、运行，CI 覆盖到哪里？ |
 
-**NodeFlow SDK 开发指南**
+## 仍有效的专题文档
 
-- **[SDK快速入门](SDK_GETTING_STARTED.md)** ⭐ 从这里开始
-  - 10分钟上手NodeFlow SDK
-  - 最小节点示例、工作流程、常见模式
+- [节点开发指南](NODEFLOW_NODE_GUIDE.md)
+- [节点依赖管理](NODE_DEPENDENCIES.md)
+- [结构化日志](STRUCTURED_LOGGING_GUIDE.md) 与 [日志速查](LOGS_CHEATSHEET.md)
+- [守护模式](DAEMON_MODE_GUIDE.md) 与 [多轮运行](MULTI_LOOP_GUIDE.md)
+- [边缘调试指南](EDGE_DEBUG_GUIDE.md)
+- [云端开发](../cloud/docs/DEVELOPMENT.md)、[前端指南](../cloud/docs/FRONTEND_GUIDE.md) 与 [云边集成](../cloud/doc/CLOUD_INTEGRATION.md)
+- [仿真文档索引](../simulation/docs/README.md)
+- [田间测试计划](FIELD_TEST_PLAN.md)
 
-- **[SDK API参考](SDK_API_REFERENCE.md)**
-  - 完整的API文档（NodeFlowSDK、InputPort、OutputPort、StructuredLogger）
-  - 所有类、方法、参数详解
+专题文档可能包含特定阶段的参数或命令。若与当前入口文档、`setup.py`、`tools/run_tests.sh`、实际 CLI `--help` 或源码冲突，以后者为准。
 
-- **[SDK最佳实践](SDK_BEST_PRACTICES.md)**
-  - 架构设计模式（分离关注点、可配置化处理、状态机）
-  - 性能优化技巧（轮询、批量处理、缓冲区调优）
-  - 错误处理、测试、常见陷阱
+## 设计、审查和实施记录
 
-- **[SDK快速参考](SDK_QUICK_REFERENCE.md)** ⚡ 速查表
-  - 一页纸快速查询常用API
-  - 常用模式、故障排查
+以下文档用于理解决策背景，不作为当前 API 或目录结构的唯一依据：
 
-- **[SDK文档索引](SDK_INDEX.md)**
-  - 完整的文档导航和学习路径
-  - 按场景查询、快速定位
+- `PROJECT_*`、`SESSION_*`、`*_REPORT*`、`*_PLAN*` 等带日期文档
+- CORDIS 调研、死亡治理和最小改造计划
+- 控制算法、前瞻点、掉头、轨迹与车辆停止问题的专题分析
+- `docs/评审报告/` 中的外部模型或阶段性评审
 
-- **[结构化日志系统](STRUCTURED_LOGGING_GUIDE.md)**
-  - JSON格式日志 + 实时控制台输出
-  - CLI工具使用（nodeflow logs）
-  - 日志查询、过滤、聚合
+已被替代的资料位于 `docs/old/` 和 `docs/archive/`。迁移后的目录归属见根目录 [DISPOSITION.md](../DISPOSITION.md)。
 
-- **[日志快速参考](LOGS_CHEATSHEET.md)** ⚡ 日志速查
-  - 日志API、CLI命令、场景速查
+## 文档维护规则
 
-### 开发规范
+1. 根 README 只保留入口、边界、快速运行和导航，不在其中复制完整 API。
+2. 运行接口、目录或默认值变化时，同步修改对应的当前入口文档。
+3. 节点接口以节点目录中的 `node.yaml` 为事实源；预置图以 `configs/graphs/` 为事实源。
+4. 测试状态只引用可重复的命令和 CI 范围，不长期固化易失真的“通过数量”。
+5. 阶段性评审保留日期和所审提交，避免把历史判断写成当前保证。
 
-- **[节点开发规范.md](../node-hub/doc/节点开发规范.md)**
-  - NodeFlow节点开发的标准和最佳实践
-  - 包含节点结构、配置、测试等规范
-
-### 测试和质量
-
-- **[AUTO_TEST_SETUP.md](old/AUTO_TEST_SETUP.md)**
-  - 自动化测试环境配置指南
-  - 包含pre-commit hooks和CI/CD设置
-
-- **[TESTING_FRAMEWORK_COMPLETE.md](old/TESTING_FRAMEWORK_COMPLETE.md)**
-  - 完整的测试框架文档
-  - 核心测试、集成测试、性能测试
-
-- **[CODE_REVIEW_REPORT_COMPREHENSIVE.md](old/CODE_REVIEW_REPORT_COMPREHENSIVE.md)**
-  - 最新的综合代码审查报告
-  - 包含代码质量评估和改进建议
-
-### 仿真系统
-
-- **[FARM_SIMULATION_DESIGN.md](old/FARM_SIMULATION_DESIGN.md)**
-  - 农田仿真系统设计文档
-  - 包含RTK噪声、田地生成、覆盖可视化
-
-- **[SIMULATOR_GUIDE.md](../simulator/docs/SIMULATOR_GUIDE.md)**
-  - 仿真器使用指南
-  - API文档、配置说明、使用示例
-
-## 📦 其他文档位置
-
-### 仿真器详细文档
-
-位于 `simulator/docs/` 目录：
-
-- **INTEGRATION_GUIDE.md** - NodeFlow集成完整指南
-- **NODEFLOW_INTEGRATION.md** - 技术架构文档
-- **TEST_300M_WITH_LOGGER.md** - 300米测试指南
-- **TERRAIN_NOISE.md** - 地面不平噪声模型文档
-- **QUICKSTART.md** - 仿真器快速开始
-- **TESTING.md** - 仿真器测试指南
-
-### 节点文档
-
-每个节点都有独立的文档文件夹 `doc/` 或 README：
-
-- `node-hub/sim_rtk/README.md` - RTK GPS节点
-- `node-hub/sim_velocity/README.md` - 速度控制节点
-- `node-hub/velocity_controller/README.md` - 纯追踪控制器
-- 等等...
-
-## 🗄️ 过时文档
-
-历史文档已归档到 **[old/](./old/)** 文件夹，仅供参考。
-
-包括：
-- 早期设计文档
-- DORA相关文档（已迁移到NodeFlow）
-- 已被替代的文档
-
-查看 **[old/README.md](old/README.md)** 了解详情。
-
-## 📚 文档索引
-
-### 快速导航
-
-| 需求 | 文档 |
-|------|------|
-| **我想写一个节点** | [SDK快速入门](SDK_GETTING_STARTED.md) ⭐ |
-| **查找SDK API** | [SDK API参考](SDK_API_REFERENCE.md) 或 [快速参考](SDK_QUICK_REFERENCE.md) ⚡ |
-| **优化节点性能** | [SDK最佳实践](SDK_BEST_PRACTICES.md) |
-| **Debug节点问题** | [结构化日志系统](STRUCTURED_LOGGING_GUIDE.md) |
-| **开始使用仿真器** | [simulator/QUICKSTART.md](../simulator/docs/QUICKSTART.md) |
-| **开发节点规范** | [节点开发规范.md](../node-hub/doc/节点开发规范.md) |
-| **配置自动化测试** | [AUTO_TEST_SETUP.md](old/AUTO_TEST_SETUP.md) |
-| **了解仿真系统** | [FARM_SIMULATION_DESIGN.md](old/FARM_SIMULATION_DESIGN.md) |
-| **使用Logger测试** | [simulator/TEST_300M_WITH_LOGGER.md](../simulator/docs/TEST_300M_WITH_LOGGER.md) |
-| **集成NodeFlow** | [simulator/INTEGRATION_GUIDE.md](../simulator/docs/INTEGRATION_GUIDE.md) |
-
-### 按主题分类
-
-#### 🚀 SDK 入门
-- ⭐ [SDK快速入门](SDK_GETTING_STARTED.md) - 10分钟上手
-- ⚡ [SDK快速参考](SDK_QUICK_REFERENCE.md) - 速查表
-- [SDK文档索引](SDK_INDEX.md) - 完整导航
-
-#### 💻 SDK 开发
-- [SDK API参考](SDK_API_REFERENCE.md) - 完整API文档
-- [SDK最佳实践](SDK_BEST_PRACTICES.md) - 设计模式、性能优化
-- [结构化日志系统](STRUCTURED_LOGGING_GUIDE.md) - 日志和调试
-
-#### 🚀 仿真器入门
-- [simulator/QUICKSTART.md](../simulator/docs/QUICKSTART.md) - 5分钟快速开始
-- [simulator/INTEGRATION_GUIDE.md](../simulator/docs/INTEGRATION_GUIDE.md) - 完整集成指南
-
-#### 🏗️ 节点开发
-- [节点开发规范.md](../node-hub/doc/节点开发规范.md) - 节点开发标准
-- [simulator/NODEFLOW_INTEGRATION.md](../simulator/docs/NODEFLOW_INTEGRATION.md) - 架构设计
-
-#### 🧪 测试
-- [AUTO_TEST_SETUP.md](old/AUTO_TEST_SETUP.md) - 自动化测试配置
-- [TESTING_FRAMEWORK_COMPLETE.md](old/TESTING_FRAMEWORK_COMPLETE.md) - 测试框架
-- [simulator/TEST_300M_WITH_LOGGER.md](../simulator/docs/TEST_300M_WITH_LOGGER.md) - 集成测试
-
-#### 📊 仿真
-- [FARM_SIMULATION_DESIGN.md](old/FARM_SIMULATION_DESIGN.md) - 仿真系统设计
-- [SIMULATOR_GUIDE.md](../simulator/docs/SIMULATOR_GUIDE.md) - 仿真器指南
-- [simulator/TERRAIN_NOISE.md](../simulator/docs/TERRAIN_NOISE.md) - 地面噪声模型
-
-#### ✅ 质量
-- [CODE_REVIEW_REPORT_COMPREHENSIVE.md](old/CODE_REVIEW_REPORT_COMPREHENSIVE.md) - 代码审查
-
-## 📝 文档维护
-
-### 更新文档
-
-如需更新文档，请遵循以下原则：
-
-1. **保持最新**: 代码变更时同步更新相关文档
-2. **清晰简洁**: 使用清晰的标题和示例
-3. **版本标记**: 重要变更记录版本号和日期
-4. **归档旧版**: 过时文档移到 `old/` 文件夹
-
-### 添加新文档
-
-新文档应放置在合适的位置：
-
-- **通用文档** → `docs/`
-- **仿真器文档** → `simulator/docs/`
-- **节点文档** → `node-hub/[节点名]/doc/`
-- **过时文档** → `docs/old/`
-
----
-
-**最后更新**: 2025-12-31
-**文档数量**: 13个SDK/日志文档 + 6个框架文档 + 13个归档文档
+最后按仓库当前结构复核：2026-08-29。

@@ -1,258 +1,108 @@
-# 测试文件组织说明
+# NodeFlow 测试说明
 
-## 📁 目录结构
+仓库级 pytest 配置在 [pytest.ini](../pytest.ini)，权威入口是 [tools/run_tests.sh](../tools/run_tests.sh)。不要通过遍历所有 `test_*.py` 并逐个直接执行来替代 pytest 收集。
 
-```
-tests/
-├── mcp/                    # MCP 服务相关测试（主要）
-│   ├── test_mcp_functionality.py      # MCP 功能测试
-│   ├── test_error_responses.py        # 错误处理测试
-│   └── test_mcp_workflow.py           # AI 工作流程测试
-│
-├── integration/            # 集成和性能测试
-│   ├── test_end_to_end.py             # 端到端集成测试
-│   ├── test_300m_with_logger.py       # 长距离测试
-│   ├── test_with_logger.py            # 日志集成测试
-│   └── test_msgpack_performance.py    # 性能测试
-│
-├── legacy/                 # 历史遗留测试（存档）
-│   ├── test_milestone2.py
-│   ├── test_milestone3.py
-│   ├── test_milestone4.py
-│   ├── test_milestone5.py
-│   ├── test_inputport_reconnect.py
-│   └── test_manual.py
-│
-├── fixtures/               # 测试数据和 fixtures（预留）
-├── unit/                   # 单元测试（预留）
-└── README.md              # 本文件
-```
+## 快速命令
 
-## 🚀 运行测试
-
-### 前提条件
+从仓库根目录运行：
 
 ```bash
-# 确保在项目根目录
-cd /Users/wuzhanli/Desktop/node
+python -m pip install -r requirements.txt
+python -m pip install -r cloud/server/requirements.txt
 
-# 确保 Python 3.12 已安装
-python3.12 --version
+./tools/run_tests.sh collect
+./tools/run_tests.sh quick
+./tools/run_tests.sh full
+./tools/run_tests.sh preflight
 ```
 
-### MCP 服务测试（推荐）
+| 模式 | 实际范围 |
+|---|---|
+| `collect` | 使用 `pytest.ini` 执行 `pytest --collect-only` |
+| `quick` | `tests/unit` + `cloud/server/tests`；当前 CI 使用此模式 |
+| `full` | `pytest.ini` 的全部默认收集范围 |
+| `preflight` | `python3 -m tools.preflight_runtime`，检查本地运行前提 |
 
-运行单个测试：
-```bash
-# 功能测试
-python3.12 tests/mcp/test_mcp_functionality.py
+## 默认收集范围
 
-# 错误处理测试
-python3.12 tests/mcp/test_error_responses.py
+`pytest.ini` 当前包含：
 
-# 完整工作流测试
-python3.12 tests/mcp/test_mcp_workflow.py
-```
+- `tests/unit/`：Runtime、SDK/IPC、CLI、协议、任务资产和关键节点逻辑；
+- `tests/integration/`：编排、端口、规划控制闭环、日志与可视化集成；
+- `tests/smoke/`：Runtime 预检；
+- `cloud/server/tests/`：Cloud API、规划、调度、坐标系和文件；
+- `edge/nodes/`：节点目录内符合 pytest 规则的测试。
 
-运行所有 MCP 测试：
-```bash
-python3.12 tests/mcp/test_mcp_functionality.py && \
-python3.12 tests/mcp/test_error_responses.py && \
-python3.12 tests/mcp/test_mcp_workflow.py
-```
+当前默认排除：
 
-### 集成测试
+- `tests/legacy/` 和 `tests/mcp/`；
+- `simulation/` 独立测试；
+- `tools/editor/`、`tools/cli/` 下的自带测试；
+- 文档、脚本、配置、前端构建产物等目录。
 
-```bash
-# 端到端测试
-python3.12 tests/integration/test_end_to_end.py
+`tests/` 根目录中遗留的独立测试文件也不属于当前 `testpaths`。需要它们时应明确指定文件，并先判断其路径和假设是否仍适用。
 
-# 性能测试
-python3.12 tests/integration/test_msgpack_performance.py
+## CI 范围
 
-# 其他集成测试
-python3.12 tests/integration/test_300m_with_logger.py
-python3.12 tests/integration/test_with_logger.py
-```
+[GitHub Actions](../.github/workflows/test.yml) 在以下矩阵运行：
 
-### 历史测试（可选）
+- Ubuntu latest / macOS latest；
+- Python 3.12；
+- 安装根依赖和 Cloud server 依赖；
+- 先收集 `tests/unit`，再执行 `./tools/run_tests.sh quick`。
 
-这些是之前的 milestone 测试，保留用于参考：
+因此 CI 通过只表示 unit 与 Cloud server 快速集通过，不代表以下内容已验证：
 
-```bash
-python3.12 tests/legacy/test_milestone2.py
-python3.12 tests/legacy/test_milestone3.py
-# 等等...
-```
+- 完整 integration/smoke；
+- 仿真服务端到端测试；
+- MQTT broker 与真实 Edge Agent 链路；
+- Web 前端 TypeScript 构建；
+- 串口、PWM、网络 RTK 和真实执行器；
+- MCP 或 Tk GUI。
 
-## 📊 测试覆盖范围
-
-| 测试文件 | 覆盖范围 | 耗时 | 状态 |
-|---------|---------|------|------|
-| test_mcp_functionality.py | 基础功能（5 个） | ~5s | ✅ |
-| test_error_responses.py | 错误处理（7 个） | ~3s | ✅ |
-| test_mcp_workflow.py | 完整工作流（5 个） | ~20s | ✅ |
-| test_end_to_end.py | 端到端集成 | ~10s | ✅ |
-
-## 🔧 路径管理
-
-所有测试都配置了动态路径支持：
-
-```python
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-```
-
-这意味着：
-- ✅ 无需手动设置 PYTHONPATH
-- ✅ 可以从项目任何位置运行
-- ✅ 自动指向项目根目录
-- ✅ 能正确导入 `runtime_manager`, `mcp_server` 等模块
-
-## 💡 最佳实践
-
-### 日常使用
-
-快速验证 MCP 服务：
-```bash
-# 只需运行功能测试
-python3.12 tests/mcp/test_mcp_functionality.py
-```
-
-完整验证：
-```bash
-# 运行所有 MCP 测试
-for test in tests/mcp/test_*.py; do
-    echo "Running $test..."
-    python3.12 "$test" || exit 1
-done
-```
-
-### 自动化脚本
-
-创建 `run_tests.sh`：
+## 按子系统运行
 
 ```bash
-#!/bin/bash
-set -e
+# 单个测试文件或测试函数
+python -m pytest -q tests/unit/test_node_monitor.py
+python -m pytest -q tests/unit/test_node_monitor.py::test_name
 
-echo "🧪 运行 MCP 测试..."
-python3.12 tests/mcp/test_mcp_functionality.py
-python3.12 tests/mcp/test_error_responses.py
-python3.12 tests/mcp/test_mcp_workflow.py
+# 集成与 smoke
+python -m pytest -q tests/integration
+python -m pytest -q tests/smoke
 
-echo "✅ 所有测试通过！"
+# Cloud
+python -m pytest -q cloud/server/tests
+
+# 带 preflight marker 的 pytest 测试
+python -m pytest -q -m preflight
 ```
 
-### CI/CD 集成
-
-如果使用 GitHub Actions：
-
-```yaml
-name: Tests
-
-on: [push, pull_request]
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v2
-        with:
-          python-version: '3.12'
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-      - name: Run MCP tests
-        run: |
-          python3.12 tests/mcp/test_mcp_functionality.py
-          python3.12 tests/mcp/test_error_responses.py
-          python3.12 tests/mcp/test_mcp_workflow.py
-```
-
-## 📝 添加新测试
-
-### 新增 MCP 功能测试
-
-1. 创建文件：`tests/mcp/test_new_feature.py`
-2. 添加 sys.path 配置：
-   ```python
-   import sys
-   from pathlib import Path
-   sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-   ```
-3. 导入需要的模块并编写测试
-
-### 新增集成测试
-
-1. 创建文件：`tests/integration/test_new_integration.py`
-2. 同样添加 sys.path 配置
-3. 编写测试代码
-
-### 新增历史/存档测试
-
-1. 创建文件：`tests/legacy/test_archived.py`
-2. 根据需要添加 sys.path 配置
-
-## 🐛 调试技巧
-
-### 运行单个测试函数
-
-如果测试框架支持（如 pytest）：
+仿真器有独立脚本：
 
 ```bash
-python3.12 -m pytest tests/mcp/test_mcp_functionality.py::test_function_name
+cd simulation/tests
+./run_tests.sh
 ```
 
-### 启用详细输出
+该脚本会处理本机 5555 端口并启动/停止仿真服务，可能影响正在运行的仿真实例。先确认端口没有承载其他工作。
 
-大多数测试会打印详细信息，可以直接查看：
+前端至少应执行构建：
 
 ```bash
-python3.12 tests/mcp/test_mcp_functionality.py 2>&1 | tee test_output.log
+cd cloud/web && npm install && npm run build
+cd tools/editor/web-editor && npm install && npm run build
+cd cloud/monitor && npm install && npm run build
 ```
 
-### 检查导入问题
+## 添加测试
 
-如果遇到导入错误：
+- 纯逻辑与故障边界放在 `tests/unit/`；
+- 多模块、子进程或真实 IPC 放在 `tests/integration/`；
+- 运行环境最小可用性放在 `tests/smoke/`，需要时标记 `@pytest.mark.preflight`；
+- Cloud API/服务测试放在 `cloud/server/tests/`；
+- 需要独立服务和端口管理的仿真测试留在 `simulation/tests/`。
 
-```bash
-python3.12 -c "
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path('tests/mcp').parent.parent.parent))
-try:
-    from runtime_manager import RuntimeManager
-    print('✅ 导入成功')
-except ImportError as e:
-    print(f'❌ 导入失败: {e}')
-"
-```
+新测试必须能被 `./tools/run_tests.sh collect` 正确收集。涉及时间、随机数、进程和网络端口时，应设置确定性输入、明确超时，并在失败路径清理资源。
 
-## 📚 相关文档
-
-- `docs/TEST_ORGANIZATION.md` - 详细的组织说明
-- `docs/MCP_SERVICE_COMPLETION_REPORT.md` - MCP 服务完成报告
-- `docs/MCP_DEPLOYMENT_GUIDE.md` - 部署和使用指南
-
-## 🎯 快速参考
-
-```bash
-# 显示所有可用的测试
-find tests -name "test_*.py" -type f | sort
-
-# 运行所有测试
-find tests -name "test_*.py" -type f | xargs -I {} python3.12 {}
-
-# 只运行 MCP 测试
-ls tests/mcp/test_*.py | xargs -I {} python3.12 {}
-
-# 统计测试数量
-find tests -name "test_*.py" -type f | wc -l
-```
-
----
-
-**最后更新**: 2025-12-22
-**组织完成**: ✅
-**所有测试状态**: ✅ 通过并验证
+文档不记录固定的“已通过 N 项”数字；提交时的真实状态应由 CI 或对应命令输出证明。
