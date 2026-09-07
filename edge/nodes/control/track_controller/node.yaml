@@ -31,6 +31,9 @@ ports:
     - name: path_progress
       type: planning.path_progress
       description: "可选：当前路径段和误差信息，用于段限速和横向误差保护"
+    - name: tillage_status
+      type: implement.tillage_status
+      description: "可选：机具作业就绪状态；require_implement_ready 启用时等待 ready 才前进"
   outputs:
     - name: velocity_cmd
       type: control.velocity
@@ -61,6 +64,18 @@ failure_policy:
           latch: asserted
   deadline_ms: null
 params:
+  require_implement_ready:
+    type: boolean
+    default: false
+    description: "作业段等待机具进入 working 且 PTO 启动；无机具反馈的图保持关闭"
+  allow_work_pivot:
+    type: boolean
+    default: false
+    description: "允许入土作业原地转向；默认停车并报告 needs_reposition"
+  implement_status_timeout_s:
+    type: float
+    default: 0.5
+    description: "超过该时间未收到机具状态，启用就绪等待的作业段停车"
   max_speed:
     type: float
     default: 1.0

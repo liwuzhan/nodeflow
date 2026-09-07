@@ -3,7 +3,10 @@
 # 田地配置
 field:
   # 田地类型: rectangular (矩形) 或 irregular (不规则)
-  type: irregular
+  type: rectangular
+
+  # 对固定实测轮廓，可设置 boundary: [[x,y], ...]、fixed_holes: [[[x,y], ...]]
+  # 此时优先使用固定轮廓，忽略下方随机生成参数。
 
   # 田地尺寸（米）
   width: 100.0
@@ -18,7 +21,7 @@ field:
   # 孔洞配置（模拟池塘、建筑物等不可作业区域）
   holes:
     # 是否启用孔洞生成
-    enabled: true
+    enabled: false
 
     # 孔洞数量
     num_holes: 1
@@ -29,7 +32,7 @@ field:
 # 车辆配置（用于路径规划）
 vehicle:
   # 作业幅宽（米）
-  implement_width_m: 3.0
+  implement_width_m: 1.2
 
   # 重叠率（0-1）
   overlap_ratio: 0.1
@@ -38,7 +41,7 @@ vehicle:
   path_inset_m: 1.0
 
   # 是否使用原地转向
-  pivot_turn: true
+  pivot_turn: false
 
   # 最大偏航率（度/秒）
   yaw_rate_max_deg_s: 60.0
@@ -59,6 +62,14 @@ kinematics:
 
   # 最大角速度（弧度/秒）
   max_angular_vel: 3.0
+
+  # 最大角加速度（rad/s²）；限制转向突变
+  max_angular_accel: 2.0
+
+  # 速度与转向的一阶响应时间（秒），0仅保留加速度限制
+  # 这些是可控试验参数，尚未由实车辨识
+  velocity_response_time_s: 0.0
+  angular_response_time_s: 0.0
 
   # 轮距（米）
   wheelbase: 0.5
@@ -86,7 +97,7 @@ kinematics:
 
 # 物理模拟配置
 physics:
-  # 摩擦系数（用于速度衰减）
+  # 可选摩擦函数的参数；主循环不额外衰减速度，以免和运动模型重复
   friction_coeff: 0.1
 
   # 边界配置（扩大到足够容纳田地）
@@ -105,12 +116,32 @@ sensors:
   # IMU陀螺仪噪声（rad/s）
   imu_gyro_noise: 0.01
 
+  # 其他传感器的仿真采样频率；查询仅返回最近已采样值
+  frequencies:
+    gps: 10.0
+    imu: 100.0
+    odometry: 50.0
+
   # RTK配置
   rtk:
     # RTK输出频率（Hz）
     frequency: 50.0
 
-    # RTK各状态持续时间比例（应该加起来 = 100%）
+    # 默认保留双天线航向语义；position_delta 则由带噪位置差分估计运动方向
+    heading_mode: dual_antenna
+    heading_noise_std_deg: 0.0
+    min_heading_displacement_m: 0.01
+
+    # 位置噪声标准差（米），null 按解状态分别用0.02/0.1/0.5/5m，0为无噪声
+    position_noise_std: null
+
+    # 固定采样到交付的延迟（秒），timestamp始终保留采集时刻
+    latency_s: 0.0
+
+    # 固定解状态便于对照；设为null时按下面比例逐样本抽取
+    status: FIXED
+
+    # 逐样本状态概率权重，不代表真实状态持续时间模型
     fixed_ratio: 0.85      # FIXED固定解 - 85%
     float_ratio: 0.10      # FLOAT浮点解 - 10%
     single_ratio: 0.04     # SINGLE单点定位 - 4%
@@ -121,6 +152,9 @@ server:
   # ZMQ端口
   zmq_port: 5555
 
+  # 运动/机具命令分别超时后停车、停PTO并抬起。0显式禁用。
+  command_timeout_s: 0.5
+
   # 仿真模式
   realtime: true
 
@@ -129,6 +163,7 @@ server:
 
   # 初始车位贴近地块入口，避免验证时先跑几十米接近段
   initial_pose_mode: entry
+  # 也可用 origin，或 initial_pose: {x: 0.0, y: 0.0, yaw: 0.0}（yaw单位rad）
   initial_max_distance_m: 1.0
 
 # 日志配置

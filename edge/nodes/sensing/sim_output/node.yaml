@@ -16,7 +16,7 @@ entrypoints:
 
 ports:
   outputs:
-    # 传感器输出（持续更新）
+    # 只在传感器采样序号变化时输出；保留采样 timestamp，不按查询频率重发
     - name: gps_fix
       type: json
       description: "普通GPS定位数据 (米级精度)"
@@ -57,7 +57,7 @@ ports:
 
     - name: state_info
       type: json
-      description: "完整机器人状态 (调试用)"
+      description: "完整物理真值；position 使用 task_enu 参考点，world_position 保留仿真世界位置；含机具状态及采样 sim_time/step_count"
 
     - name: implement_state
       type: implement.state
@@ -114,7 +114,7 @@ params:
   output_frequency:
     type: float
     default: 50.0
-    description: "输出频率 (Hz)"
+    description: "传感器查询频率 (Hz)；实际测量频率和延迟由仿真器配置决定"
 
   # 车辆配置（用于组装 task_request）
   implement_width_m:

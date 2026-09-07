@@ -11,6 +11,7 @@ L3 职责: 只负责数据收发，不负责算法逻辑
 """
 
 import time
+import os
 
 try:
     from pydantic import BaseModel, Field
@@ -34,6 +35,7 @@ class NextPoint(BaseModel):
     x: float
     y: float
     final: bool
+    arrived: bool = False
     index: int = 0
     total: int = 0
     consumed: int = 0
@@ -71,6 +73,10 @@ class TillageStatus(BaseModel):
     state: str
     hitch_height: float
     pto_on: bool
+    ready: bool = False
+    logical_ready: bool = False
+    ready_source: str = "timer"
+    feedback_fresh: bool = False
     pto_rpm: float
     state_elapsed_s: float
     emergency_stop: bool
@@ -91,6 +97,10 @@ def main():
         pto_engage_delay_s = float(sdk.get_param("pto_engage_delay_s", 0.5))
         auto_zone_detect = bool(sdk.get_param("auto_zone_detect", True))
         hitch_working_height = float(sdk.get_param("hitch_working_height", 1.0))
+        final_stop_distance = float(sdk.get_param("final_stop_distance", 0.5))
+        require_implement_feedback = bool(sdk.get_param("require_implement_feedback", False))
+        implement_feedback_timeout_s = float(sdk.get_param("implement_feedback_timeout_s", 0.5))
+        pto_ready_rpm = float(sdk.get_param("pto_ready_rpm", 480.0))
 
         emergency_stop = sdk.get_param("emergency_stop", False)
         if isinstance(emergency_stop, str):
@@ -112,6 +122,10 @@ def main():
             pto_engage_delay_s=pto_engage_delay_s,
             auto_zone_detect=auto_zone_detect,
             hitch_working_height=hitch_working_height,
+            final_stop_distance=final_stop_distance,
+            require_implement_feedback=require_implement_feedback,
+            implement_feedback_timeout_s=implement_feedback_timeout_s,
+            pto_ready_rpm=pto_ready_rpm,
         )
         controller = TillageController(config)
 
@@ -120,6 +134,10 @@ def main():
         in_next_point = sdk.create_input_port("next_point")
         in_task = sdk.create_input_port("task_enu")
         in_progress = sdk.create_input_port("path_progress")
+        in_implement = (
+            sdk.create_input_port("implement_state")
+            if os.getenv("NODE_IN_implement_state") else None
+        )
         out_cmd = sdk.create_output_port("tillage_cmd", schema=TillageCmd)
         out_status = sdk.create_output_port("tillage_status", schema=TillageStatus)
 
@@ -129,6 +147,8 @@ def main():
         last_task = None
         last_progress = None
         last_state = None  # 用于检测状态变化
+        last_implement = None
+        last_implement_received_at = None
 
         # 4. 主循环 (L3 职责: 数据搬运)
         sdk.logger.info("Tillage Controller running, waiting for inputs...")
@@ -139,6 +159,8 @@ def main():
             next_point = in_next_point.recv_latest()
             task = in_task.recv_latest()
             progress = in_progress.recv_latest()
+            implement_state = in_implement.recv_latest() if in_implement else None
+            received_at = time.monotonic()
 
             if pose:
                 last_pose = pose
@@ -151,6 +173,9 @@ def main():
                 )
             if progress:
                 last_progress = progress
+            if implement_state:
+                last_implement = implement_state
+                last_implement_received_at = received_at
 
             # 4b. 调用 L4 原子层
             cmd = controller.update(
@@ -165,7 +190,11 @@ def main():
             out_cmd.send(cmd)
 
             # 4d. 状态输出
-            status = controller.get_status()
+            feedback_age_s = (
+                received_at - last_implement_received_at
+                if last_implement_received_at is not None else float("inf")
+            )
+            status = controller.get_status(last_implement, feedback_age_s)
             status["timestamp"] = time.time()
             out_status.send(status)
 

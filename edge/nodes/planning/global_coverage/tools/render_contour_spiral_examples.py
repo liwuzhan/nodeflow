@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import math
 import runpy
 import sys
 from pathlib import Path
@@ -17,12 +19,18 @@ import numpy as np
 from matplotlib.collections import LineCollection
 from matplotlib.lines import Line2D
 from matplotlib.patches import Polygon as PolygonPatch
+from matplotlib.patches import PathPatch
+from matplotlib.path import Path as PlotPath
 from shapely.geometry import LineString, MultiPolygon, Point, Polygon
+from shapely.geometry.polygon import orient
 
 
 NODE_DIR = Path(__file__).resolve().parents[1]
-REPO_ROOT = NODE_DIR.parents[1]
+REPO_ROOT = NODE_DIR.parents[3]
+sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(NODE_DIR))
+
+from simulation.evaluation import CoverageAccumulator
 
 from utils.contour_spiral import ContourSpiralResult, build_contour_spiral
 from utils.models import ParcelData, VehicleConfig
@@ -106,7 +114,7 @@ def _draw_result(ax, area, result: ContourSpiralResult, title: str) -> None:
     ax.set_ylabel("North (m)")
     ax.set_title(
         f"{title}\n"
-        f"coverage {result.coverage_ratio * 100:.2f}% | "
+        f"planner estimate {result.coverage_ratio * 100:.2f}% | "
         f"R achieved {result.achieved_min_turn_radius_m:.2f} m | "
         f"work links {result.work_connector_count}, PTO lifts {result.transit_connector_count}",
         fontsize=10,
@@ -133,59 +141,46 @@ def _work_runs(result: ContourSpiralResult):
     return runs
 
 
-def _draw_coverage(ax, area, result: ContourSpiralResult, implement_width_m: float) -> None:
-    _draw_area(ax, area)
-    covered = None
-    overlap = None
-    for coords in _work_runs(result):
-        sweep = LineString(coords).buffer(
-            implement_width_m * 0.5,
-            cap_style=2,
-            join_style=1,
-        ).intersection(area)
-        if covered is None:
-            covered = sweep
-            continue
-        repeated = covered.intersection(sweep)
-        overlap = repeated if overlap is None else overlap.union(repeated)
-        covered = covered.union(sweep)
+def _fill_geometry(ax, geometry, color, alpha, zorder):
+    for polygon in _polygons(geometry):
+        polygon = orient(polygon)
+        paths = []
+        for ring in [polygon.exterior, *polygon.interiors]:
+            coords = list(ring.coords)
+            paths.append(PlotPath(coords, [PlotPath.MOVETO]
+                                  + [PlotPath.LINETO]*(len(coords)-2) + [PlotPath.CLOSEPOLY]))
+        ax.add_patch(PathPatch(PlotPath.make_compound_path(*paths),
+                              facecolor=color, edgecolor="none", alpha=alpha, zorder=zorder))
 
-    if covered is not None:
-        for polygon in _polygons(covered):
-            ax.add_patch(PolygonPatch(
-                list(polygon.exterior.coords),
-                closed=True,
-                facecolor="#8fd0aa",
-                edgecolor="none",
-                alpha=0.75,
-                zorder=2,
-            ))
-        uncovered = area.difference(covered)
-        for polygon in _polygons(uncovered):
-            ax.add_patch(PolygonPatch(
-                list(polygon.exterior.coords),
-                closed=True,
-                facecolor="#df6b62",
-                edgecolor="none",
-                alpha=0.9,
-                zorder=3,
-            ))
-    if overlap is not None:
-        for polygon in _polygons(overlap):
-            ax.add_patch(PolygonPatch(
-                list(polygon.exterior.coords),
-                closed=True,
-                facecolor="#e9b949",
-                edgecolor="none",
-                alpha=0.7,
-                zorder=4,
-            ))
+
+def _evaluate_result(area, result, implement_width_m):
+    evaluation = CoverageAccumulator(area, implement_width_m)
+    for coords in _work_runs(result):
+        evaluation.break_segment()
+        for index, point in enumerate(coords):
+            before = coords[max(0, index-1)]
+            after = coords[min(len(coords)-1, index+1)]
+            theta = math.atan2(after[1]-before[1], after[0]-before[0])
+            evaluation.add({"x": point[0], "y": point[1], "theta": theta, "working": True})
+    return evaluation
+
+
+def _draw_coverage(ax, area, result: ContourSpiralResult, implement_width_m: float,
+                   evaluation=None) -> None:
+    _draw_area(ax, area)
+    evaluation = evaluation or _evaluate_result(area, result, implement_width_m)
+    shapes = evaluation.geometries()
+    measured = evaluation.metrics()
+    for key, color, alpha, order in [("covered", "#8fd0aa", .75, 2),
+                                     ("missed", "#df6b62", .9, 3),
+                                     ("repeated", "#e9b949", .7, 4)]:
+        _fill_geometry(ax, shapes[key], color, alpha, order)
     ax.autoscale()
     ax.set_aspect("equal", adjustable="box")
     ax.margins(0.04)
     ax.set_title(
-        f"Swept coverage: {result.coverage_ratio * 100:.2f}%\n"
-        f"measured overlap: {result.overlap_ratio * 100:.1f}% of field",
+        f"Planned sweep: {measured['coverage_rate_percent']:.2f}% of shown work area\n"
+        f"repeat {measured['repeat_rate_percent']:.1f}% | outside {measured['outside_area_m2']:.1f} m2",
         fontsize=10,
     )
     ax.set_xlabel("East (m)")
@@ -200,7 +195,7 @@ def _draw_curvature(ax, result: ContourSpiralResult, requested_radius_m: float) 
         station.append(station[-1] + np.hypot(end[0] - start[0], end[1] - start[1]))
     values = np.full(len(result.path), np.nan)
     for index in range(1, len(result.path) - 1):
-        left = max(0, int(np.searchsorted(station, station[index] - 0.4)))
+        left = max(0, int(np.searchsorted(station, station[index] - 0.4, side="right")) - 1)
         right = min(
             len(result.path) - 1,
             int(np.searchsorted(station, station[index] + 0.4)),
@@ -226,7 +221,9 @@ def _draw_curvature(ax, result: ContourSpiralResult, requested_radius_m: float) 
     ax.plot(station, values, color="#305f91", linewidth=0.8)
     ax.axhline(limit, color="#c6453d", linestyle="--", linewidth=1.0)
     ax.axhline(-limit, color="#c6453d", linestyle="--", linewidth=1.0)
-    ax.set_ylim(-limit * 1.2, limit * 1.2)
+    observed = np.nanmax(np.abs(values)) if np.any(np.isfinite(values)) else 0.0
+    extent = max(limit, observed) * 1.12
+    ax.set_ylim(-extent, extent)
     ax.grid(True, color="#dfe4df", linewidth=0.6)
     ax.set_title(
         f"Work-path curvature | limit +/-{limit:.3f} 1/m",
@@ -319,16 +316,20 @@ def render(output_dir: Path) -> None:
     ]
 
     for name, title, area, result, width, radius in rendered:
+        evaluation = _evaluate_result(area, result, width)
         fig = plt.figure(figsize=(15, 8), constrained_layout=True)
         grid = fig.add_gridspec(2, 2, width_ratios=(1.25, 1.0))
         path_ax = fig.add_subplot(grid[:, 0])
         coverage_ax = fig.add_subplot(grid[0, 1])
         curvature_ax = fig.add_subplot(grid[1, 1])
         _draw_result(path_ax, area, result, title)
-        _draw_coverage(coverage_ax, area, result, width)
+        _draw_coverage(coverage_ax, area, result, width, evaluation)
         _draw_curvature(curvature_ax, result, radius)
         path_ax.legend(handles=legend, loc="upper right", fontsize=8, framealpha=0.95)
         fig.savefig(output_dir / f"{name}.png", dpi=180, facecolor="white")
+        measured = {**evaluation.metrics(), "evaluation_source": "planned_path",
+                    "denominator": "shown_work_area", "requested_turn_radius_m": radius}
+        (output_dir / f"{name}.json").write_text(json.dumps(measured, indent=2), encoding="utf-8")
         plt.close(fig)
 
     fig, axes = plt.subplots(2, 2, figsize=(15, 11), constrained_layout=True)

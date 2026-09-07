@@ -9,7 +9,7 @@
 
 import time
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import Tuple, Dict, Any
 
 
@@ -128,11 +128,20 @@ class StateHistory:
     """状态历史记录"""
 
     def __init__(self, max_size: int = 1000):
+        if not isinstance(max_size, int) or max_size < 1:
+            raise ValueError("max_size must be a positive integer")
         self.max_size = max_size
         self.history = []
 
     def add(self, state: RobotState):
         """添加状态"""
+        if not math.isfinite(state.sim_time):
+            raise ValueError("sim_time must be finite")
+        if self.history and state.sim_time < self.history[-1].sim_time:
+            raise ValueError("history timestamps must be nondecreasing; clear before reset")
+        if self.history and state.sim_time == self.history[-1].sim_time:
+            self.history[-1] = state.copy()
+            return
         self.history.append(state.copy())
         if len(self.history) > self.max_size:
             self.history.pop(0)
@@ -140,13 +149,23 @@ class StateHistory:
     def get_latest(self) -> RobotState:
         """获取最新状态"""
         if self.history:
-            return self.history[-1]
+            return self.history[-1].copy()
         return RobotState()
 
     def get_at_time(self, sim_time: float) -> RobotState:
-        """获取指定时间的状态（线性插值）"""
+        """插值连续状态；角度走短弧，离散状态保持较早样本。
+
+        历史时间范围外返回最近端点，不把旧查询错误地映射到最新值。
+        """
+        if not math.isfinite(sim_time):
+            raise ValueError("sim_time must be finite")
         if not self.history:
             return RobotState()
+
+        if sim_time <= self.history[0].sim_time:
+            return self.history[0].copy()
+        if sim_time >= self.history[-1].sim_time:
+            return self.history[-1].copy()
 
         # 找到最接近的两个状态
         for i in range(len(self.history) - 1):
@@ -159,15 +178,24 @@ class StateHistory:
                 s0 = self.history[i]
                 s1 = self.history[i+1]
 
-                return RobotState(
-                    x=s0.x + alpha * (s1.x - s0.x),
-                    y=s0.y + alpha * (s1.y - s0.y),
-                    z=s0.z + alpha * (s1.z - s0.z),
-                    yaw=s0.yaw + alpha * (s1.yaw - s0.yaw),
-                    vx=s0.vx + alpha * (s1.vx - s0.vx),
-                    vy=s0.vy + alpha * (s1.vy - s0.vy),
-                    sim_time=sim_time
-                )
+                if sim_time == t1:
+                    return s1.copy()
+                result = s0.copy()
+                for item in fields(RobotState):
+                    name = item.name
+                    if name in ("pto_on", "step_count", "sim_time"):
+                        continue
+                    start = getattr(s0, name)
+                    delta = getattr(s1, name) - start
+                    if name in ("roll", "pitch", "yaw"):
+                        delta = math.atan2(math.sin(delta), math.cos(delta))
+                        value = start + alpha * delta
+                        value = math.atan2(math.sin(value), math.cos(value))
+                    else:
+                        value = start + alpha * delta
+                    setattr(result, name, value)
+                result.sim_time = sim_time
+                return result
 
         return self.get_latest()
 

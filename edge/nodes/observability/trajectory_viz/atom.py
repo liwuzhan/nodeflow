@@ -13,6 +13,10 @@ from typing import List, Tuple, Dict, Any, Optional
 
 import numpy as np
 
+from simulation.evaluation import CoverageAccumulator, is_working
+from shapely.geometry import Polygon
+from shapely.ops import triangulate
+
 
 def euclidean_distance(p1: Tuple[float, float], p2: Tuple[float, float]) -> float:
     """
@@ -209,22 +213,11 @@ def make_segment_coverage_polygon(
     ]
 
 
-def is_sample_working(sample: Dict[str, Any], hitch_threshold: float = 0.5) -> bool:
+def is_sample_working(sample: Dict[str, Any], hitch_threshold: float = 0.95) -> bool:
     """
     Decide whether a replay sample should count as active implement coverage.
     """
-    if not sample:
-        return False
-
-    pto_on = sample.get("pto_on")
-    hitch_height = sample.get("hitch_height")
-    state = (sample.get("tillage_state") or "").lower()
-
-    if pto_on is True:
-        return True
-    if hitch_height is not None and hitch_height >= hitch_threshold:
-        return True
-    return state in {"working", "lowering", "ready_to_engage"}
+    return bool(sample) and is_working(sample, hitch_threshold)
 
 
 def summarize_coverage_samples(replay_samples: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -254,38 +247,14 @@ def build_coverage_overlay(
     implement_width_m: float,
     field_boundary: Optional[List[Tuple[float, float]]] = None,
     max_polygons: int = 500,
+    field_holes=None,
+    implement_length_m: float = 0.2,
+    implement_offset_m: float = 0.0,
+    accumulator=None,
 ) -> Dict[str, Any]:
-    """
-    Build lightweight coverage polygons for visualization.
-
-    This is an approximation for visual replay. It intentionally avoids heavy
-    geometry dependencies and therefore estimates covered area by summing segment
-    rectangles; overlap is not removed until a future Shapely-backed pass.
-    """
-    if implement_width_m <= 0 or len(replay_samples) < 2:
-        field_area = calculate_polygon_area(field_boundary or [])
-        summary = summarize_coverage_samples(replay_samples)
-        return {
-            "implement_width_m": implement_width_m,
-            "field_area_m2": round(field_area, 2),
-            "covered_area_m2": 0.0,
-            "coverage_rate_percent": 0.0,
-            "polygons": [],
-            "planned_polygons": [],
-            "active_segments": 0,
-            "sample_count": summary["sample_count"],
-            "working_sample_count": summary["working_sample_count"],
-            "working_sample_percent": summary["working_sample_percent"],
-            "latest_active": summary["latest_active"],
-            "latest_tillage_state": summary["latest_tillage_state"],
-            "latest_pto_on": summary["latest_pto_on"],
-            "latest_hitch_height": summary["latest_hitch_height"],
-        }
-
+    """Cumulative statistics plus a bounded display overlay of recent samples."""
     polygons: List[List[Tuple[float, float]]] = []
-    covered_area_est = 0.0
-    active_segments = 0
-
+    summary = summarize_coverage_samples(replay_samples)
     for prev, cur in zip(replay_samples, replay_samples[1:]):
         x1 = prev.get("x")
         y1 = prev.get("y")
@@ -301,35 +270,54 @@ def build_coverage_overlay(
         if not polygon:
             continue
 
-        active_segments += 1
-        covered_area_est += euclidean_distance((x1, y1), (x2, y2)) * implement_width_m
         if len(polygons) < max_polygons:
             polygons.append(polygon)
-
-    field_area = calculate_polygon_area(field_boundary or [])
-    if field_area > 0:
-        coverage_rate = min(100.0, covered_area_est / field_area * 100.0)
-    else:
-        coverage_rate = 0.0
-
-    summary = summarize_coverage_samples(replay_samples)
-    return {
-        "implement_width_m": round(implement_width_m, 3),
-        "field_area_m2": round(field_area, 2),
-        "covered_area_m2": round(covered_area_est, 2),
-        "coverage_rate_percent": round(coverage_rate, 1),
+    if accumulator is None and implement_width_m > 0 and field_boundary:
+        accumulator = CoverageAccumulator(
+            field_boundary, implement_width_m, field_holes=field_holes,
+            implement_length_m=implement_length_m, implement_offset_m=implement_offset_m,
+        ).extend(replay_samples)
+    metrics = accumulator.metrics() if accumulator is not None else {
+        "field_area_m2": 0.0, "covered_area_m2": 0.0, "coverage_rate_percent": 0.0,
+        "active_segments": 0, "implement_width_m": implement_width_m,
+    }
+    display_geometry_truncated = False
+    if accumulator is not None:
+        polygons = []
+        covered = accumulator.geometries()["covered"].simplify(
+            0.03, preserve_topology=True).intersection(accumulator.field)
+        regions = [covered] if isinstance(covered, Polygon) else list(covered.geoms)
+        for region in regions:
+            if not isinstance(region, Polygon):
+                continue
+            # Plotly's old array format has no holes. Triangulate only regions
+            # with holes so drawing never paints uncultivated islands green.
+            parts = (triangulate(region) if region.interiors else [region])
+            for part in parts:
+                if region.interiors and not region.covers(part):
+                    continue
+                if len(polygons) < max_polygons:
+                    polygons.append(list(part.exterior.coords))
+                else:
+                    display_geometry_truncated = True
+    # Summary remains latest/window-based where appropriate; cumulative counters
+    # come from the accumulator and do not fall when display history is trimmed.
+    result = {
+        **summary,
+        **metrics,
         "polygons": polygons,
         "planned_polygons": [],
-        "active_segments": active_segments,
-        "sample_count": summary["sample_count"],
-        "working_sample_count": summary["working_sample_count"],
-        "working_sample_percent": summary["working_sample_percent"],
-        "latest_active": summary["latest_active"],
-        "latest_tillage_state": summary["latest_tillage_state"],
-        "latest_pto_on": summary["latest_pto_on"],
-        "latest_hitch_height": summary["latest_hitch_height"],
-        "area_estimation": "segment_sum_no_overlap_subtraction",
+        "display_sample_count": len(replay_samples),
+        "display_scope": "cumulative_sweep_recent_trajectory",
+        "display_geometry_limit": max_polygons,
+        "display_geometry_truncated": display_geometry_truncated,
+        "position_source": (replay_samples[-1].get("position_source", "estimated_pose")
+                            if replay_samples else "unknown"),
+        "implement_source": (replay_samples[-1].get("implement_source", "unknown")
+                             if replay_samples else "unknown"),
     }
+    result["working_sample_percent"] = 100.0*result["working_sample_count"]/max(1, result["sample_count"])
+    return result
 
 
 def _float_or_none(value: Any) -> Optional[float]:
@@ -350,6 +338,7 @@ def make_replay_sample(
     tillage_status: Optional[Dict[str, Any]] = None,
     path_progress: Optional[Dict[str, Any]] = None,
     now: Optional[float] = None,
+    truth_state: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Build one compact replay sample from the latest runtime packets.
@@ -357,7 +346,6 @@ def make_replay_sample(
     The sample intentionally keeps only fields useful for visual replay and
     debugging. It does not mutate inputs and can be unit-tested without SDK.
     """
-    has_tillage_packet = bool(tillage_status or tillage_cmd)
     pose = pose or {}
     velocity_cmd = velocity_cmd or {}
     next_point = next_point or {}
@@ -370,27 +358,27 @@ def make_replay_sample(
     intent_hitch = implement_intent.get("hitch")
     intent_working = (path_progress.get("zone") == "work") or (path_progress.get("segment_type") == "work")
 
-    if not has_tillage_packet and (intent_pto or intent_hitch or path_progress):
-        if intent_pto == "on" or intent_hitch == "down" or intent_working:
-            tillage_status = {
-                "state": "intent_working",
-                "pto_on": True,
-                "hitch_height": 1.0,
-                "pto_rpm": 540.0 if intent_pto == "on" else None,
-            }
-        else:
-            tillage_status = {
-                "state": "intent_transport",
-                "pto_on": False,
-                "hitch_height": 0.0,
-                "pto_rpm": 0.0,
-            }
+    position_source = "estimated_pose"
+    implement_source = "feedback" if tillage_status else "command_estimate" if tillage_cmd else "unknown"
+    if truth_state:
+        pose = truth_state
+        if "position" in truth_state:
+            pose = {**truth_state.get("position", {}),
+                    "theta": truth_state.get("orientation", {}).get("yaw")}
+        position_source = "simulation_truth"
+        truth_implement = truth_state.get("implement", truth_state)
+        if "pto_on" in truth_implement and "hitch_height" in truth_implement:
+            tillage_status = truth_implement
+            implement_source = "simulation_truth"
 
     sample = {
         "timestamp": now,
         "x": _float_or_none(pose.get("x")),
         "y": _float_or_none(pose.get("y")),
         "theta": _float_or_none(pose.get("theta")),
+        "position_source": position_source,
+        "implement_source": implement_source,
+        "planned_working": bool(intent_pto == "on" and intent_hitch == "down" or intent_working),
         "linear_velocity": _float_or_none(velocity_cmd.get("linear_velocity")),
         "angular_velocity": _float_or_none(velocity_cmd.get("angular_velocity")),
         "track_status": velocity_cmd.get("status", ""),

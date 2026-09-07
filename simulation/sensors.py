@@ -9,6 +9,8 @@
 
 import math
 import random
+import copy
+from collections import deque
 from typing import Dict, Any
 try:
     from .state import RobotState
@@ -26,14 +28,43 @@ class SensorSimulator:
         gps_noise_std: float = 0.5,      # GPS 噪声标准差 (米)
         imu_accel_noise: float = 0.1,    # 加速度噪声 (m/s²)
         imu_gyro_noise: float = 0.01,    # 陀螺仪噪声 (rad/s)
-        seed: int = None
+        seed: int = None,
+        rtk_config: Dict[str, Any] = None,
+        frequencies: Dict[str, float] = None
     ):
         self.gps_noise_std = gps_noise_std
         self.imu_accel_noise = imu_accel_noise
         self.imu_gyro_noise = imu_gyro_noise
 
-        if seed is not None:
-            random.seed(seed)
+        self._rng = random.Random(seed)
+        self._initial_rng_state = self._rng.getstate()
+        self.rtk_config = dict(rtk_config or {})
+        self.heading_mode = self.rtk_config.get("heading_mode", "dual_antenna")
+        if self.heading_mode not in ("dual_antenna", "position_delta"):
+            raise ValueError("rtk.heading_mode must be dual_antenna or position_delta")
+        self.heading_noise_std_deg = self._nonnegative("heading_noise_std_deg", 0.0)
+        self.position_noise_std = self.rtk_config.get("position_noise_std")
+        if self.position_noise_std is not None:
+            self.position_noise_std = self._nonnegative("position_noise_std", 0.02)
+        self.latency_s = self._nonnegative("latency_s", 0.0)
+        self.min_heading_displacement_m = self._nonnegative("min_heading_displacement_m", 0.01)
+        self.fixed_status = self.rtk_config.get("status")
+        if self.fixed_status is not None and self.fixed_status not in ("FIXED", "FLOAT", "SINGLE", "NONE"):
+            raise ValueError("rtk.status must be FIXED, FLOAT, SINGLE or NONE")
+        self.status_ratios = [float(self.rtk_config.get(key, default)) for key, default in (
+            ("fixed_ratio", 0.85), ("float_ratio", 0.10),
+            ("single_ratio", 0.04), ("none_ratio", 0.01))]
+        if any(not math.isfinite(x) or x < 0 for x in self.status_ratios) or sum(self.status_ratios) <= 0:
+            raise ValueError("RTK state ratios must be nonnegative with positive total")
+        rates = {"gps": 10.0, "rtk_gps": self.rtk_config.get("frequency", 50.0),
+                 "imu": 100.0, "odometry": 50.0}
+        rates.update(frequencies or {})
+        self._periods = {}
+        for name, rate in rates.items():
+            rate = float(rate)
+            if not math.isfinite(rate) or rate <= 0:
+                raise ValueError(f"{name} frequency must be finite and positive")
+            self._periods[name] = 1.0 / rate
 
         # GPS 参考点 (用于转换为经纬度)
         self.gps_ref_lat = ref_lat
@@ -43,178 +74,143 @@ class SensorSimulator:
         self.meters_per_degree_lat = 111320.0  # WGS84 平均
         self.meters_per_degree_lon = 111320.0 * math.cos(math.radians(self.gps_ref_lat))
 
-        # RTK GPS 状态模拟
-        self.rtk_fix_count = 0
-        self.rtk_float_count = 0
-        self.rtk_single_count = 0
+        self.reset()
+
+    def _nonnegative(self, name, default):
+        value = float(self.rtk_config.get(name, default))
+        if not math.isfinite(value) or value < 0:
+            raise ValueError(f"rtk.{name} must be finite and nonnegative")
+        return value
+
+    def reset(self):
+        """清除交付缓存和延迟队列，并重放本实例的噪声序列。"""
+        self._rng.setstate(self._initial_rng_state)
+        self._cache = {name: None for name in self._periods}
+        self._pending = {name: deque() for name in self._periods}
+        self._sample_count = {name: 0 for name in self._periods}
+        self._epoch = None
+        self._last_update = None
+        self._previous_state = None
+        self._last_position = None
+        self._last_observed_position = None
+        self._last_heading = 0.0
+        self.rtk_fix_count = self.rtk_float_count = self.rtk_single_count = 0
         self.last_rtk_status = "FIXED"
-        self.rtk_failure_probability = 0.001  # 0.1% 的概率丢失RTK
 
-    def get_rtk_gps_data(self, state: RobotState) -> Dict[str, Any]:
+    def update(self, state: RobotState):
+        """只由仿真步进调用；按固定仿真时间采样，查询不消耗随机数。
+
+        当步长不能整除采样周期时，在相邻真值之间插值采样；timestamp
+        始终是采集时刻，latency_s 只决定何时能从 get_* 读到它。
         """
-        生成 RTK GPS 数据 (厘米级精度)
+        now = state.sim_time
+        if self._last_update is not None and now < self._last_update - 1e-7:
+            raise ValueError("Sensor time moved backwards; call reset() before a new run")
+        if self._epoch is None:
+            self._epoch = now
+        generators = {"gps": self._sample_gps, "rtk_gps": self._sample_rtk,
+                      "imu": self._sample_imu, "odometry": self._sample_odometry}
+        for name, period in self._periods.items():
+            if name not in generators:
+                continue
+            while self._epoch + self._sample_count[name] * period <= now + 1e-7:
+                acquired = self._epoch + self._sample_count[name] * period
+                sampled = self._interpolate_state(state, acquired)
+                data = generators[name](sampled)
+                self._sample_count[name] += 1
+                data["seq"] = self._sample_count[name]
+                delay = self.latency_s if name == "rtk_gps" else 0.0
+                self._pending[name].append((acquired + delay, data))
+            while self._pending[name] and self._pending[name][0][0] <= now + 1e-7:
+                _, self._cache[name] = self._pending[name].popleft()
+        self._last_update = now
+        self._previous_state = state.copy()
 
-        支持多种RTK状态：
-        - FIXED: RTK固定解 (2cm精度)
-        - FLOAT: RTK浮点解 (10cm精度)
-        - SINGLE: 单点定位 (0.5m精度)
-        - NONE: 无定位
-        """
-        # RTK 状态模拟
-        rtk_probability = random.random()
+    def _interpolate_state(self, state, acquired):
+        result = state.copy()
+        previous = self._previous_state
+        if previous is not None and state.sim_time > previous.sim_time:
+            alpha = max(0.0, min(1.0, (acquired - previous.sim_time) / (state.sim_time - previous.sim_time)))
+            for name in ("x", "y", "z", "vx", "vy", "vz", "ax", "ay", "az", "omega_yaw"):
+                setattr(result, name, getattr(previous, name) + alpha * (getattr(state, name) - getattr(previous, name)))
+            delta = math.atan2(math.sin(state.yaw - previous.yaw), math.cos(state.yaw - previous.yaw))
+            result.yaw = previous.yaw + alpha * delta
+        result.sim_time = acquired
+        return result
 
-        if rtk_probability < 0.85:  # 85% 时间固定解
-            rtk_status = "FIXED"
-            gps_noise_std = 0.02  # 2cm
+    def get_rtk_gps_data(self, state=None):
+        return copy.deepcopy(self._cache["rtk_gps"])
+
+    def get_gps_data(self, state=None):
+        return copy.deepcopy(self._cache["gps"])
+
+    def get_imu_data(self, state=None):
+        return copy.deepcopy(self._cache["imu"])
+
+    def get_odometry_data(self, state=None):
+        return copy.deepcopy(self._cache["odometry"])
+
+    def _sample_rtk(self, state: RobotState) -> Dict[str, Any]:
+        status = self.fixed_status or self._rng.choices(
+            ["FIXED", "FLOAT", "SINGLE", "NONE"], weights=self.status_ratios)[0]
+        default_std = {"FIXED": 0.02, "FLOAT": 0.1, "SINGLE": 0.5, "NONE": 5.0}[status]
+        noise_std = default_std if self.position_noise_std is None else self.position_noise_std
+        base = (state.x, state.y)
+        if status == "NONE" and self._last_position is not None:
+            base = self._last_position
+        if status != "NONE":
+            self._last_position = base
+        x = base[0] + self._rng.gauss(0, noise_std)
+        y = base[1] + self._rng.gauss(0, noise_std)
+        heading_valid = status != "NONE"
+        if self.heading_mode == "position_delta":
+            heading_valid = False
+            if self._last_observed_position is not None and status != "NONE":
+                dx = x - self._last_observed_position[0]
+                dy = y - self._last_observed_position[1]
+                if math.hypot(dx, dy) >= self.min_heading_displacement_m:
+                    self._last_heading = math.degrees(math.atan2(dx, dy)) % 360.0
+                    heading_valid = True
+            heading = self._last_heading
+        else:
+            heading = (90.0 - math.degrees(state.yaw)) % 360.0
+        self._last_observed_position = (x, y) if status != "NONE" else None
+        heading = (heading + self._rng.gauss(0, self.heading_noise_std_deg)) % 360.0
+        self.last_rtk_status = status
+        if status == "FIXED":
             self.rtk_fix_count += 1
-        elif rtk_probability < 0.95:  # 10% 时间浮点解
-            rtk_status = "FLOAT"
-            gps_noise_std = 0.1   # 10cm
+        elif status == "FLOAT":
             self.rtk_float_count += 1
-        elif rtk_probability < 0.99:  # 4% 时间单点定位
-            rtk_status = "SINGLE"
-            gps_noise_std = 0.5   # 50cm
+        else:
             self.rtk_single_count += 1
-        else:  # 1% 时间丢失定位
-            rtk_status = "NONE"
-            gps_noise_std = 5.0   # 5m
-            self.rtk_single_count += 1
-
-        # RTK 固定解的状态持续性（避免频繁切换）
-        if self.last_rtk_status == "FIXED" and rtk_probability > 0.95:
-            rtk_status = "FIXED"
-            gps_noise_std = 0.02
-            self.rtk_fix_count += 1
-
-        # 添加位置噪声
-        if rtk_status == "NONE":
-            # 无定位时，使用最后已知位置加噪声
-            if hasattr(self, '_last_position'):
-                base_x, base_y = self._last_position
-            else:
-                base_x, base_y = state.x, state.y
-            noise_x = random.gauss(0, gps_noise_std * 2)
-            noise_y = random.gauss(0, gps_noise_std * 2)
-        else:
-            # 有定位时，基于当前位置
-            noise_x = random.gauss(0, gps_noise_std)
-            noise_y = random.gauss(0, gps_noise_std)
-            base_x, base_y = state.x, state.y
-            self._last_position = (base_x, base_y)
-
-        noisy_x = base_x + noise_x
-        noisy_y = base_y + noise_y
-
-        # RTK 特有的误差模式
-        if rtk_status in ["FIXED", "FLOAT"]:
-            # 周跳误差（偶尔的厘米级跳变）
-            if random.random() < 0.001:  # 0.1% 概率
-                jump_x = random.gauss(0, 0.1)
-                jump_y = random.gauss(0, 0.1)
-                noisy_x += jump_x
-                noisy_y += jump_y
-
-            # 多路径效应（建筑、地形反射）
-            if rtk_status == "FLOAT":
-                # 浮点解更容易受多路径影响
-                multipath_x = random.gauss(0, 0.05)
-                multipath_y = random.gauss(0, 0.05)
-                noisy_x += multipath_x
-                noisy_y += multipath_y
-
-        # 转换为经纬度
-        lat = self.gps_ref_lat + (noisy_y / self.meters_per_degree_lat)
-        lon = self.gps_ref_lon + (noisy_x / self.meters_per_degree_lon)
-
-        # RTK 特有的精度指标
-        if rtk_status == "FIXED":
-            accuracy_h = 0.02  # 水平精度 2cm
-            accuracy_v = 0.03  # 垂直精度 3cm
-            hdop = 0.5
-            vdop = 0.8
-            fix_type = 50  # NMEA 固定解类型
-        elif rtk_status == "FLOAT":
-            accuracy_h = 0.1   # 水平精度 10cm
-            accuracy_v = 0.15  # 垂直精度 15cm
-            hdop = 0.8
-            vdop = 1.2
-            fix_type = 49  # NMEA 浮点解类型
-        else:
-            accuracy_h = 1.0   # 水平精度 1m
-            accuracy_v = 1.5   # 垂直精度 1.5m
-            hdop = 2.0
-            vdop = 3.0
-            fix_type = 1
-
-        # 卫星数和信号质量
-        if rtk_status == "FIXED":
-            num_satellites = random.randint(12, 16)
-            snr_avg = random.uniform(45, 50)  # 高信噪比
-        elif rtk_status == "FLOAT":
-            num_satellites = random.randint(8, 12)
-            snr_avg = random.uniform(40, 45)
-        else:
-            num_satellites = random.randint(4, 8)
-            snr_avg = random.uniform(35, 40)
-
-        # RTK 年龄（距离上次改正的时间）
-        if rtk_status in ["FIXED", "FLOAT"]:
-            age_of_diff = random.uniform(0.1, 2.0)  # 秒
-        else:
-            age_of_diff = 0.0
-
-        self.last_rtk_status = rtk_status
-
-        # 航向角换算：仿真 yaw=0 指向 +X（东），CCW 为正；要求 heading 北向为0、CW为正
-        # 映射：heading_deg = (-yaw_deg + 90) mod 360
-        heading_deg = (-(math.degrees(state.yaw)) + 90.0) % 360.0
+        satellites = {"FIXED": 14, "FLOAT": 10, "SINGLE": 6, "NONE": 0}[status]
+        accuracy_v = noise_std * 1.5
         return {
-            # 基础位置信息
-            "latitude": lat,
-            "longitude": lon,
-            "altitude": state.z + random.gauss(0, accuracy_v),
-
-            # RTK 状态
-            "rtk_status": rtk_status,
-            "solution_type": "RTK_FIXED" if rtk_status == "FIXED" else (
-                "RTK_FLOAT" if rtk_status == "FLOAT" else "GPS_SINGLE"
-            ),
-
-            # 精度信息
-            "accuracy_h": accuracy_h,
-            "accuracy_v": accuracy_v,
-            "hdop": hdop,
-            "vdop": vdop,
-
-            # 卫星信息
-            "num_satellites": num_satellites,
-            "snr_avg": snr_avg,
-            "fix_type": fix_type,
-
-            # RTK 特有信息
-            "age_of_diff": age_of_diff,
-            "baseline_length": random.uniform(5.0, 30.0),  # 基线长度
-            "ratio": random.uniform(3.0, 10.0) if rtk_status == "FIXED" else random.uniform(2.0, 3.0),
-
-            # 双天线 RTK 输出（航向和俯仰）
-            "heading": heading_deg,
-            "pitch": math.degrees(state.pitch),      # 俯仰角 (度, 机体向上为正)
-            "roll": math.degrees(state.roll),        # 侧滚角 (度, 可选)
-
-            # 标准信息
+            "latitude": self.gps_ref_lat + y / self.meters_per_degree_lat,
+            "longitude": self.gps_ref_lon + x / self.meters_per_degree_lon,
+            "altitude": state.z + self._rng.gauss(0, accuracy_v),
+            "rtk_status": status,
+            "solution_type": {"FIXED": "RTK_FIXED", "FLOAT": "RTK_FLOAT", "SINGLE": "GPS_SINGLE", "NONE": "NONE"}[status],
+            "accuracy_h": noise_std, "accuracy_v": accuracy_v,
+            "hdop": 0.5 if status == "FIXED" else 2.0,
+            "vdop": 0.8 if status == "FIXED" else 3.0,
+            "num_satellites": satellites, "snr_avg": 47.0 if status == "FIXED" else 40.0,
+            "fix_type": {"FIXED": 50, "FLOAT": 49, "SINGLE": 1, "NONE": 0}[status],
+            "age_of_diff": 0.1 if status in ("FIXED", "FLOAT") else 0.0,
+            "baseline_length": 10.0, "ratio": 5.0 if status == "FIXED" else 2.0,
+            "heading": heading, "heading_valid": heading_valid, "heading_mode": self.heading_mode,
+            "pitch": math.degrees(state.pitch), "roll": math.degrees(state.roll),
             "timestamp": state.sim_time,
-            "fix_quality": 4 if rtk_status == "FIXED" else (
-                3 if rtk_status == "FLOAT" else 1
-            )
+            "fix_quality": {"FIXED": 4, "FLOAT": 3, "SINGLE": 1, "NONE": 0}[status],
         }
 
-    def get_gps_data(self, state: RobotState) -> Dict[str, Any]:
+    def _sample_gps(self, state: RobotState) -> Dict[str, Any]:
         """
         保持原有 GPS 数据格式（向后兼容）
         """
         # 使用普通GPS模式
-        noise_x = random.gauss(0, self.gps_noise_std)
-        noise_y = random.gauss(0, self.gps_noise_std)
+        noise_x = self._rng.gauss(0, self.gps_noise_std)
+        noise_y = self._rng.gauss(0, self.gps_noise_std)
 
         noisy_x = state.x + noise_x
         noisy_y = state.y + noise_y
@@ -236,7 +232,7 @@ class SensorSimulator:
             "timestamp": state.sim_time
         }
 
-    def get_imu_data(self, state: RobotState) -> Dict[str, Any]:
+    def _sample_imu(self, state: RobotState) -> Dict[str, Any]:
         """
         生成 IMU 数据
 
@@ -247,9 +243,9 @@ class SensorSimulator:
         """
         # 加速度（包含重力）
         # 在机器人坐标系中，需要考虑姿态
-        ax_noise = random.gauss(0, self.imu_accel_noise)
-        ay_noise = random.gauss(0, self.imu_accel_noise)
-        az_noise = random.gauss(0, self.imu_accel_noise)
+        ax_noise = self._rng.gauss(0, self.imu_accel_noise)
+        ay_noise = self._rng.gauss(0, self.imu_accel_noise)
+        az_noise = self._rng.gauss(0, self.imu_accel_noise)
 
         # 世界坐标系加速度
         ax_world = state.ax
@@ -265,9 +261,9 @@ class SensorSimulator:
         az_body = az_world
 
         # 角速度
-        gyro_x_noise = random.gauss(0, self.imu_gyro_noise)
-        gyro_y_noise = random.gauss(0, self.imu_gyro_noise)
-        gyro_z_noise = random.gauss(0, self.imu_gyro_noise)
+        gyro_x_noise = self._rng.gauss(0, self.imu_gyro_noise)
+        gyro_y_noise = self._rng.gauss(0, self.imu_gyro_noise)
+        gyro_z_noise = self._rng.gauss(0, self.imu_gyro_noise)
 
         # 磁力计（指向北方）
         # 简化：在世界坐标系中，北方是 +Y 方向
@@ -294,7 +290,7 @@ class SensorSimulator:
             "timestamp": state.sim_time
         }
 
-    def get_odometry_data(self, state: RobotState) -> Dict[str, Any]:
+    def _sample_odometry(self, state: RobotState) -> Dict[str, Any]:
         """
         生成里程计数据
 
@@ -327,8 +323,8 @@ class SensorSimulator:
 
         # 添加一些随机障碍物
         for _ in range(5):
-            angle_idx = random.randint(0, num_rays - 1)
-            ranges[angle_idx] = random.uniform(1.0, max_range)
+            angle_idx = self._rng.randint(0, num_rays - 1)
+            ranges[angle_idx] = self._rng.uniform(1.0, max_range)
 
         return {
             "ranges": ranges,

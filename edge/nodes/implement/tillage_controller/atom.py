@@ -44,6 +44,10 @@ class TillageConfig:
     enable_safety_check: bool = True    # 启用安全检查
     state_timeout_s: float = 10.0       # LOWERING/RAISING 超时报警 (秒)
     hitch_working_height: float = 1.0   # 作业时悬挂高度 (0~1)
+    final_stop_distance: float = 0.5    # 停止作业的终点容差，应与行走停止距离一致
+    require_implement_feedback: bool = False  # 用机具实态确认就绪；未接反馈的图保持关闭
+    implement_feedback_timeout_s: float = 0.5
+    pto_ready_rpm: float = 480.0        # 实际 PTO 转速达到此值才允许作业前进
 
 
 @dataclass
@@ -256,7 +260,17 @@ class TillageController:
 
         # === Zone 判定 ===
         current_zone = self.detect_zone(pose, next_point, task_enu, path_progress)
-        is_final = bool(next_point.get("final", False)) if next_point else False
+        # final 仅表示前瞻点选中了终点；必须等实际到达才抬机具。
+        # 有位姿时用与行走相同的停车距离核实，避免旧图选择器较宽的
+        # goal_tolerance 提前结束作业；没有位姿时只接受显式 arrived。
+        arrived = False
+        if next_point and next_point.get("final", False):
+            if pose and all(key in pose and key in next_point for key in ("x", "y")):
+                arrived = math.hypot(
+                    next_point["x"] - pose["x"], next_point["y"] - pose["y"]
+                ) <= self.config.final_stop_distance
+            else:
+                arrived = bool(next_point.get("arrived", False))
         has_data = pose is not None or next_point is not None or path_progress is not None
 
         implement_intent = path_progress.get("implement", {}) if path_progress else {}
@@ -264,13 +278,13 @@ class TillageController:
         intent_hitch = implement_intent.get("hitch")
 
         # 需要在 headland 升起机具的条件。优先级:
-        # final > 明确机具意图 > zone 判定，确保 raise/lower 不会同时为真。
-        if is_final:
+        # arrived > 明确机具意图 > zone 判定，确保 raise/lower 不会同时为真。
+        if arrived:
             should_raise = True
             should_lower = False
         elif intent_pto == "on" or intent_hitch == "down":
             should_raise = False
-            should_lower = not is_final and has_data
+            should_lower = has_data
         elif intent_pto == "off" or intent_hitch == "up":
             should_raise = True
             should_lower = False
@@ -363,12 +377,54 @@ class TillageController:
             "pto_rpm": self.state.pto_rpm,
         }
 
-    def get_status(self) -> Dict[str, Any]:
-        """获取控制器状态 (用于日志/监控)"""
+    def get_status(
+        self,
+        implement_state: Optional[Dict[str, Any]] = None,
+        feedback_age_s: float = 0.0,
+    ) -> Dict[str, Any]:
+        """获取控制器状态；可选实态反馈只确认 ready，不改写逻辑指令。
+
+        feedback_age_s 是接收端单调时钟测得的年龄，不能用仿真时钟
+        与系统时间相减。调用者每次传入当前最新反馈；缺失/过期均未就绪。
+        """
+        logical_ready = (
+            self.state.state == TillageState.WORKING
+            and self.state.pto_on
+            and not self.state.emergency_stop_active
+        )
+        feedback_fresh = bool(
+            implement_state
+            and math.isfinite(feedback_age_s)
+            and feedback_age_s >= 0.0
+            and (
+                self.config.implement_feedback_timeout_s <= 0.0
+                or feedback_age_s <= self.config.implement_feedback_timeout_s
+            )
+        )
+        feedback_ready = False
+        if feedback_fresh:
+            try:
+                hitch_height = float(implement_state.get("hitch_height", 0.0))
+                pto_rpm = float(implement_state.get("pto_rpm", 0.0))
+                feedback_ready = (
+                    math.isfinite(hitch_height) and math.isfinite(pto_rpm)
+                    and hitch_height >= 0.95 * self.config.hitch_working_height
+                    and bool(implement_state.get("pto_on", False))
+                    and pto_rpm >= self.config.pto_ready_rpm
+                )
+            except (TypeError, ValueError):
+                pass
+        ready = logical_ready and (
+            feedback_ready if self.config.require_implement_feedback else True
+        )
         return {
             "state": self.state.state.value,
             "hitch_height": round(self.state.hitch_height, 3),
             "pto_on": self.state.pto_on,
+            "ready": ready,
+            "logical_ready": logical_ready,
+            "ready_source": "feedback" if self.config.require_implement_feedback else "timer",
+            "feedback_fresh": feedback_fresh,
             "pto_rpm": self.state.pto_rpm,
             "state_elapsed_s": round(time.time() - self.state.state_enter_time, 2),
             "emergency_stop": self.state.emergency_stop_active,

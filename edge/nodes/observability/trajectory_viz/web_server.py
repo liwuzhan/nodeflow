@@ -224,14 +224,14 @@ HTML_TEMPLATE = """
                     </div>
                 </div>
                 <div class="metric-item">
-                    <div class="metric-label">实际距离</div>
+                    <div class="metric-label">观测窗口距离</div>
                     <div class="metric-value">
                         <span id="actual-distance">--</span>
                         <span class="metric-unit">m</span>
                     </div>
                 </div>
                 <div class="metric-item">
-                    <div class="metric-label">距离误差</div>
+                    <div class="metric-label">窗口距离与全计划之差</div>
                     <div class="metric-value">
                         <span id="distance-error">--</span>
                         <span class="metric-unit">m</span>
@@ -407,7 +407,7 @@ HTML_TEMPLATE = """
                     mode: 'lines+markers',
                     line: { color: 'red', width: 2 },
                     marker: { size: 4 },
-                    name: '实际轨迹'
+                    name: '观测轨迹（最近窗口）'
                 });
 
                 // 起点和终点
@@ -416,7 +416,7 @@ HTML_TEMPLATE = """
                     y: [trajY[0]],
                     mode: 'markers',
                     marker: { color: 'red', size: 12, symbol: 'circle' },
-                    name: '实际起点',
+                    name: '观测窗口起点',
                     showlegend: false
                 });
 
@@ -425,12 +425,12 @@ HTML_TEMPLATE = """
                     y: [trajY[trajY.length - 1]],
                     mode: 'markers',
                     marker: { color: 'red', size: 12, symbol: 'square' },
-                    name: '实际终点',
+                    name: '最新观测',
                     showlegend: false
                 });
             }
 
-            // 已覆盖区域（机具作业 footprint，近似）
+            // 全程累计矩形扫掠，已裁切地块并去除孔洞；轨迹显示有独立窗口。
             if (data.coverage_overlay && data.coverage_overlay.polygons) {
                 data.coverage_overlay.polygons.forEach((poly, idx) => {
                     if (!poly || poly.length < 3) {
@@ -445,7 +445,7 @@ HTML_TEMPLATE = """
                         fill: 'toself',
                         fillcolor: 'rgba(22, 163, 74, 0.18)',
                         line: { color: 'rgba(22, 163, 74, 0.25)', width: 1 },
-                        name: idx === 0 ? '已覆盖区域' : '已覆盖区域',
+                        name: '累计已覆盖区域',
                         showlegend: idx === 0,
                         hoverinfo: 'skip'
                     });
@@ -590,9 +590,15 @@ HTML_TEMPLATE = """
                 `PTO ${tillage.pto_on === true ? 'ON' : tillage.pto_on === false ? 'OFF' : '--'}, hitch ${fmt(tillage.hitch_height)}`;
 
             document.getElementById('coverage-state').textContent =
-                `${fmt(metrics.coverage_rate_percent, 1)}%`;
+                `${fmt(metrics.coverage_rate_percent, 1)}% · ${coverage.position_source === 'simulation_truth' ? '仿真真值' : '观测估计'} · 全程累计`;
             document.getElementById('covered-area-state').textContent =
-                `area ${fmt(metrics.covered_area_m2, 1)} m2, seg ${coverage.active_segments ?? '--'}, samples ${coverage.working_sample_count ?? '--'}/${coverage.sample_count ?? '--'}, active ${coverage.latest_active === true ? 'Y' : coverage.latest_active === false ? 'N' : '--'}`;
+                `唯一覆盖 ${fmt(metrics.covered_area_m2, 1)} m²，漏耕 ${fmt(metrics.missed_area_m2, 1)} m²，重耕 ${fmt(metrics.repeated_area_m2, 1)} m²，田外/孔洞 ${fmt(metrics.outside_area_m2, 1)} m²。机具：${coverage.implement_source === 'simulation_truth' ? '仿真实态' : coverage.implement_source === 'feedback' ? '反馈' : coverage.implement_source === 'command_estimate' ? '指令估计' : '状态未知'}；轨迹窗口 ${coverage.display_sample_count ?? '--'} / 累计 ${coverage.sample_count ?? '--'} 点`;
+            if ((coverage.implement_sources || []).includes('command_estimate')) {
+                document.getElementById('covered-area-state').textContent += '；累计统计含指令估计时段';
+            }
+            if (coverage.display_geometry_truncated) {
+                document.getElementById('covered-area-state').textContent += '；覆盖图形已限量显示，面积统计仍为完整累计';
+            }
         }
 
         function updateReplayPlots(samples) {

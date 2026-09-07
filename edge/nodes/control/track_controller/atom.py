@@ -134,6 +134,9 @@ def compute_velocity_cmd(
     headland_turn_align_threshold_deg: float = 35.0,
     headland_turn_min_speed_factor: float = 0.25,
     headland_turn_use_path_heading: bool = False,
+    tillage_status: dict | None = None,
+    require_implement_ready: bool = False,
+    allow_work_pivot: bool = False,
 ) -> dict:
     """
     计算速度控制命令（ENU坐标系）
@@ -149,6 +152,9 @@ def compute_velocity_cmd(
         decel_start_dist: 开始减速的距离 (米)
         final_stop_dist: 终点停止距离 (米)
         now: 当前时间戳
+        tillage_status: 可选机具状态；只使用本次运行收到的未过期状态
+        require_implement_ready: 作业段先等机具 ready；未接机具的图保持 false
+        allow_work_pivot: 作业段是否允许原地转向，默认禁止
     """
     if not pose_enu or not npkt:
         return {"linear_velocity": 0.0, "angular_velocity": 0.0, "timestamp": now}
@@ -166,6 +172,7 @@ def compute_velocity_cmd(
     segment_type = None
     path_heading_rad = None
     heading_error_deg_from_progress = None
+    work_requested = npkt.get("zone") == "work"
     if path_progress:
         segment_type = path_progress.get("segment_type")
         path_heading_rad = path_progress.get("path_heading_rad")
@@ -175,19 +182,47 @@ def compute_velocity_cmd(
         cte = path_progress.get("cross_track_error_m")
         if cte is not None:
             cross_track_error_m = abs(float(cte))
+        zone = path_progress.get("zone")
+        if zone in ("work", "transit"):
+            work_requested = zone == "work"
+        elif segment_type:
+            work_requested = segment_type == "work"
+        implement = path_progress.get("implement", {}) or {}
+        if implement.get("pto") == "on" or implement.get("hitch") == "down":
+            work_requested = True
+        elif implement.get("pto") == "off" or implement.get("hitch") == "up":
+            work_requested = False
 
     # 1. 计算到目标点的距离（欧几里得距离）
     dist = math.sqrt((nx - cx)**2 + (ny - cy)**2)
 
     # 2. 如果是最终点且距离很近，停止
-    if is_final and dist < final_stop_dist:
+    if is_final and dist <= final_stop_dist:
         return {
             "linear_velocity": 0.0,
             "angular_velocity": 0.0,
             "timestamp": now,
             "status": "arrived",
+            "arrived": True,
             "speed_factor": 0.0,
         }
+
+    if require_implement_ready and work_requested:
+        ready = bool(
+            tillage_status
+            and tillage_status.get("state") == "working"
+            and tillage_status.get("pto_on")
+            and tillage_status.get("ready", True)
+            and not tillage_status.get("emergency_stop", False)
+        )
+        if not ready:
+            return {
+                "linear_velocity": 0.0,
+                "angular_velocity": 0.0,
+                "timestamp": now,
+                "status": "waiting_for_implement",
+                "speed_factor": 0.0,
+            }
 
     # 3. 计算目标方位角（数学坐标系，弧度）
     target_theta = math.atan2(ny - cy, nx - cx)
@@ -219,6 +254,28 @@ def compute_velocity_cmd(
     active_pivot_threshold = pivot_th
     if target_mode == "path_heading":
         active_pivot_threshold = min(pivot_th, headland_turn_align_threshold_deg)
+
+    implement_engaged = bool(
+        tillage_status and (
+            tillage_status.get("pto_on")
+            or float(tillage_status.get("hitch_height", 0.0) or 0.0) > 0.05
+        )
+    )
+    if (
+        error_deg >= active_pivot_threshold
+        and not allow_work_pivot
+        and (work_requested or implement_engaged)
+    ):
+        # 入土作业不能悄悄退化为原地拧转。保留目标/误差供复盘，
+        # 路径入口或过急连接需要重新定位或重新规划。
+        return {
+            "linear_velocity": 0.0,
+            "angular_velocity": 0.0,
+            "timestamp": now,
+            "status": "needs_reposition",
+            "speed_factor": 0.0,
+            "heading_error_deg": round(error_deg, 2),
+        }
 
     if error_deg >= active_pivot_threshold:
         # 原地转向模式

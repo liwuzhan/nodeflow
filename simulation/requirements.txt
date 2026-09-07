@@ -1,0 +1,7 @@
+# 无界面仿真服务和离线实验
+PyYAML>=6.0
+pyzmq>=25.0
+numpy>=1.24
+shapely>=2.0
+# 离线实验图表；仅运行 ZMQ 服务时可不安装 matplotlib
+matplotlib>=3.7

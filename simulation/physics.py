@@ -1,12 +1,9 @@
-"""
-运动学引擎
-
-实现简单的 2D 差速驱动机器人运动学模型：
-- 输入：油门 (throttle) 和 转向 (steering)
-- 输出：更新后的机器人状态
-"""
+"""可复现的二维差速运动学：目标速度、车辆响应、简单扰动。"""
 
 import math
+import random
+from dataclasses import fields
+
 try:
     from .state import RobotState
 except ImportError:
@@ -14,19 +11,27 @@ except ImportError:
 
 
 class KinematicsEngine:
-    """运动学引擎"""
+    """两种指令共享相同的速度、加速度及一阶响应模型。
+
+    这些参数用于比较闭环控制行为，不代表经过实车标定的土壤动力学。
+    vx 为车体前向速度；正角速度为平面坐标中的逆时针转向。
+    """
 
     def __init__(
         self,
-        dt: float = 0.01,                # 时间步长 (秒)
-        max_speed: float = 2.0,          # 最大速度 (米/秒)
-        max_accel: float = 1.0,          # 最大加速度 (米/秒²)
-        max_angular_vel: float = 1.0,    # 最大角速度 (弧度/秒)
-        wheelbase: float = 0.5,          # 轮距 (米)
-        slip_ratio: float = 0.05,        # 打滑比例 (0-1, 默认5%)
-        enable_slip: bool = True,        # 是否启用打滑模拟
-        terrain_roughness: float = 0.02, # 地面不平导致的角速度偏移幅度 (rad/s)
-        enable_terrain_noise: bool = True # 是否启用地面不平噪声
+        dt: float = 0.01,
+        max_speed: float = 2.0,
+        max_accel: float = 1.0,
+        max_angular_vel: float = 1.0,
+        wheelbase: float = 0.5,
+        slip_ratio: float = 0.05,
+        enable_slip: bool = True,
+        terrain_roughness: float = 0.02,
+        enable_terrain_noise: bool = True,
+        seed: int | None = None,
+        max_angular_accel: float = 2.0,
+        velocity_response_time_s: float = 0.0,
+        angular_response_time_s: float = 0.0,
     ):
         self.dt = dt
         self.max_speed = max_speed
@@ -37,291 +42,194 @@ class KinematicsEngine:
         self.enable_slip = enable_slip
         self.terrain_roughness = terrain_roughness
         self.enable_terrain_noise = enable_terrain_noise
+        self.max_angular_accel = max_angular_accel
+        self.velocity_response_time_s = velocity_response_time_s
+        self.angular_response_time_s = angular_response_time_s
+        self.implement_drag_full = 0.3
+        self.seed = seed
+        self.rng = random.Random(seed)
+        self._validate_parameters()
+        self.reset_control()
 
-        # 当前控制指令（支持两种模式）
-        # 模式1：油门和转向
-        self.throttle = 0.0  # [-1, 1]
-        self.steering = 0.0  # [-1, 1]
+    @staticmethod
+    def _finite(name: str, value: float) -> None:
+        try:
+            valid = math.isfinite(value)
+        except (TypeError, ValueError):
+            valid = False
+        if not valid:
+            raise ValueError(f"{name} must be finite")
 
-        # 模式2：线速度和角速度（农田作业模式）
-        self.linear_velocity = 0.0   # m/s
-        self.angular_velocity = 0.0  # rad/s
+    def _validate_parameters(self):
+        # 参数可在界面运行期间更改，因此每步也校验。
+        for name in ("dt", "max_speed", "max_accel", "max_angular_vel",
+                     "max_angular_accel", "wheelbase"):
+            value = getattr(self, name)
+            self._finite(name, value)
+            if value <= 0:
+                raise ValueError(f"{name} must be positive")
+        for name in ("terrain_roughness", "velocity_response_time_s",
+                     "angular_response_time_s"):
+            value = getattr(self, name)
+            self._finite(name, value)
+            if value < 0:
+                raise ValueError(f"{name} must be nonnegative")
+        for name in ("slip_ratio", "implement_drag_full"):
+            value = getattr(self, name)
+            self._finite(name, value)
+            if not 0 <= value <= 1:
+                raise ValueError(f"{name} must be between 0 and 1")
 
-        # 模式3：机具控制
-        self.target_hitch_height = 0.0  # 0=抬起, 1=放下
-        self.target_pto_on = False
-        self.target_pto_rpm = 540.0     # 标准 PTO 转速
-        self.implement_drag_factor = 0.0  # 当前阻力系数（0=无阻力）
-        self.implement_drag_full = 0.3    # 机具完全着地时的阻力系数
-
-        # 地面不平噪声状态（完全随机模型）
-        # 每个时间步都是独立的随机偏移，会累积导致轨迹偏离
-        self.terrain_noise_omega = 0.0    # 当前的角速度偏移值 (rad/s)
+    @staticmethod
+    def _clip(value: float, limit: float) -> float:
+        return max(-limit, min(limit, value))
 
     def set_control(self, throttle: float, steering: float):
-        """
-        设置控制指令（油门+转向模式）
-
-        Args:
-            throttle: 油门，范围 [-1, 1]
-                     正值前进，负值后退
-            steering: 转向，范围 [-1, 1]
-                     正值右转，负值左转
-        """
-        self.throttle = max(-1.0, min(1.0, throttle))
-        self.steering = max(-1.0, min(1.0, steering))
+        """油门/转向模式，输入为 [-1, 1]，正转向为逆时针。"""
+        self._finite("throttle", throttle)
+        self._finite("steering", steering)
+        self.throttle = self._clip(throttle, 1.0)
+        self.steering = self._clip(steering, 1.0)
+        self.control_mode = "throttle"
 
     def set_velocity_control(self, linear_vel: float, angular_vel: float):
-        """
-        设置速度控制（农田作业模式）
-
-        Args:
-            linear_vel: 线速度 (m/s)
-            angular_vel: 角速度 (rad/s)
-        """
+        """切换到速度模式；(0, 0) 是停车指令，不恢复旧油门。"""
+        self._finite("linear_vel", linear_vel)
+        self._finite("angular_vel", angular_vel)
         self.linear_velocity = linear_vel
         self.angular_velocity = angular_vel
+        self.control_mode = "velocity"
 
-    def update_terrain_noise(self):
-        """
-        更新地面不平导致的角速度偏移
-
-        使用完全随机模型（Random Walk）：
-        - 每个时间步添加一个独立的随机偏移
-        - 偏移会累积，不会自动回归到0
-        - 符合实际情况：没有GPS反馈时，机器人会持续偏离
-
-        这更真实地模拟了农田作业中的情况：
-        - 地面不平是完全随机的
-        - 偏移会累积导致轨迹偏离
-        - 必须依靠GPS闭环控制来纠正
-        """
-        if not self.enable_terrain_noise:
-            return
-
-        import random
-
-        # 完全随机的角速度偏移
-        # 每次都是独立的随机值，范围在 [-roughness, +roughness]
-        # 使用正态分布，标准差为 roughness/3（这样99.7%的值在±roughness内）
-        white_noise = random.gauss(0, self.terrain_roughness / 3.0)
-
-        # 限制在合理范围内（防止极端值）
-        max_offset = self.terrain_roughness
-        self.terrain_noise_omega = max(-max_offset, min(max_offset, white_noise))
-
-    def apply_slip_noise(self, linear_vel: float, angular_vel: float) -> tuple:
-        """
-        应用打滑噪声模型
-
-        农田作业中的打滑特点：
-        - 线速度只能降低（打滑导致速度损失）
-        - 角速度有偏差（左右轮速度不一致）
-        - 速度越快，打滑越严重
-
-        Args:
-            linear_vel: 理想线速度
-            angular_vel: 理想角速度
-
-        Returns:
-            (实际线速度, 实际角速度)
-        """
-        if not self.enable_slip:
-            return linear_vel, angular_vel
-
-        # 速度依赖的打滑系数
-        # 速度越快，打滑系数越高
-        speed_factor = abs(linear_vel) / self.max_speed if self.max_speed > 0 else 0
-        slip_factor = self.slip_ratio * speed_factor
-
-        # 线速度打滑（只能减少）
-        # 使用随机的打滑程度，在 [0, slip_factor] 之间
-        import random
-        actual_slip = random.uniform(0, slip_factor)
-        linear_vel_real = linear_vel * (1.0 - actual_slip)
-
-        # 角速度打滑（可正可负，模拟左右轮不一致）
-        # 角速度噪声通常比线速度小
-        angular_slip = random.uniform(-slip_factor * 0.5, slip_factor * 0.5)
-        angular_vel_real = angular_vel * (1.0 + angular_slip)
-
-        return linear_vel_real, angular_vel_real
-
-    def set_implement_control(self, hitch_height: float, pto_on: bool, pto_rpm: float = 540.0):
-        """
-        设置机具控制指令
-
-        Args:
-            hitch_height: 悬挂高度，0=抬起 1=放下
-            pto_on: PTO 是否开启
-            pto_rpm: PTO 目标转速
-        """
+    def set_implement_control(self, hitch_height: float, pto_on: bool,
+                              pto_rpm: float = 540.0):
+        """悬挂 0=抬起、1=放下；PTO 转速非负。"""
+        self._finite("hitch_height", hitch_height)
+        self._finite("pto_rpm", pto_rpm)
+        if pto_rpm < 0:
+            raise ValueError("pto_rpm must be nonnegative")
         self.target_hitch_height = max(0.0, min(1.0, hitch_height))
-        self.target_pto_on = pto_on
+        self.target_pto_on = bool(pto_on)
         self.target_pto_rpm = pto_rpm
 
-    def _animate_implement(self, state: RobotState):
-        """动画化机具状态（向目标值平滑过渡）"""
-        # 悬挂高度平滑过渡
-        hitch_speed = 1.5  # 秒，与 tillage_controller 的 hitch_lower_time_s 匹配
-        if self.target_hitch_height > state.hitch_height:
-            state.hitch_height = min(self.target_hitch_height,
-                                     state.hitch_height + self.dt / hitch_speed)
-        elif self.target_hitch_height < state.hitch_height:
-            state.hitch_height = max(self.target_hitch_height,
-                                     state.hitch_height - self.dt / hitch_speed)
-
-        # PTO RPM 平滑过渡
-        pto_ramp_time = 0.5  # PTO 加速/减速时间
-        target_rpm = self.target_pto_rpm if self.target_pto_on else 0.0
-        if target_rpm > state.pto_rpm:
-            state.pto_rpm = min(target_rpm,
-                                state.pto_rpm + (self.target_pto_rpm / pto_ramp_time) * self.dt)
-        elif target_rpm < state.pto_rpm:
-            state.pto_rpm = max(target_rpm,
-                                state.pto_rpm - (self.target_pto_rpm / pto_ramp_time) * self.dt)
-        state.pto_on = state.pto_rpm > 10.0
-
-        # 阻力系数 = 悬挂高度 × 满阻力（机具越放下阻力越大）
-        self.implement_drag_factor = state.hitch_height * self.implement_drag_full
-
-    def _apply_implement_drag(self, linear_vel: float) -> float:
-        """施加机具阻力，降低实际速度"""
-        if self.implement_drag_factor <= 0:
-            return linear_vel
-        import random
-        drag = 1.0 - self.implement_drag_factor * random.uniform(0.8, 1.2)
-        return linear_vel * max(0.1, drag)  # 最低保留 10% 速度
-
-    def step(self, state: RobotState) -> RobotState:
-        """
-        更新机器人状态
-
-        支持两种控制模式：
-        1. 油门+转向模式（throttle/steering）
-        2. 速度控制模式（linear_velocity/angular_velocity，农田作业模式）
-        """
-        # 判断使用哪种控制模式
-        if abs(self.linear_velocity) > 1e-6 or abs(self.angular_velocity) > 1e-6:
-            new_state = self._step_velocity_control(state)
-        else:
-            new_state = self._step_throttle_control(state)
-
-        # 机具动画始终执行（即使静止）
-        self._animate_implement(new_state)
-        return new_state
-
-    def _step_throttle_control(self, state: RobotState) -> RobotState:
-        """油门+转向控制模式（也包含地面不平噪声）"""
-        # 1. 更新地面不平导致的角速度偏移
-        self.update_terrain_noise()
-
-        # 2. 计算目标速度
-        target_speed = self.throttle * self.max_speed
-
-        # 当前速度
-        current_speed = state.vx
-
-        # 加速度限制
-        speed_diff = target_speed - current_speed
-        max_speed_change = self.max_accel * self.dt
-        if abs(speed_diff) > max_speed_change:
-            speed_diff = max_speed_change if speed_diff > 0 else -max_speed_change
-
-        new_speed = current_speed + speed_diff
-
-        # 3. 计算角速度，并加上地面不平偏移
-        angular_vel = self.steering * self.max_angular_vel
-        angular_vel += self.terrain_noise_omega  # 地面不平导致的偏移
-
-        # 4. 更新姿态
-        new_yaw = state.yaw + angular_vel * self.dt
-        # 归一化到 [-pi, pi]
-        new_yaw = math.atan2(math.sin(new_yaw), math.cos(new_yaw))
-
-        # 5. 更新位置（使用中点法积分）
-        avg_yaw = (state.yaw + new_yaw) / 2.0
-        dx = new_speed * math.cos(avg_yaw) * self.dt
-        dy = new_speed * math.sin(avg_yaw) * self.dt
-
-        new_x = state.x + dx
-        new_y = state.y + dy
-
-        # 6. 计算加速度
-        ax = (new_speed - current_speed) / self.dt if self.dt > 0 else 0.0
-
-        # 7. 创建新状态
-        new_state = state.copy()
-        new_state.x = new_x
-        new_state.y = new_y
-        new_state.yaw = new_yaw
-        new_state.vx = new_speed
-        new_state.vy = 0.0  # 差速驱动无横向速度
-        new_state.omega_yaw = angular_vel
-        new_state.ax = ax
-        new_state.sim_time += self.dt
-        new_state.step_count += 1
-
-        return new_state
-
-    def _step_velocity_control(self, state: RobotState) -> RobotState:
-        """速度控制模式（农田作业模式，带打滑噪声和地面不平噪声）"""
-        # 1. 更新地面不平导致的角速度偏移
-        self.update_terrain_noise()
-
-        # 2. 应用打滑噪声
-        linear_vel_real, angular_vel_real = self.apply_slip_noise(
-            self.linear_velocity, self.angular_velocity
-        )
-
-        # 2.5. 应用机具阻力
-        linear_vel_real = self._apply_implement_drag(linear_vel_real)
-
-        # 3. 应用地面不平导致的角速度偏移
-        #    这是一个角度值（不是百分比），即使线速度为0也会存在
-        angular_vel_real += self.terrain_noise_omega
-
-        # 4. 更新姿态
-        new_yaw = state.yaw + angular_vel_real * self.dt
-        # 归一化到 [-pi, pi]
-        new_yaw = math.atan2(math.sin(new_yaw), math.cos(new_yaw))
-
-        # 5. 更新位置（使用中点法积分）
-        avg_yaw = (state.yaw + new_yaw) / 2.0
-        dx = linear_vel_real * math.cos(avg_yaw) * self.dt
-        dy = linear_vel_real * math.sin(avg_yaw) * self.dt
-
-        new_x = state.x + dx
-        new_y = state.y + dy
-
-        # 6. 计算加速度
-        current_speed = state.vx
-        ax = (linear_vel_real - current_speed) / self.dt if self.dt > 0 else 0.0
-
-        # 7. 创建新状态
-        new_state = state.copy()
-        new_state.x = new_x
-        new_state.y = new_y
-        new_state.yaw = new_yaw
-        new_state.vx = linear_vel_real
-        new_state.vy = 0.0  # 差速驱动无横向速度
-        new_state.omega_yaw = angular_vel_real
-        new_state.ax = ax
-        new_state.sim_time += self.dt
-        new_state.step_count += 1
-
-        return new_state
+    def reset_rng(self, seed: int | None = None):
+        """重播原随机序列；传入 seed 时切换到新的种子。"""
+        if seed is not None:
+            self.seed = seed
+        self.rng.seed(self.seed)
+        self.terrain_noise_omega = 0.0
 
     def reset_control(self):
-        """重置控制指令"""
+        """复位指令、机具目标及随机序列；车辆状态由调用者重置。"""
+        self.control_mode = "throttle"
         self.throttle = 0.0
         self.steering = 0.0
         self.linear_velocity = 0.0
         self.angular_velocity = 0.0
         self.target_hitch_height = 0.0
         self.target_pto_on = False
+        self.target_pto_rpm = 540.0
         self.implement_drag_factor = 0.0
-        self.terrain_noise_omega = 0.0  # 重置地面噪声
+        self.reset_rng()
+
+    def update_terrain_noise(self):
+        """有界角速度白噪声，积分后的航向会漂移。"""
+        self.terrain_noise_omega = 0.0
+        if self.enable_terrain_noise:
+            self.terrain_noise_omega = self._clip(
+                self.rng.gauss(0.0, self.terrain_roughness / 3.0),
+                self.terrain_roughness,
+            )
+
+    def apply_slip_noise(self, linear_vel: float, angular_vel: float) -> tuple:
+        """简化打滑：降低前向速度，并扰动转弯速度。"""
+        if not self.enable_slip:
+            return linear_vel, angular_vel
+        slip_factor = self.slip_ratio * min(1.0, abs(linear_vel) / self.max_speed)
+        return (
+            linear_vel * (1.0 - self.rng.uniform(0.0, slip_factor)),
+            angular_vel * (1.0 + self.rng.uniform(-slip_factor * 0.5, slip_factor * 0.5)),
+        )
+
+    def _animate_implement(self, state: RobotState):
+        """悬挂全行程 1.5 秒，PTO 按 0.5 秒启动时间渐变。"""
+        state.hitch_height += self._clip(
+            self.target_hitch_height - state.hitch_height, self.dt / 1.5,
+        )
+        target_rpm = self.target_pto_rpm if self.target_pto_on else 0.0
+        # 即使目标 RPM 改成 0，也必须能停转。
+        rpm_rate = max(540.0, self.target_pto_rpm) / 0.5
+        state.pto_rpm += self._clip(target_rpm - state.pto_rpm, rpm_rate * self.dt)
+        state.pto_on = state.pto_rpm > 10.0
+        self.implement_drag_factor = state.hitch_height * self.implement_drag_full
+
+    def _apply_implement_drag(self, linear_vel: float) -> float:
+        if self.implement_drag_factor <= 0:
+            return linear_vel
+        drag = 1.0 - self.implement_drag_factor * self.rng.uniform(0.8, 1.2)
+        return linear_vel * max(0.1, drag)
+
+    def _respond(self, current: float, target: float, rate: float,
+                 response_time: float) -> float:
+        # 精确一阶响应离散式在 dt 大于时间常数时也不会过冲。
+        gain = -math.expm1(-self.dt / response_time) if response_time > 0 else 1.0
+        return current + self._clip((target - current) * gain, rate * self.dt)
+
+    def step(self, state: RobotState) -> RobotState:
+        """推进固定 dt；模式由最后一次 setter 决定。"""
+        if self.control_mode == "velocity":
+            return self._step_velocity_control(state)
+        return self._step_throttle_control(state)
+
+    def _step_throttle_control(self, state: RobotState) -> RobotState:
+        return self._step_motion(state, self.throttle * self.max_speed,
+                                 self.steering * self.max_angular_vel)
+
+    def _step_velocity_control(self, state: RobotState) -> RobotState:
+        return self._step_motion(state, self.linear_velocity, self.angular_velocity)
+
+    def _step_motion(self, state: RobotState, target_speed: float,
+                     target_omega: float) -> RobotState:
+        self._validate_parameters()
+        self._finite("target_speed", target_speed)
+        self._finite("target_omega", target_omega)
+        self._finite("target_hitch_height", self.target_hitch_height)
+        self._finite("target_pto_rpm", self.target_pto_rpm)
+        if not 0 <= self.target_hitch_height <= 1 or self.target_pto_rpm < 0:
+            raise ValueError("invalid implement target")
+        for item in fields(state):
+            self._finite(f"state.{item.name}", getattr(state, item.name))
+
+        new_state = state.copy()
+        self._animate_implement(new_state)
+        target_speed = self._clip(target_speed, self.max_speed)
+        target_omega = self._clip(target_omega, self.max_angular_vel)
+        target_speed, target_omega = self.apply_slip_noise(target_speed, target_omega)
+        target_speed = self._apply_implement_drag(target_speed)
+        self.update_terrain_noise()
+        # 地面扰动随车移动产生；停车后不凭空转动。
+        if abs(target_speed) > 1e-9 or abs(state.vx) > 1e-9:
+            target_omega += self.terrain_noise_omega
+        target_speed = self._clip(target_speed, self.max_speed)
+        target_omega = self._clip(target_omega, self.max_angular_vel)
+        new_state.vx = self._respond(state.vx, target_speed, self.max_accel,
+                                     self.velocity_response_time_s)
+        new_state.omega_yaw = self._respond(state.omega_yaw, target_omega,
+                                            self.max_angular_accel,
+                                            self.angular_response_time_s)
+
+        # 在尚未包角的中点积分，避免 +pi/-pi 两侧的均值变成 0。
+        delta_yaw = (state.omega_yaw + new_state.omega_yaw) * 0.5 * self.dt
+        midpoint_yaw = state.yaw + delta_yaw * 0.5
+        distance = (state.vx + new_state.vx) * 0.5 * self.dt
+        new_state.x += distance * math.cos(midpoint_yaw)
+        new_state.y += distance * math.sin(midpoint_yaw)
+        new_state.yaw = math.atan2(math.sin(state.yaw + delta_yaw),
+                                   math.cos(state.yaw + delta_yaw))
+        new_state.vy = 0.0
+        new_state.ax = (new_state.vx - state.vx) / self.dt
+        new_state.sim_time += self.dt
+        new_state.step_count += 1
+        return new_state
 
 
 class SimplePhysics:
@@ -343,9 +251,27 @@ class SimplePhysics:
         self.friction_coeff = friction_coeff
         self.bounds_x = bounds_x
         self.bounds_y = bounds_y
+        self._validate_parameters()
+
+    def _validate_parameters(self):
+        KinematicsEngine._finite("friction_coeff", self.friction_coeff)
+        if self.friction_coeff < 0:
+            raise ValueError("friction_coeff must be nonnegative")
+        for name in ("bounds_x", "bounds_y"):
+            bounds = getattr(self, name)
+            if len(bounds) != 2:
+                raise ValueError(f"{name} must contain two bounds")
+            for value in bounds:
+                KinematicsEngine._finite(name, value)
+            if bounds[0] >= bounds[1]:
+                raise ValueError(f"{name} must be increasing")
 
     def apply_friction(self, state: RobotState, dt: float) -> RobotState:
         """应用摩擦力"""
+        self._validate_parameters()
+        KinematicsEngine._finite("dt", dt)
+        if dt < 0:
+            raise ValueError("dt must be nonnegative")
         new_state = state.copy()
 
         # 速度衰减
@@ -358,22 +284,12 @@ class SimplePhysics:
 
     def apply_boundary(self, state: RobotState) -> RobotState:
         """边界碰撞"""
+        self._validate_parameters()
         new_state = state.copy()
-
-        # X 边界
-        if new_state.x < self.bounds_x[0]:
-            new_state.x = self.bounds_x[0]
-            new_state.vx = 0.0
-        elif new_state.x > self.bounds_x[1]:
-            new_state.x = self.bounds_x[1]
-            new_state.vx = 0.0
-
-        # Y 边界
-        if new_state.y < self.bounds_y[0]:
-            new_state.y = self.bounds_y[0]
-            new_state.vy = 0.0
-        elif new_state.y > self.bounds_y[1]:
-            new_state.y = self.bounds_y[1]
-            new_state.vy = 0.0
+        new_state.x = max(self.bounds_x[0], min(self.bounds_x[1], state.x))
+        new_state.y = max(self.bounds_y[0], min(self.bounds_y[1], state.y))
+        if new_state.x != state.x or new_state.y != state.y:
+            # vx/vy 是车体坐标速度，并非世界 X/Y 分量。
+            new_state.vx = new_state.vy = 0.0
 
         return new_state

@@ -18,7 +18,7 @@ class FieldGenerator:
     输出符合路径规划节点需求的格式
     """
 
-    def __init__(self, base_x: float = 0.0, base_y: float = 0.0):
+    def __init__(self, base_x: float = 0.0, base_y: float = 0.0, seed: int = None):
         """
         初始化田地生成器
 
@@ -28,6 +28,31 @@ class FieldGenerator:
         """
         self.base_x = base_x
         self.base_y = base_y
+        self._rng = random.Random(seed)
+
+    def generate_fixed_field(self, boundary, holes=None, entry_points=None):
+        """使用实测/固定轮廓，不额外随机改变地块。"""
+        from shapely.geometry import Polygon
+        outer = Polygon(boundary)
+        if not outer.is_valid or outer.area <= 0:
+            raise ValueError("field.boundary must be a valid nonzero polygon")
+        holes = holes or []
+        accepted = []
+        for points in holes:
+            hole = Polygon(points)
+            if not hole.is_valid or hole.area <= 0 or not outer.contains(hole):
+                raise ValueError("Every field hole must lie strictly inside the actual boundary")
+            if any(hole.intersects(other) for other in accepted):
+                raise ValueError("Field holes must not overlap or touch")
+            accepted.append(hole)
+        polygon = Polygon(boundary, holes)
+        min_x, min_y, max_x, max_y = polygon.bounds
+        return {
+            "type": "fixed", "boundary": list(boundary), "holes": list(holes),
+            "width": max_x - min_x, "length": max_y - min_y,
+            "area": polygon.area, "center": (polygon.centroid.x, polygon.centroid.y),
+            "obstacles": [], "entry_points": list(entry_points or [boundary[0]]),
+        }
 
     def generate_rectangular_field(self, width: float, length: float) -> Dict[str, Any]:
         """
@@ -78,14 +103,15 @@ class FieldGenerator:
         center_y = self.base_y + length / 2
 
         # 生成随机角度（逆时针排序）
-        angles = sorted([random.uniform(0, 2 * math.pi) for _ in range(num_points)])
+        angles = sorted([self._rng.uniform(0, 2 * math.pi) for _ in range(num_points)])
 
         # 生成多边形顶点
         boundary = []
         for angle in angles:
             # 随机半径（在0.7-1.3倍基础半径范围内）
-            radius_x = random.uniform(0.7, 1.3) * width / 2
-            radius_y = random.uniform(0.7, 1.3) * length / 2
+            radius = self._rng.uniform(0.7, 1.3)
+            radius_x = radius * width / 2
+            radius_y = radius * length / 2
 
             # 计算坐标（椭圆形）
             x = center_x + radius_x * math.cos(angle)
@@ -133,47 +159,55 @@ class FieldGenerator:
         min_y = min(p[1] for p in boundary)
         max_y = max(p[1] for p in boundary)
 
+        from shapely.geometry import Point, Polygon
+        available = Polygon(boundary, field.get("holes", []))
         obstacles = []
+        accepted = []
         for _ in range(num_obstacles):
-            # 随机生成障碍物中心（避开边界）
-            margin = obstacle_radius * 2
-            x = random.uniform(min_x + margin, max_x - margin)
-            y = random.uniform(min_y + margin, max_y - margin)
-
-            obstacles.append({
-                "type": "circle",
-                "center": (x, y),
-                "radius": obstacle_radius
-            })
-
+            for attempt in range(100):
+                x = self._rng.uniform(min_x, max_x)
+                y = self._rng.uniform(min_y, max_y)
+                circle = Point(x, y).buffer(obstacle_radius)
+                if available.contains(circle) and not any(circle.intersects(p) for p in accepted):
+                    obstacles.append({"type": "circle", "center": (x, y), "radius": obstacle_radius})
+                    accepted.append(circle)
+                    break
+            else:
+                raise ValueError("Unable to place requested obstacles within actual field boundary")
         field["obstacles"] = obstacles
         return field
 
-    def generate_random_holes(self, field: Dict[str, Any], num_holes: int, size_ratio: float = 0.05, segments: int = 16) -> Dict[str, Any]:
+    def generate_random_holes(self, field: Dict[str, Any], num_holes: int,
+                              size_ratio: float = 0.05, segments: int = 16) -> Dict[str, Any]:
+        """孔洞必须完整位于真实轮廓内；按面积比例生成，禁止互相重叠。"""
+        from shapely.geometry import Polygon, Point
         boundary = field.get("boundary", [])
         if not boundary or num_holes <= 0 or size_ratio <= 0.0:
             return field
-        min_x = min(p[0] for p in boundary)
-        max_x = max(p[0] for p in boundary)
-        min_y = min(p[1] for p in boundary)
-        max_y = max(p[1] for p in boundary)
-        area = field.get("area", (max_x - min_x) * (max_y - min_y))
-        holes = field.get("holes", [])
+        outer = Polygon(boundary)
+        if not outer.is_valid:
+            raise ValueError("Invalid field polygon")
+        min_x, min_y, max_x, max_y = outer.bounds
+        holes = list(field.get("holes", []))
+        accepted = [Polygon(points) for points in holes]
+        accepted.extend(Point(item["center"]).buffer(item["radius"])
+                        for item in field.get("obstacles", []) if item.get("type") == "circle")
+        radius = math.sqrt(outer.area * size_ratio / math.pi)
         for _ in range(num_holes):
-            import math
-            hole_area = max(1e-3, area * size_ratio)
-            r = math.sqrt(hole_area / math.pi) * 0.5
-            margin = r * 1.5
-            cx = random.uniform(min_x + margin, max_x - margin)
-            cy = random.uniform(min_y + margin, max_y - margin)
-            pts = []
-            for i in range(segments):
-                ang = 2 * math.pi * i / segments
-                x = cx + r * math.cos(ang)
-                y = cy + r * math.sin(ang)
-                pts.append((x, y))
-            holes.append(pts)
+            for attempt in range(200):
+                cx = self._rng.uniform(min_x, max_x)
+                cy = self._rng.uniform(min_y, max_y)
+                pts = [(cx + radius * math.cos(2 * math.pi * i / segments),
+                        cy + radius * math.sin(2 * math.pi * i / segments)) for i in range(segments)]
+                hole = Polygon(pts)
+                if outer.contains(hole) and not any(hole.intersects(p) for p in accepted):
+                    holes.append(pts)
+                    accepted.append(hole)
+                    break
+            else:
+                raise ValueError("Unable to place requested holes within actual field boundary")
         field["holes"] = holes
+        field["area"] = Polygon(boundary, holes).area
         return field
 
     def _calculate_polygon_area(self, points: List[Tuple[float, float]]) -> float:

@@ -58,6 +58,8 @@ class NextPoint(BaseModel):
     x: float
     y: float
     final: bool
+    arrived: bool = False
+    goal_distance_m: float = 0.0
     index: int = 0
     total: int = 0
     consumed: int = 0

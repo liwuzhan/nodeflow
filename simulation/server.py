@@ -17,6 +17,9 @@ import threading
 import logging
 import yaml
 import random
+import copy
+import math
+from functools import wraps
 from pathlib import Path
 from typing import Dict, Any
 
@@ -39,101 +42,109 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _synchronized(method):
+    @wraps(method)
+    def locked(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return locked
+
+
 class SimulatorServer:
     """仿真器服务器"""
 
     def __init__(
         self,
-        zmq_port: int = 5555,
-        sim_dt: float = 0.01,  # 10ms 时间步长
-        realtime: bool = True,  # 实时模式 vs 加速模式
-        config_path: str = None  # 配置文件路径
+        zmq_port: int = None,
+        sim_dt: float = None,
+        realtime: bool = None,
+        config_path: str = None,
+        *,
+        config: Dict[str, Any] = None,
+        initial_sim_time: float = None,
+        seed: int = None,
+        command_timeout_s: float = None,
     ):
-        self.zmq_port = zmq_port
-        self.sim_dt = sim_dt
-        self.realtime = realtime
+        """构造无需端口；start() 才建立服务，step_once() 可离线步进。
 
-        # 加载配置文件
-        self.config = self._load_config(config_path)
+        显式参数仅在非 None 时覆盖配置。默认时间戳仍是 Unix 时间；
+        离线试验可用 initial_sim_time=0 建立可重放的仿真时间轴。
+        """
+        self._lock = threading.RLock()
+        self.config = copy.deepcopy(config) if config is not None else self._load_config(config_path)
         server_config = self.config.get('server', {})
-        random_seed = server_config.get('random_seed')
-        if random_seed is not None:
-            random.seed(random_seed)
-            logger.info(f"Simulator random seed: {random_seed}")
-
-        # ZMQ 上下文
-        self.context = zmq.Context()
-        self.socket = None
-
-        # 机器人状态
-        self.state = RobotState()
-        self.state_history = StateHistory(max_size=10000)
-
-        # 物理引擎 - 从配置中读取参数
         kinematics_config = self.config.get('kinematics', {})
+        self.zmq_port = int(server_config.get('zmq_port', 5555) if zmq_port is None else zmq_port)
+        self.sim_dt = float(kinematics_config.get('dt', 0.01) if sim_dt is None else sim_dt)
+        self.realtime = bool(server_config.get('realtime', True) if realtime is None else realtime)
+        self.command_timeout_s = float(server_config.get('command_timeout_s', 0.5)
+                                       if command_timeout_s is None else command_timeout_s)
+        if not math.isfinite(self.command_timeout_s) or self.command_timeout_s < 0:
+            raise ValueError("command_timeout_s must be finite and nonnegative")
+        self.seed = server_config.get('random_seed') if seed is None else seed
+        self._rng = random.Random(self.seed)
+        self._pose_rng_state = self._rng.getstate()
+        self.initial_sim_time = initial_sim_time
+        self.context = None
+        self.socket = None
+        self.state = RobotState(sim_time=time.time() if initial_sim_time is None else initial_sim_time)
+        self.state_history = StateHistory(max_size=10000)
         slip_config = kinematics_config.get('slip', {})
         terrain_config = kinematics_config.get('terrain', {})
-
         self.kinematics = KinematicsEngine(
-            dt=sim_dt,
+            dt=self.sim_dt,
             max_speed=kinematics_config.get('max_speed', 2.0),
             max_accel=kinematics_config.get('max_accel', 1.0),
             max_angular_vel=kinematics_config.get('max_angular_vel', 1.0),
             wheelbase=kinematics_config.get('wheelbase', 0.5),
             slip_ratio=slip_config.get('ratio', 0.05),
             enable_slip=slip_config.get('enabled', True),
-            terrain_roughness=terrain_config.get('roughness', 0.02),  # rad/s
-            enable_terrain_noise=terrain_config.get('enabled', True)
+            terrain_roughness=terrain_config.get('roughness', 0.02),
+            enable_terrain_noise=terrain_config.get('enabled', True),
+            seed=self.seed,
+            max_angular_accel=kinematics_config.get('max_angular_accel', 2.0),
+            velocity_response_time_s=kinematics_config.get('velocity_response_time_s', 0.0),
+            angular_response_time_s=kinematics_config.get('angular_response_time_s', 0.0),
         )
-        self.physics = SimplePhysics()
-
-        # 传感器模拟器
+        physics_config = self.config.get('physics', {})
+        bounds = physics_config.get('bounds', {})
+        self.physics = SimplePhysics(
+            friction_coeff=physics_config.get('friction_coeff', 0.1),
+            bounds_x=tuple(bounds.get('x', (-100.0, 100.0))),
+            bounds_y=tuple(bounds.get('y', (-100.0, 100.0))),
+        )
+        sensor_config = self.config.get('sensors', {})
         gps_ref = self.config.get('gps_ref', {})
-        ref_lat = gps_ref.get('lat', 31.2)
-        ref_lon = gps_ref.get('lon', 121.5)
-        self.sensors = SensorSimulator(ref_lat=ref_lat, ref_lon=ref_lon)
-
-        # 田地生成器和配置（田地中心在原点）
+        self.sensors = SensorSimulator(
+            ref_lat=gps_ref.get('lat', 31.2), ref_lon=gps_ref.get('lon', 121.5),
+            gps_noise_std=sensor_config.get('gps_noise_std', 0.5),
+            imu_accel_noise=sensor_config.get('imu_accel_noise', 0.1),
+            imu_gyro_noise=sensor_config.get('imu_gyro_noise', 0.01),
+            seed=self.seed, rtk_config=sensor_config.get('rtk', {}),
+            frequencies=sensor_config.get('frequencies', {}),
+        )
         field_config = self.config.get('field', {})
-        field_width = field_config.get('width', 100.0)
-        field_length = field_config.get('length', 200.0)
-        # 计算base坐标使田地几何中心在(0, 0)
-        base_x = -field_width / 2
-        base_y = -field_length / 2
-        self.field_generator = FieldGenerator(base_x=base_x, base_y=base_y)
+        self.field_generator = FieldGenerator(
+            base_x=-field_config.get('width', 100.0) / 2,
+            base_y=-field_config.get('length', 200.0) / 2,
+            seed=self.seed,
+        )
         self.field = self._generate_default_field()
         self.field_version = 1
         self._init_robot_from_config()
-
-        # 控制
+        self.sensors.update(self.state)
+        self.state_history.add(self.state)
         self.running = False
         self.sim_thread = None
-        self.last_step_time = time.time()
-
-        # 传感器频率限制
-        sensor_config = self.config.get('sensors', {})
-        rtk_config = sensor_config.get('rtk', {})
-        self.rtk_frequency = rtk_config.get('frequency', 50.0)  # 默认50Hz
-        self.rtk_period = 1.0 / self.rtk_frequency  # 秒
-        self.last_rtk_time = 0.0
-
-        # 统计
+        self.last_step_time = time.monotonic()
+        self._last_motion_command_at = None
+        self._last_implement_command_at = None
         self.step_count = 0
         self.request_count = 0
-
-        # RTK 日志统计
-        self.rtk_request_count = 0
-        self.rtk_success_count = 0
-        self.rtk_rate_limited_count = 0
-        self.rtk_last_log_time = time.time()
-        self.rtk_log_interval = 5.0  # 每5秒输出一次统计日志
-
-        # 速度控制日志统计
         self.velocity_cmd_count = 0
-        self.velocity_last_log_time = time.time()
+        self.velocity_last_log_time = time.monotonic()
         self.last_velocity_cmd = (0.0, 0.0)
-
-        logger.info(f"RTK 配置: 频率={self.rtk_frequency}Hz, 周期={self.rtk_period*1000:.1f}ms")
+        self.rtk_log_interval = 5.0
 
     def _generate_default_field(self) -> Dict[str, Any]:
         """生成默认的田地配置"""
@@ -142,6 +153,10 @@ class SimulatorServer:
         width = field_config.get('width', 100.0)
         length = field_config.get('length', 200.0)
 
+        if field_config.get('boundary'):
+            return self.field_generator.generate_fixed_field(
+                field_config['boundary'], field_config.get('fixed_holes', []),
+                field_config.get('entry_points'))
         logger.info(f"Generating {field_type} field: {width}m x {length}m")
 
         if field_type == 'rectangular':
@@ -149,9 +164,9 @@ class SimulatorServer:
         else:
             num_points = field_config.get('num_points', 6)
             field = self.field_generator.generate_irregular_field(width, length, num_points)
-            num_obstacles = field_config.get('num_obstacles', 0)
-            if num_obstacles > 0:
-                field = self.field_generator.generate_simple_obstacles(field, num_obstacles)
+        num_obstacles = field_config.get('num_obstacles', 0)
+        if num_obstacles > 0:
+            field = self.field_generator.generate_simple_obstacles(field, num_obstacles)
         holes_cfg = field_config.get('holes', {})
         enabled = holes_cfg.get('enabled', False)
         num_holes = holes_cfg.get('num_holes', 0)
@@ -180,10 +195,17 @@ class SimulatorServer:
         server_config = self.config.get('server', {})
         mode = server_config.get('initial_pose_mode', 'entry')
         max_distance = float(server_config.get('initial_max_distance_m', 1.0))
-        if mode == 'entry':
+        pose = server_config.get('initial_pose')
+        if pose is not None:
+            self.state.x = float(pose.get('x', 0.0))
+            self.state.y = float(pose.get('y', 0.0))
+            self.state.yaw = float(pose.get('yaw', 0.0))
+        elif mode == 'origin':
+            self.state.x = self.state.y = self.state.yaw = 0.0
+        elif mode == 'entry':
             self._init_robot_near_entry(max_distance_m=max_distance)
         else:
-            self._init_robot_near_entry(max_distance_m=max_distance)
+            raise ValueError("initial_pose_mode must be entry or origin")
 
     def _init_robot_near_entry(self, max_distance_m: float = 1.0):
         """将机器人初始位置设置在入口点附近（不超过指定距离）"""
@@ -194,8 +216,8 @@ class SimulatorServer:
             ex, ey = entry_points[0]
             cx, cy = self.field.get("center", (ex, ey))
             import math
-            r = random.uniform(0.0, max_distance_m)
-            theta = random.uniform(0.0, 2 * math.pi)
+            r = self._rng.uniform(0.0, max_distance_m)
+            theta = self._rng.uniform(0.0, 2 * math.pi)
             self.state.x = ex + r * math.cos(theta)
             self.state.y = ey + r * math.sin(theta)
             # 使航向朝向田地中心
@@ -211,6 +233,7 @@ class SimulatorServer:
         logger.info(f"Starting simulator server on port {self.zmq_port}")
 
         # 绑定 ZMQ socket
+        self.context = zmq.Context()
         self.socket = self.context.socket(zmq.REP)
         self.socket.bind(f"tcp://*:{self.zmq_port}")
         logger.info(f"ZMQ socket bound to tcp://*:{self.zmq_port}")
@@ -233,39 +256,55 @@ class SimulatorServer:
             self.sim_thread.join(timeout=2.0)
 
         if self.socket:
-            self.socket.close()
+            self.socket.close(linger=0)
+            self.socket = None
 
-        self.context.term()
+        if self.context is not None:
+            self.context.term()
+            self.context = None
         logger.info("Simulator server stopped")
 
+    @_synchronized
+    def step_once(self, *, command_elapsed_s: float = None) -> RobotState:
+        """完成一帧，返回真值副本。
+
+        实时服务以 monotonic 检查各类命令。离线实验可显式传入自上条
+        命令累计经过的秒数，消除电脑计算快慢对看门狗的影响；0 表示新命令。
+        """
+        if command_elapsed_s is not None:
+            command_elapsed_s = float(command_elapsed_s)
+            if not math.isfinite(command_elapsed_s) or command_elapsed_s < 0:
+                raise ValueError("command_elapsed_s must be finite and nonnegative")
+        now = time.monotonic()
+        if self.command_timeout_s > 0:
+            def stale(last):
+                if last is None:
+                    return False
+                elapsed = now - last if command_elapsed_s is None else command_elapsed_s
+                return elapsed >= self.command_timeout_s
+            if stale(self._last_motion_command_at):
+                self.kinematics.set_velocity_control(0.0, 0.0)
+                self.last_velocity_cmd = (0.0, 0.0)
+            if stale(self._last_implement_command_at):
+                self.kinematics.set_implement_control(0.0, False, 540.0)
+        self.state = self.kinematics.step(self.state)
+        self.state = self.physics.apply_boundary(self.state)
+        self.state_history.add(self.state)
+        self.sensors.update(self.state)
+        self.step_count += 1
+        self.last_step_time = now
+        return self.state.copy()
+
     def _simulation_loop(self):
-        """仿真循环（在独立线程运行）"""
+        """实时模式与离线试验共享同一帧推进。"""
         logger.info("Simulation loop started")
-
         while self.running:
-            loop_start = time.time()
-
-            # 更新物理状态
-            self.state = self.kinematics.step(self.state)
-            self.state = self.physics.apply_boundary(self.state)
-
-            # 记录历史
-            self.state_history.add(self.state)
-
-            self.step_count += 1
-
-            # 实时模式：等待到下一个时间步
+            loop_start = time.monotonic()
+            self.step_once()
             if self.realtime:
-                elapsed = time.time() - loop_start
-                sleep_time = self.sim_dt - elapsed
+                sleep_time = self.sim_dt - (time.monotonic() - loop_start)
                 if sleep_time > 0:
                     time.sleep(sleep_time)
-                else:
-                    # 警告：仿真运行速度慢于实时
-                    if self.step_count % 100 == 0:
-                        logger.warning(f"Simulation running slower than realtime: {elapsed:.4f}s > {self.sim_dt:.4f}s")
-
-            self.last_step_time = time.time()
 
     def _request_loop(self):
         """请求处理循环"""
@@ -336,88 +375,16 @@ class SimulatorServer:
                 "message": str(e)
             }
 
+    @_synchronized
     def _get_sensor(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        """获取传感器数据"""
+        """GET 只读最后已交付的样本，不改变采样相位或噪声。"""
         sensor_type = request.get("sensor")
-
-        if sensor_type == "gps":
-            data = self.sensors.get_gps_data(self.state)
-        elif sensor_type == "rtk_gps":
-            # RTK GPS 频率限制
-            current_time = time.time()
-            self.rtk_request_count += 1
-
-            if current_time - self.last_rtk_time >= self.rtk_period:
-                data = self.sensors.get_rtk_gps_data(self.state)
-                self.last_rtk_time = current_time
-                self.rtk_success_count += 1
-
-                # 定期输出RTK统计日志
-                self._log_rtk_stats(current_time, data)
-            else:
-                # 返回缓冲的数据（等待下一个周期）
-                self.rtk_rate_limited_count += 1
-                return {
-                    "status": "ok",
-                    "sensor": sensor_type,
-                    "data": None,
-                    "sim_time": self.state.sim_time,
-                    "note": f"Rate limited: next update in {self.rtk_period - (current_time - self.last_rtk_time):.3f}s"
-                }
-        elif sensor_type == "imu":
-            data = self.sensors.get_imu_data(self.state)
-        elif sensor_type == "odometry":
-            data = self.sensors.get_odometry_data(self.state)
-        else:
-            return {
-                "status": "error",
-                "message": f"Unknown sensor type: {sensor_type}"
-            }
-
-        return {
-            "status": "ok",
-            "sensor": sensor_type,
-            "data": data,
-            "sim_time": self.state.sim_time
-        }
-
-    def _log_rtk_stats(self, current_time: float, data: Dict[str, Any]):
-        """定期输出RTK统计日志"""
-        if current_time - self.rtk_last_log_time >= self.rtk_log_interval:
-            elapsed = current_time - self.rtk_last_log_time
-            total = self.rtk_request_count
-            success = self.rtk_success_count
-            limited = self.rtk_rate_limited_count
-
-            if total > 0:
-                success_rate = (success / total) * 100
-                # 输出统计
-                logger.info(
-                    f"[RTK统计] 请求={total}, 成功={success} ({success_rate:.1f}%), "
-                    f"限流={limited}, 实际频率={success/elapsed:.1f}Hz"
-                )
-
-                # 输出当前RTK数据摘要
-                lat = data.get('latitude', 0)
-                lon = data.get('longitude', 0)
-                heading = data.get('heading', 0)
-                rtk_status = data.get('rtk_status', 'UNKNOWN')
-                logger.info(
-                    f"[RTK数据] lat={lat:.8f}, lon={lon:.8f}, "
-                    f"heading={heading:.2f}°, status={rtk_status}"
-                )
-
-                # 输出车辆位置（世界坐标）
-                logger.info(
-                    f"[车辆位置] x={self.state.x:.2f}m, y={self.state.y:.2f}m, "
-                    f"yaw={self.state.yaw:.4f}rad ({self.state.yaw*180/3.14159:.1f}°)"
-                )
-
-            # 重置统计
-            self.rtk_request_count = 0
-            self.rtk_success_count = 0
-            self.rtk_rate_limited_count = 0
-            self.rtk_last_log_time = current_time
+        getters = {"gps": self.sensors.get_gps_data, "rtk_gps": self.sensors.get_rtk_gps_data,
+                   "imu": self.sensors.get_imu_data, "odometry": self.sensors.get_odometry_data}
+        if sensor_type not in getters:
+            return {"status": "error", "message": f"Unknown sensor type: {sensor_type}"}
+        return {"status": "ok", "sensor": sensor_type, "data": getters[sensor_type](),
+                "sim_time": self.state.sim_time}
 
     def _log_velocity_stats(self, current_time: float):
         """定期输出速度控制统计日志"""
@@ -437,6 +404,7 @@ class SimulatorServer:
             self.velocity_cmd_count = 0
             self.velocity_last_log_time = current_time
 
+    @_synchronized
     def _set_actuator(self, request: Dict[str, Any]) -> Dict[str, Any]:
         """设置执行器"""
         actuator_type = request.get("actuator")
@@ -448,6 +416,7 @@ class SimulatorServer:
             steering = data.get("steering", 0.0)
 
             self.kinematics.set_control(throttle, steering)
+            self._last_motion_command_at = time.monotonic()
 
             return {
                 "status": "ok",
@@ -461,11 +430,12 @@ class SimulatorServer:
             angular_vel = data.get("angular_velocity", 0.0)
 
             self.kinematics.set_velocity_control(linear_vel, angular_vel)
+            self._last_motion_command_at = time.monotonic()
             self.velocity_cmd_count += 1
             self.last_velocity_cmd = (linear_vel, angular_vel)
 
             # 定期输出速度控制日志
-            self._log_velocity_stats(time.time())
+            self._log_velocity_stats(time.monotonic())
 
             return {
                 "status": "ok",
@@ -481,6 +451,7 @@ class SimulatorServer:
             pto_rpm = data.get("pto_rpm", 540.0)
 
             self.kinematics.set_implement_control(hitch_height, pto_on, pto_rpm)
+            self._last_implement_command_at = time.monotonic()
 
             return {
                 "status": "ok",
@@ -496,6 +467,7 @@ class SimulatorServer:
                 "message": f"Unknown actuator type: {actuator_type}"
             }
 
+    @_synchronized
     def _get_state(self) -> Dict[str, Any]:
         """获取完整状态"""
         return {
@@ -508,29 +480,34 @@ class SimulatorServer:
             }
         }
 
+    @_synchronized
     def _get_field(self) -> Dict[str, Any]:
         """获取田地信息"""
         return {
             "status": "ok",
-            "field": self.field,
+            "field": copy.deepcopy(self.field),
             "version": self.field_version,
             "sim_time": self.state.sim_time
         }
 
+    @_synchronized
     def _reset(self) -> Dict[str, Any]:
-        """重置仿真"""
-        logger.info("Resetting simulation")
-
-        self.state = RobotState()
+        """同一地块重新开始；清掉旧命令、机具、传感器队列和历史。"""
+        self.state = RobotState(sim_time=time.time() if self.initial_sim_time is None else self.initial_sim_time)
+        self._rng.setstate(self._pose_rng_state)
+        self._init_robot_from_config()
         self.state_history.clear()
+        self.state_history.add(self.state)
         self.kinematics.reset_control()
-        self.step_count = 0
+        self.sensors.reset()
+        self.sensors.update(self.state)
+        self.step_count = self.request_count = self.velocity_cmd_count = 0
+        self._last_motion_command_at = self._last_implement_command_at = None
+        self.last_velocity_cmd = (0.0, 0.0)
+        self.last_step_time = self.velocity_last_log_time = time.monotonic()
+        return {"status": "ok", "message": "Simulation reset"}
 
-        return {
-            "status": "ok",
-            "message": "Simulation reset"
-        }
-
+    @_synchronized
     def _get_config(self) -> Dict[str, Any]:
         """获取仿真器配置（GPS参考点等）"""
         gps_ref = self.config.get('gps_ref', {})
@@ -544,16 +521,17 @@ class SimulatorServer:
             }
         }
 
+    @_synchronized
     def _refresh_field(self, request: Dict[str, Any]) -> Dict[str, Any]:
         """刷新田地并重置初始位置"""
         logger.info("Refreshing field")
         try:
             self.field = self._generate_default_field()
             self.field_version += 1
-            self._init_robot_from_config()
+            self._reset()
             return {
                 "status": "ok",
-                "field": self.field,
+                "field": copy.deepcopy(self.field),
                 "version": self.field_version,
                 "message": "Field refreshed"
             }
@@ -569,8 +547,8 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="NodeFlow Robot Simulator")
-    parser.add_argument("--port", type=int, default=5555, help="ZMQ port")
-    parser.add_argument("--dt", type=float, default=0.01, help="Simulation time step (seconds)")
+    parser.add_argument("--port", type=int, default=None, help="ZMQ port")
+    parser.add_argument("--dt", type=float, default=None, help="Simulation time step (seconds)")
     parser.add_argument("--no-realtime", action="store_true", help="Disable realtime mode")
     parser.add_argument("--config", type=str, default=None, help="Path to config file (YAML)")
 
@@ -579,7 +557,7 @@ def main():
     server = SimulatorServer(
         zmq_port=args.port,
         sim_dt=args.dt,
-        realtime=not args.no_realtime,
+        realtime=False if args.no_realtime else None,
         config_path=args.config
     )
 

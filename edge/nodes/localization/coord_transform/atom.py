@@ -1,8 +1,12 @@
 import time
-try:
-    from utils.geo import wgs84_to_local, heading_geo_to_math
-except ModuleNotFoundError:
-    from geo import wgs84_to_local, heading_geo_to_math
+import math
+if __package__:
+    from .utils.geo import wgs84_to_local, heading_geo_to_math
+else:
+    try:
+        from utils.geo import wgs84_to_local, heading_geo_to_math
+    except ModuleNotFoundError:
+        from geo import wgs84_to_local, heading_geo_to_math
 
 def transform_pose(rtk_data: dict, ref_lon: float, ref_lat: float) -> dict | None:
     """
@@ -24,9 +28,15 @@ def transform_pose(rtk_data: dict, ref_lon: float, ref_lat: float) -> dict | Non
     # Support both lat/lon and latitude/longitude
     lat = rtk_data.get('lat') if 'lat' in rtk_data else rtk_data.get('latitude')
     lon = rtk_data.get('lon') if 'lon' in rtk_data else rtk_data.get('longitude')
-    heading_deg = rtk_data.get('heading', 0.0)
+    heading_deg = rtk_data.get('heading')
 
-    if lat is None or lon is None:
+    if rtk_data.get('heading_valid') is False or heading_deg is None:
+        return None
+    try:
+        lat, lon, heading_deg = float(lat), float(lon), float(heading_deg)
+    except (TypeError, ValueError):
+        return None
+    if not all(math.isfinite(value) for value in (lat, lon, heading_deg)):
         return None
 
     # 1. 位置转换: WGS84 → ENU (米)
@@ -43,4 +53,8 @@ def transform_pose(rtk_data: dict, ref_lon: float, ref_lat: float) -> dict | Non
         'timestamp': rtk_data.get('timestamp', time.time()),
         'rtk_status': rtk_data.get('rtk_status', 'unknown')
     }
+    for key in ('seq', 'heading_valid', 'heading_mode', 'timestamp_source',
+                'acquisition_timestamp', 'received_timestamp', 'sim_time'):
+        if key in rtk_data:
+            pose_enu[key] = rtk_data[key]
     return pose_enu

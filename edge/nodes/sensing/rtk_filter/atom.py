@@ -17,8 +17,16 @@ class EMAFilter:
         lat = rtk.get("lat") if "lat" in rtk else rtk.get("latitude")
         lon = rtk.get("lon") if "lon" in rtk else rtk.get("longitude")
         heading = rtk.get("heading")
-        
-        if lat is None or lon is None:
+
+        # 无航向或显式无效时不拿历史航向拼成新的控制输入。
+        # 老设备没有 heading_valid 字段时，仍接受其有限数值航向。
+        if rtk.get("heading_valid") is False or heading is None:
+            return None
+        try:
+            lat, lon, heading = float(lat), float(lon), float(heading)
+        except (TypeError, ValueError):
+            return None
+        if not all(math.isfinite(value) for value in (lat, lon, heading)):
             return None
             
         if self.lat is None:
@@ -59,7 +67,7 @@ class EMAFilter:
         # 设备时间透传（W3-1）：上游 timestamp 优先，缺失才回退本地墙钟并标记来源
         if rtk.get("timestamp") is not None:
             out["timestamp"] = rtk["timestamp"]
-            out["timestamp_source"] = "device"
+            out["timestamp_source"] = rtk.get("timestamp_source") or "device"
         else:
             out["timestamp"] = now
             out["timestamp_source"] = "local"

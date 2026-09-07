@@ -20,22 +20,41 @@ ports:
       description: "车辆姿态 (x, y, theta)，用于 zone 自动检测和安全互锁"
     - name: next_point
       type: planning.waypoint
-      description: "当前航点，携带 zone 提示 (work/transit)"
+      description: "当前航点，携带 zone 提示；final 为终点目标，arrived 才表示已到达"
     - name: task_enu
       type: planning.task_enu
       description: "地块边界，用于 zone 自动检测 (点-in-多边形)"
     - name: path_progress
       type: planning.path_progress
       description: "可选：路径进度与机具意图，优先于 next_point zone 和边界自动检测"
+    - name: implement_state
+      type: implement.state
+      description: "可选：机具实际悬挂高度和 PTO 转速；开启反馈确认后据此判断 ready"
   outputs:
     - name: tillage_cmd
       type: implement.tillage_cmd
       description: "旋耕控制指令 (PTO 启停 + 悬挂高度)"
     - name: tillage_status
       type: implement.tillage_status
-      description: "旋耕状态反馈 (状态 + 高度 + PTO RPM)"
+      description: "旋耕状态反馈 (状态 + 高度 + PTO RPM + ready 作业就绪)"
 
 params:
+  require_implement_feedback:
+    type: boolean
+    default: false
+    description: "ready 除逻辑就绪外，还需新鲜实态反馈确认悬挂到95%作业高度和PTO转速"
+  implement_feedback_timeout_s:
+    type: float
+    default: 0.5
+    description: "机具实态超过此接收年龄后不能报告就绪（秒）"
+  pto_ready_rpm:
+    type: float
+    default: 480.0
+    description: "实态确认作业就绪所需的最低 PTO 转速（rpm）"
+  final_stop_distance:
+    type: float
+    default: 0.5
+    description: "按位姿核实到达后停止作业，应与行走 final_stop_distance 一致"
   # ========== 悬挂控制 ==========
   hitch_lower_time_s:
     type: float

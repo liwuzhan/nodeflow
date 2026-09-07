@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import time
 import math
+import os
 from typing import Optional, Any
 
 # Pydantic 导入
@@ -26,6 +27,7 @@ class NextPoint(BaseModel):
     x: float
     y: float
     final: bool
+    arrived: bool = False
     index: Optional[int] = None
     total: Optional[int] = None
     consumed: Optional[int] = None
@@ -50,6 +52,7 @@ class VelocityCmd(BaseModel):
     angular_velocity: float
     timestamp: float
     status: Optional[str] = None
+    arrived: Optional[bool] = None
     speed_factor: Optional[float] = None
     dist_factor: Optional[float] = None
     view_factor: Optional[float] = None
@@ -101,6 +104,9 @@ def main():
         target_timeout_s = float(sdk.params.get("target_timeout_s", 0.5))
         progress_timeout_s = float(sdk.params.get("progress_timeout_s", 0.5))
         pivot_timeout_s = float(sdk.params.get("pivot_timeout_s", 8.0))
+        require_implement_ready = bool(sdk.params.get("require_implement_ready", False))
+        allow_work_pivot = bool(sdk.params.get("allow_work_pivot", False))
+        implement_status_timeout_s = float(sdk.params.get("implement_status_timeout_s", 0.5))
 
         sdk.logger.info(f"参数: max_speed={max_speed}, kp={kp}, max_w={max_w}, pivot_th={pivot_th}°")
         sdk.logger.info(
@@ -131,6 +137,10 @@ def main():
         in_pose = sdk.create_input_port("pose_enu")
         in_np = sdk.create_input_port("next_point")
         in_progress = sdk.create_input_port("path_progress")
+        in_tillage = (
+            sdk.create_input_port("tillage_status")
+            if os.getenv("NODE_IN_tillage_status") else None
+        )
         out = sdk.create_output_port("velocity_cmd", schema=VelocityCmd)
 
         # 本地缓存
@@ -138,6 +148,8 @@ def main():
         last_np = None
         last_progress = None
         last_progress_received_at = None
+        last_tillage = None
+        last_tillage_received_at = None
         safety_guard = ControlSafetyGuard(
             pose_timeout_s=pose_timeout_s,
             target_timeout_s=target_timeout_s,
@@ -149,6 +161,7 @@ def main():
             pose = in_pose.recv_latest()
             npkt = in_np.recv_latest()
             progress = in_progress.recv_latest()
+            tillage = in_tillage.recv_latest() if in_tillage else None
             received_at = time.monotonic()
 
             # 更新本地缓存
@@ -161,6 +174,9 @@ def main():
             if progress:
                 last_progress = progress
                 last_progress_received_at = received_at
+            if tillage:
+                last_tillage = tillage
+                last_tillage_received_at = received_at
 
             active_progress = last_progress
             if (
@@ -171,6 +187,16 @@ def main():
                 )
             ):
                 active_progress = None
+
+            active_tillage = last_tillage
+            if (
+                last_tillage_received_at is None
+                or (
+                    implement_status_timeout_s > 0
+                    and received_at - last_tillage_received_at > implement_status_timeout_s
+                )
+            ):
+                active_tillage = None
 
             # 计算控制命令
             now = time.time()
@@ -204,6 +230,9 @@ def main():
                 headland_turn_align_threshold_deg,
                 headland_turn_min_speed_factor,
                 headland_turn_use_path_heading,
+                tillage_status=active_tillage,
+                require_implement_ready=require_implement_ready,
+                allow_work_pivot=allow_work_pivot,
             )
             cmd = safety_guard.apply(cmd, now=received_at, timestamp=now)
             out.send(cmd)

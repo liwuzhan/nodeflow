@@ -278,11 +278,20 @@ class WaypointSelector:
         # 4. 有可信 path_progress 时，直接沿规划路径里程选前瞻目标。
         # 视野窗口在掉头和短行段容易丢点；投影进度更符合 operation_plan 的段语义。
         progress_target = self._select_progress_lookahead_point(progress)
-        if progress_target:
-            return progress_target
-
-        # 5. 根据视野规则选择前瞻点
-        return self._select_lookahead_point(vx, vy)
+        # 5. 根据视野规则选择前瞻点。final 仅表示目标是终点，
+        # 前瞻距离内选中了终点不代表车辆已经到达。
+        target = progress_target or self._select_lookahead_point(vx, vy)
+        goal_x, goal_y = self.state.path[-1]
+        goal_distance = self.euclidean_distance(vx, vy, goal_x, goal_y)
+        targets_goal = target.get("index") == len(self.state.path) - 1
+        target["final"] = bool(target["final"] or targets_goal)
+        target["goal_distance_m"] = goal_distance
+        target["arrived"] = bool(
+            target["final"] and goal_distance <= self.config.goal_tolerance
+        )
+        if target["final"]:
+            target["mode"] = "finished" if target["arrived"] else "tracking"
+        return target
 
     def _initial_consume(self, vx: float, vy: float) -> int:
         """

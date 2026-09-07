@@ -41,7 +41,12 @@ params:
     default: 1000
     description: "ZMQ超时时间 (毫秒)"
 
-  # 默认控制值（无输入时）
+  watchdog_timeout_sec:
+    type: float
+    default: 0.5
+    description: "收到最后一个驱动命令后允许的实际秒数；超时发送零速度，未确认则持续重试"
+
+  # 命令缺字段时的默认值；看门狗停车始终发送零速度
   default_linear_velocity:
     type: float
     default: 0.0

@@ -50,7 +50,7 @@ nodes:
       enable_imu: false          # 禁用IMU（不需要）
       enable_rtk: true           # 启用高精度RTK GPS ✅
       enable_odometry: false     # 禁用里程计
-      enable_state: false        # 禁用状态调试
+      enable_state: true         # 真值只送可视化评估，控制仍只使用 RTK
 
       # 输出频率（匹配市面RTK设备标准频率）
       output_frequency: 20.0     # 20Hz 输出频率
@@ -110,7 +110,7 @@ nodes:
       view_distance: 2.0      # 视野中心距车辆 3m
       view_width: 4.0         # 视野宽度 4m (覆盖作业宽度)
       view_depth: 1.5         # 视野深度 1.5m
-      goal_tolerance: 1.5     # 终点容差 1.5m
+      goal_tolerance: 0.5     # 与行走停止距离一致，arrived 才代表实际到达
       max_search_points: 100  # 最大搜索点数
       # 初始消费参数
       initial_check_points: 10       # 初始化时检查的前N个点
@@ -140,7 +140,7 @@ nodes:
 
   - id: track_controller
     package: control/track_controller
-    description: "履带控制，支持原地转向"
+    description: "履带控制，作业段等待机具就绪并禁止隐式原地转向"
     params:
       max_speed: 2.0
       min_speed: 0.0             # 允许速度降到0，以便精确停止
@@ -170,6 +170,9 @@ nodes:
       target_timeout_s: 0.5
       progress_timeout_s: 0.5
       pivot_timeout_s: 8.0
+      require_implement_ready: true
+      allow_work_pivot: false
+      implement_status_timeout_s: 0.5
 
   - id: tillage_controller
     package: implement/tillage_controller
@@ -181,6 +184,10 @@ nodes:
       pto_engage_delay_s: 0.5
       auto_zone_detect: true
       hitch_working_height: 1.0
+      final_stop_distance: 0.5
+      require_implement_feedback: true
+      implement_feedback_timeout_s: 0.5
+      pto_ready_rpm: 480.0
       enable_verbose_log: false
 
   # ┌─────────────────────────────────────────────────────────────────────┐
@@ -307,6 +314,12 @@ edges:
   - from: path_progress.progress_state
     to: tillage_controller.path_progress
     description: "路径段语义与机具意图 → 机具控制"
+  - from: tillage_controller.tillage_status
+    to: track_controller.tillage_status
+    description: "机具实态确认降到位、PTO达到作业转速后，才允许前进"
+  - from: sim_output.implement_state
+    to: tillage_controller.implement_state
+    description: "机具实际高度与转速反馈，用于确认作业就绪"
 
   # 速度指令 → 仿真器输入
   # 这个边确保sim_input依赖velocity_controller，sim_input会在velocity_controller之后启动
@@ -334,7 +347,10 @@ edges:
   # ENU姿态 → 可视化
   - from: coord_transform.pose_enu
     to: trajectory_viz.pose_enu
-    description: "实际轨迹 (ENU坐标)"
+    description: "RTK 观测轨迹 (ENU坐标)"
+  - from: sim_output.state_info
+    to: trajectory_viz.state_info
+    description: "仿真真值与机具实态，仅用于覆盖率和误差评估"
 
   - from: path_progress.progress_state
     to: trajectory_viz.path_progress

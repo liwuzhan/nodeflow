@@ -13,6 +13,7 @@
 
 import time
 import os
+import json
 from datetime import datetime
 from typing import Dict, Any, Optional, List, Tuple
 
@@ -57,6 +58,8 @@ def main():
         timeout = float(sdk.get_param('timeout', 0.0))
         max_replay_samples = int(sdk.get_param('max_replay_samples', 3000))
         replay_sample_interval = float(sdk.get_param('replay_sample_interval', 0.2))
+        implement_length_m = float(sdk.get_param('implement_length_m', 0.2))
+        implement_offset_m = float(sdk.get_param('implement_offset_m', 0.0))
 
         print(
             f"配置: host={web_host}, port={web_port}, interval={update_interval}s, "
@@ -77,6 +80,7 @@ def main():
         velocity_port = sdk.create_input_port('velocity_cmd')
         tillage_cmd_port = create_optional_input_port(sdk, 'tillage_cmd')
         tillage_status_port = create_optional_input_port(sdk, 'tillage_status')
+        truth_port = create_optional_input_port(sdk, 'state_info')
         path_progress_port = sdk.create_input_port('path_progress')
         output_port = sdk.create_output_port('web_url', schema=TrajectoryWebURL)
 
@@ -88,7 +92,9 @@ def main():
 
         # 4. 状态变量 (L3 职责：状态管理)
         current_task_id: Optional[str] = None
+        current_task_signature = None
         field_boundary: Optional[List[Tuple[float, float]]] = None
+        field_holes = []
         planned_path: Optional[List[Tuple[float, float]]] = None
         path_zones: List[str] = []
         operation_segments: List[Dict[str, Any]] = []
@@ -96,6 +102,7 @@ def main():
         actual_trajectory_with_heading: List[Tuple[float, float, float]] = []
         implement_width_m = 0.0
         coverage_overlay: Dict[str, Any] = {}
+        coverage_accumulator = None
         replay_samples: List[Dict[str, Any]] = []
         replay_events: List[Dict[str, Any]] = []
         last_replay_sample: Optional[Dict[str, Any]] = None
@@ -107,7 +114,13 @@ def main():
         last_velocity_cmd = None
         last_tillage_cmd = None
         last_tillage_status = None
+        last_tillage_status_received = 0.0
+        last_tillage_cmd_received = 0.0
         last_path_progress = None
+        last_truth_state = None
+        last_truth_received = 0.0
+        last_pose_received = 0.0
+        last_sample_source_time = -1.0
 
         # 统计
         update_count = 0
@@ -137,28 +150,40 @@ def main():
                 tillage_cmd_data = tillage_cmd_port.recv_latest() if tillage_cmd_port else None
                 tillage_status_data = tillage_status_port.recv_latest() if tillage_status_port else None
                 path_progress_data = path_progress_port.recv_latest()
+                truth_data = truth_port.recv_latest() if truth_port else None
 
                 # 5c. 处理 task_enu (地块边界)
                 if task_data:
                     task_id = task_data.get("id")
+                    task_signature = json.dumps(
+                        {key: task_data.get(key) for key in ("id", "parcel", "vehicle")},
+                        sort_keys=True,
+                    )
 
                     # 任务切换：清空轨迹
-                    if task_id and task_id != current_task_id:
+                    if task_signature != current_task_signature:
                         print(f"[新任务] {task_id}")
                         current_task_id = task_id
+                        current_task_signature = task_signature
+                        planned_path = None
+                        path_zones = []
+                        operation_segments = []
                         actual_trajectory = []
                         actual_trajectory_with_heading = []
                         coverage_overlay = {}
+                        coverage_accumulator = None
                         replay_samples = []
                         replay_events = []
                         last_replay_sample = None
                         last_replay_sample_time = 0.0
+                        last_sample_source_time = -1.0
 
                     # 提取边界
                     parcel = task_data.get("parcel", {})
                     outer = parcel.get("outer")
                     if isinstance(outer, list) and len(outer) >= 3:
                         field_boundary = outer
+                        field_holes = parcel.get("holes", []) or []
                         print(f"✓ 地块边界: {len(outer)}个点")
 
                     vehicle = task_data.get("vehicle", {})
@@ -168,6 +193,13 @@ def main():
                             implement_width_m = float(width)
                         except (TypeError, ValueError):
                             implement_width_m = 0.0
+                    implement_length_m = float(vehicle.get("implement_length_m", implement_length_m))
+                    implement_offset_m = float(vehicle.get("implement_offset_m", implement_offset_m))
+                    if field_boundary and implement_width_m > 0 and coverage_accumulator is None:
+                        coverage_accumulator = atom.CoverageAccumulator(
+                            field_boundary, implement_width_m, field_holes=field_holes,
+                            implement_length_m=implement_length_m, implement_offset_m=implement_offset_m,
+                        )
 
                 # operation_plan 优先，兼容旧 global_path。
                 if plan_data:
@@ -199,6 +231,7 @@ def main():
                 # 5e. 处理 pose_enu (实际轨迹，持续累积)
                 if pose_data:
                     last_pose = pose_data
+                    last_pose_received = time.monotonic()
                     x = pose_data.get("x")
                     y = pose_data.get("y")
                     theta = pose_data.get("theta", 0.0)
@@ -207,6 +240,12 @@ def main():
                         actual_trajectory.append((float(x), float(y)))
                         actual_trajectory_with_heading.append((float(x), float(y), float(theta)))
                         pose_count += 1
+                        actual_trajectory = actual_trajectory[-max_replay_samples:]
+                        actual_trajectory_with_heading = actual_trajectory_with_heading[-max_replay_samples:]
+
+                if truth_data:
+                    last_truth_state = truth_data
+                    last_truth_received = time.monotonic()
 
                 if next_point_data:
                     last_next_point = next_point_data
@@ -214,27 +253,41 @@ def main():
                     last_velocity_cmd = velocity_data
                 if tillage_cmd_data:
                     last_tillage_cmd = tillage_cmd_data
+                    last_tillage_cmd_received = time.monotonic()
                 if tillage_status_data:
                     last_tillage_status = tillage_status_data
+                    last_tillage_status_received = time.monotonic()
                 if path_progress_data:
                     last_path_progress = path_progress_data
 
                 # 5f. 复盘采样：把最新 pose/control/implement 状态压成低频历史。
                 current_time = time.time()
-                if last_pose and current_time - last_replay_sample_time >= replay_sample_interval:
+                source_time = last_truth_received if truth_port else last_pose_received
+                source_fresh = time.monotonic() - source_time <= max(1.0, replay_sample_interval * 3)
+                if (source_fresh and source_time > last_sample_source_time
+                        and current_time - last_replay_sample_time >= replay_sample_interval):
                     sample = atom.make_replay_sample(
                         pose=last_pose,
                         velocity_cmd=last_velocity_cmd,
                         next_point=last_next_point,
-                        tillage_cmd=last_tillage_cmd,
-                        tillage_status=last_tillage_status,
+                        tillage_cmd=(last_tillage_cmd if not tillage_status_port and
+                                     time.monotonic()-last_tillage_cmd_received <= 1.0 else None),
+                        tillage_status=(last_tillage_status if
+                                        time.monotonic()-last_tillage_status_received <= 1.0 else None),
                         path_progress=last_path_progress,
                         now=current_time,
+                        truth_state=last_truth_state if truth_port else None,
                     )
+                    if coverage_accumulator is not None:
+                        if (last_sample_source_time > 0 and source_time-last_sample_source_time
+                                > max(1.0, replay_sample_interval*3)):
+                            coverage_accumulator.break_segment()
+                        coverage_accumulator.add(sample)
                     replay_samples.append(sample)
                     replay_events.extend(atom.detect_replay_events(last_replay_sample, sample))
                     last_replay_sample = sample
                     last_replay_sample_time = current_time
+                    last_sample_source_time = source_time
 
                     if len(replay_samples) > max_replay_samples:
                         overflow = len(replay_samples) - max_replay_samples
@@ -260,6 +313,7 @@ def main():
                             metrics = atom.calculate_trajectory_metrics(
                                 planned_path, actual_trajectory, approach_threshold_m=5.0
                             )
+                            metrics["trajectory_metric_scope"] = "recent_observation_window"
                         except Exception as e:
                             print(f"✗ 计算指标失败: {e}")
 
@@ -268,6 +322,10 @@ def main():
                             replay_samples,
                             implement_width_m=implement_width_m,
                             field_boundary=field_boundary,
+                            field_holes=field_holes,
+                            implement_length_m=implement_length_m,
+                            implement_offset_m=implement_offset_m,
+                            accumulator=coverage_accumulator,
                         )
                         metrics.update({
                             "implement_width_m": coverage_overlay.get("implement_width_m"),
@@ -279,6 +337,12 @@ def main():
                             "coverage_working_sample_count": coverage_overlay.get("working_sample_count"),
                             "coverage_working_sample_percent": coverage_overlay.get("working_sample_percent"),
                             "coverage_latest_active": coverage_overlay.get("latest_active"),
+                            "missed_area_m2": coverage_overlay.get("missed_area_m2"),
+                            "repeated_area_m2": coverage_overlay.get("repeated_area_m2"),
+                            "outside_area_m2": coverage_overlay.get("outside_area_m2"),
+                            "coverage_position_source": coverage_overlay.get("position_source"),
+                            "coverage_implement_source": coverage_overlay.get("implement_source"),
+                            "coverage_scope": "cumulative",
                         })
 
                     # 推送到 Web 客户端

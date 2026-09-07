@@ -26,47 +26,41 @@ from edge.sdk.nodeflow_sdk import NodeFlowSDK, die
 
 # --- Schema Definitions ---
 
-class GPSFix(BaseModel):
-    timestamp: float
-    seq: int
-    lat: float = Field(..., ge=-90, le=90)
-    lon: float = Field(..., ge=-180, le=180)
-    alt: float
-    status: int
-    satellites: int
+class WireModel(BaseModel):
+    # 保留仿真器的诊断字段；校验不能抹掉原始测量信息。
+    if hasattr(BaseModel, "model_validate"):
+        model_config = {"extra": "allow"}
+    else:
+        class Config:
+            extra = "allow"
 
-class IMUData(BaseModel):
-    timestamp: float
-    seq: int
-    acc_x: float
-    acc_y: float
-    acc_z: float
-    gyro_x: float
-    gyro_y: float
-    gyro_z: float
-    mag_x: float
-    mag_y: float
-    mag_z: float
 
-class RTKFix(BaseModel):
+class SensorSample(WireModel):
     timestamp: float
-    seq: int
-    lat: float = Field(..., ge=-90, le=90)
-    lon: float = Field(..., ge=-180, le=180)
-    alt: float
-    heading: float = Field(..., ge=0, le=360)
-    rtk_status: int
-    satellites: int
-    precision: float
+    seq: Optional[int] = None
 
-class Odometry(BaseModel):
-    timestamp: float
-    seq: int
-    x: float
-    y: float
-    theta: float
-    v_linear: float
-    v_angular: float
+
+class GPSFix(SensorSample):
+    latitude: float = Field(..., ge=-90, le=90)
+    longitude: float = Field(..., ge=-180, le=180)
+    altitude: float
+    num_satellites: int
+
+
+class IMUData(SensorSample):
+    accel: Dict[str, float]
+    gyro: Dict[str, float]
+    mag: Dict[str, float]
+
+
+class RTKFix(GPSFix):
+    heading: Optional[float] = Field(default=None, ge=0, le=360)
+    rtk_status: str
+
+
+class Odometry(SensorSample):
+    position: Dict[str, float]
+    velocity: Dict[str, float]
 
 class FieldInfo(BaseModel):
     field_name: str
@@ -95,13 +89,16 @@ class TaskENU(BaseModel):
     ref_lat: float
     timestamp: float
 
-class StateInfo(BaseModel):
-    timestamp: float
-    seq: int
-    x: float
-    y: float
-    theta: float
-    # Add other state fields as needed
+class StateInfo(WireModel):
+    """完整物理真值，保留 get_state 的嵌套结构，position 转到任务 ENU。"""
+    sim_time: float
+    step_count: int
+    position: Dict[str, float]
+    orientation: Dict[str, float]
+    velocity: Dict[str, float]
+    angular_velocity: Dict[str, float]
+    acceleration: Dict[str, float]
+    implement: Dict[str, Any]
 
 # --- End Schema Definitions ---
 
@@ -111,7 +108,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger("sim_output")
 
-from utils.geo import local_to_wgs84, wgs84_to_local
+try:
+    from .utils.geo import local_to_wgs84, wgs84_to_local
+except ImportError:
+    from utils.geo import local_to_wgs84, wgs84_to_local
 
 
 class SimOutputNode:
@@ -131,6 +131,7 @@ class SimOutputNode:
         self.context = zmq.Context()
         self.socket = self.context.socket(zmq.REQ)
         self.socket.connect(f"tcp://{host}:{port}")
+        self.socket.setsockopt(zmq.LINGER, 0)
         self.socket.setsockopt(zmq.RCVTIMEO, timeout)
         self.socket.setsockopt(zmq.SNDTIMEO, timeout)
 
@@ -140,6 +141,7 @@ class SimOutputNode:
 
         # 创建输出端口（根据配置）
         self.ports = {}
+        self._last_samples = {}
         self.enable_gps = self.params.get('enable_gps', True)
         self.enable_imu = self.params.get('enable_imu', True)
         self.enable_rtk = self.params.get('enable_rtk', True)
@@ -235,29 +237,70 @@ class SimOutputNode:
         port = self.params.get('simulator_port', 5555)
         timeout = self.params.get('timeout', 1000)
         self.socket.connect(f"tcp://{host}:{port}")
+        self.socket.setsockopt(zmq.LINGER, 0)
         self.socket.setsockopt(zmq.RCVTIMEO, timeout)
         self.socket.setsockopt(zmq.SNDTIMEO, timeout)
         logger.info("已重新连接")
 
     def _send_recv(self, request: dict) -> dict:
-        """发送请求并接收响应，带重连机制"""
-        try:
-            self.socket.send_json(request)
-            return self.socket.recv_json()
-        except (zmq.error.Again, zmq.error.ZMQError) as e:
-            logger.warning(f"ZMQ通信异常 ({e})，尝试重连...")
-            self._reconnect()
+        """最多重试一次；每次失败都替换 REQ，包括最后一次超时。"""
+        for attempt in range(2):
             try:
-                # 重连后重试一次
                 self.socket.send_json(request)
                 return self.socket.recv_json()
-            except Exception as e2:
-                logger.error(f"重试失败: {e2}")
-                return {}
-        except Exception as e:
-            logger.error(f"通信未知异常: {e}")
-            self._reconnect()
-            return {}
+            except Exception as exc:
+                logger.warning(f"仿真器通信失败 ({attempt + 1}/2): {exc}")
+                self._reconnect()
+        return {}
+
+    def _publish_sample(self, port_name: str, data: dict) -> bool:
+        """缓存查询不等于新测量；保持采样时间和序号，不加接收时刻。"""
+        if not data:
+            return False
+        timestamp = data.get("timestamp", data.get("sim_time"))
+        seq = data.get("seq", data.get("step_count"))
+        identity = (seq, timestamp)
+        if port_name == "state":
+            # 暂停仿真时也可能换地块参考点，同一步真值需按新坐标重新发布。
+            identity += (data.get("ref_lon"), data.get("ref_lat"))
+        if identity != (None, None) and self._last_samples.get(port_name) == identity:
+            return False
+        self.ports[port_name].send(data)
+        self._last_samples[port_name] = identity
+        return True
+
+    def _publish_state(self, state_data: dict):
+        if not state_data:
+            return
+        if self.enable_state and self.task_enu:
+            self._publish_sample("state", self._state_in_task_enu(state_data))
+        implement = state_data.get("implement", {})
+        if implement:
+            sample = {
+                "hitch_height": implement.get("hitch_height", 0.0),
+                "pto_on": implement.get("pto_on", False),
+                "pto_rpm": implement.get("pto_rpm", 0.0),
+                "timestamp": state_data["sim_time"],
+                "seq": state_data["step_count"],
+            }
+            self._publish_sample("implement", sample)
+
+    def _state_in_task_enu(self, state_data: dict) -> dict:
+        """真值和 RTK 位姿使用同一地块参考点；保留原始世界位置供核对。"""
+        world_position = state_data["position"]
+        lon, lat = local_to_wgs84(
+            world_position["x"], world_position["y"], self.ref_lon, self.ref_lat,
+        )
+        ref_lon, ref_lat = self.task_enu["ref_lon"], self.task_enu["ref_lat"]
+        x, y = wgs84_to_local(lon, lat, ref_lon, ref_lat)
+        return {
+            **state_data,
+            "position": {**world_position, "x": x, "y": y},
+            "world_position": dict(world_position),
+            "coordinate_system": "task_enu",
+            "ref_lon": ref_lon,
+            "ref_lat": ref_lat,
+        }
 
     def _fetch_gps_ref(self) -> tuple[float, float]:
         """
@@ -276,9 +319,29 @@ class SimOutputNode:
         except Exception as e:
             logger.warning(f"从仿真器获取 GPS 参考点失败: {e}")
 
-        # 失败时使用默认值
-        logger.warning("使用默认 GPS 参考点: (121.5, 31.2)")
-        return 121.5, 31.2
+        # 临时断线不能把已经确认的参考点恢复成默认值。
+        fallback = (getattr(self, "ref_lon", 121.5), getattr(self, "ref_lat", 31.2))
+        logger.warning(f"沿用 GPS 参考点: {fallback}")
+        return fallback
+
+    def _refresh_environment(self):
+        """地块或 GPS 原点变更时，一起刷新任务与真值所用参考系。"""
+        field_data, version = self._get_field_current()
+        ref_lon, ref_lat = self._fetch_gps_ref()
+        field_changed = field_data is not None and (
+            version != self.field_version or field_data != self.field_data
+        )
+        ref_changed = (ref_lon, ref_lat) != (self.ref_lon, self.ref_lat)
+        if not (field_changed or ref_changed):
+            return
+        self.ref_lon, self.ref_lat = ref_lon, ref_lat
+        if field_changed:
+            self.field_version = version
+            self.field_data = field_data
+        self.field_info = self._build_field_info()
+        self.task_enu = self._build_task_enu()
+        self.task_request = self._build_task_request_legacy()
+        logger.info("地块或 GPS 参考点变化，已刷新任务坐标系")
 
     def _get_field_current(self) -> tuple[dict, int]:
         """从仿真器读取当前地块信息与版本"""
@@ -436,66 +499,46 @@ class SimOutputNode:
         logger.info("仿真器输出节点已启动")
 
         loop_count = 0
-        last_log_time = time.time()
-        last_field_check = time.time()
+        last_log_time = time.monotonic()
+        last_field_check = time.monotonic()
 
         try:
             while True:
-                start_time = time.time()
+                start_time = time.monotonic()
 
                 # 检查地块版本刷新
-                if time.time() - last_field_check >= 1.0:
+                if time.monotonic() - last_field_check >= 1.0:
                     try:
-                        fld, ver = self._get_field_current()
-                        # 仅当获取到有效地块且版本变化时更新
-                        if fld is not None and ver != self.field_version:
-                            logger.info(f"检测到地块版本变化: {self.field_version} -> {ver}")
-                            self.field_version = ver
-                            self.field_data = fld
-                            self.field_info = self._build_field_info()
-                            self.task_enu = self._build_task_enu()
-                            self.task_request = self._build_task_request_legacy()
+                        self._refresh_environment()
                     except Exception as e:
                         logger.warning(f"地块刷新检查失败: {e}")
                     finally:
-                        last_field_check = time.time()
+                        last_field_check = time.monotonic()
                 # 1. 读取传感器数据
                 if self.enable_gps:
                     gps_data = self._get_sensor("gps")
                     if gps_data:
-                        self.ports['gps'].send(gps_data)
+                        self._publish_sample('gps', gps_data)
 
                 if self.enable_imu:
                     imu_data = self._get_sensor("imu")
                     if imu_data:
-                        self.ports['imu'].send(imu_data)
+                        self._publish_sample('imu', imu_data)
 
                 if self.enable_rtk:
                     rtk_data = self._get_sensor("rtk_gps")
                     if rtk_data:
-                        self.ports['rtk'].send(rtk_data)
+                        self._publish_sample('rtk', rtk_data)
 
                 if self.enable_odometry:
                     odom_data = self._get_sensor("odometry")
                     if odom_data:
-                        self.ports['odom'].send(odom_data)
+                        self._publish_sample('odom', odom_data)
 
                 # 获取完整状态（含机具信息）
                 state_data = self._get_state()
 
-                if self.enable_state and state_data:
-                    self.ports['state'].send(state_data)
-
-                # 机具状态始终发布（独立于 debug 开关）
-                if state_data:
-                    implement = state_data.get("implement", {})
-                    if implement:
-                        self.ports['implement'].send({
-                            "hitch_height": implement.get("hitch_height", 0.0),
-                            "pto_on": implement.get("pto_on", False),
-                            "pto_rpm": implement.get("pto_rpm", 0.0),
-                            "timestamp": state_data.get("sim_time", time.time()),
-                        })
+                self._publish_state(state_data)
 
                 # 2. 持续发送地块和车辆配置（新版本）
                 self.ports['field'].send(self.field_info)
@@ -514,16 +557,16 @@ class SimOutputNode:
 
                 # 4. 频率控制
                 loop_count += 1
-                elapsed = time.time() - start_time
+                elapsed = time.monotonic() - start_time
                 sleep_time = max(0, self.period - elapsed)
 
                 if sleep_time > 0:
                     time.sleep(sleep_time)
 
                 # 定期日志
-                if time.time() - last_log_time > 5.0:
+                if time.monotonic() - last_log_time > 5.0:
                     logger.info(f"运行中 - 已输出 {loop_count} 帧")
-                    last_log_time = time.time()
+                    last_log_time = time.monotonic()
 
         except KeyboardInterrupt:
             logger.info("接收到停止信号")
@@ -535,7 +578,7 @@ class SimOutputNode:
     def cleanup(self):
         """清理资源"""
         logger.info("清理资源...")
-        self.socket.close()
+        self.socket.close(linger=0)
         self.context.term()
         logger.info("仿真器输出节点已停止")
 

@@ -10,7 +10,10 @@ except ImportError:
     def Field(*args, **kwargs): return None
 
 from edge.sdk.nodeflow_sdk import NodeFlowSDK
-from atom import transform_pose
+if __package__:
+    from .atom import transform_pose
+else:
+    from atom import transform_pose
 
 # --- Schema Definitions ---
 
@@ -22,20 +25,37 @@ class TaskENU(BaseModel):
     ref_lat: float
     timestamp: float
 
-class RTKFix(BaseModel):
+class WireModel(BaseModel):
+    if hasattr(BaseModel, "model_validate"):
+        model_config = {"extra": "allow", "populate_by_name": True}
+    else:
+        class Config:
+            extra = "allow"
+            allow_population_by_field_name = True
+
+
+class RTKFix(WireModel):
     timestamp: float
     lat: float = Field(..., ge=-90, le=90, alias="latitude")
     lon: float = Field(..., ge=-180, le=180, alias="longitude")
-    heading: float = Field(..., ge=0, le=360)
-    rtk_status: Optional[int] = None
-    # Loose matching for other fields
+    heading: Optional[float] = Field(default=None, ge=0, le=360)
+    rtk_status: str | int | None = None
+    heading_valid: Optional[bool] = None
+    heading_mode: Optional[str] = None
+    seq: Optional[int] = None
+    timestamp_source: Optional[str] = None
 
-class PoseENU(BaseModel):
+
+class PoseENU(WireModel):
     x: float
     y: float
     theta: float
     timestamp: float
-    rtk_status: Any
+    rtk_status: str | int | None = None
+    heading_valid: Optional[bool] = None
+    heading_mode: Optional[str] = None
+    seq: Optional[int] = None
+    timestamp_source: Optional[str] = None
 
 # --- End Schema Definitions ---
 

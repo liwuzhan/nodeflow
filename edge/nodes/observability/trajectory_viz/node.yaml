@@ -27,6 +27,9 @@ ports:
     - name: pose_enu
       type: localization.pose_enu
       description: "ENU坐标系姿态，用于记录实际轨迹 (x, y, theta)"
+    - name: state_info
+      type: json
+      description: "可选：仿真器真值，仅用于评价，未接入时标注为观测估计"
     - name: next_point
       type: planning.waypoint
       description: "可选：前瞻点和路径跟踪状态，用于复盘目标点选择"
@@ -77,3 +80,13 @@ params:
     type: float
     default: 0.2
     description: "复盘采样间隔 (秒)，用于限制高频 pose 数据量"
+
+  implement_length_m:
+    type: float
+    default: 0.2
+    description: "评价用机具前后长度（米），简化为刚性矩形"
+
+  implement_offset_m:
+    type: float
+    default: 0.0
+    description: "评价用机具中心纵向偏置（米），车前为正、车后为负"
