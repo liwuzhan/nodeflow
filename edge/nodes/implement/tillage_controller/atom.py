@@ -74,10 +74,11 @@ class TillageController:
         cmd = ctrl.update(pose, next_point, task_enu, emergency_stop=False)
     """
 
-    def __init__(self, config: Optional[TillageConfig] = None):
+    def __init__(self, config: Optional[TillageConfig] = None, *, clock=None):
         self.config = config or TillageConfig()
+        self._clock = clock if clock is not None else lambda: time.time()
         self.state = TillageInternalState()
-        self.state.state_enter_time = time.time()
+        self.state.state_enter_time = self._clock()
 
     # ==================== Zone 判定 ====================
 
@@ -216,7 +217,7 @@ class TillageController:
         """尝试状态转换，检查白名单"""
         if target in ALLOWED_TRANSITIONS.get(self.state.state, set()):
             self.state.state = target
-            self.state.state_enter_time = time.time()
+            self.state.state_enter_time = self._clock()
             return True
         return False
 
@@ -240,7 +241,7 @@ class TillageController:
         返回:
             TillageCmd 字典 {'pto_on', 'hitch_height', 'timestamp', 'state'}
         """
-        now = time.time()
+        now = self._clock()
 
         # === 紧急停止处理 ===
         if emergency_stop and not self.state.emergency_stop_active:
@@ -426,7 +427,7 @@ class TillageController:
             "ready_source": "feedback" if self.config.require_implement_feedback else "timer",
             "feedback_fresh": feedback_fresh,
             "pto_rpm": self.state.pto_rpm,
-            "state_elapsed_s": round(time.time() - self.state.state_enter_time, 2),
+            "state_elapsed_s": round(self._clock() - self.state.state_enter_time, 2),
             "emergency_stop": self.state.emergency_stop_active,
             "last_zone": self.state.last_zone,
         }

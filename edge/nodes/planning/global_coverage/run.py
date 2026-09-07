@@ -22,9 +22,14 @@ except ImportError:
     def Field(*args, **kwargs): return None
 
 from edge.sdk.nodeflow_sdk import NodeFlowSDK, die
-from utils.planner import GlobalCoveragePlanner
-from utils.models import VehicleConfig, ParcelData
-from utils.operation_plan import build_operation_plan
+if __package__:
+    from .utils.planner import GlobalCoveragePlanner
+    from .utils.models import VehicleConfig, ParcelData
+    from .utils.operation_plan import build_operation_plan
+else:
+    from utils.planner import GlobalCoveragePlanner
+    from utils.models import VehicleConfig, ParcelData
+    from utils.operation_plan import build_operation_plan
 
 # --- Schema Definitions ---
 
@@ -161,6 +166,7 @@ def main():
             operation_plan_port = sdk.create_output_port('operation_plan', schema=OperationPlan)
 
             last_task_identity = None
+            pending_task = None
             task_count = 0
 
             sdk.logger.info("等待任务数据...")
@@ -169,7 +175,8 @@ def main():
             try:
                 while True:
                     # 读取最新任务请求
-                    task_data = input_port.recv_latest()
+                    task_data = pending_task if pending_task is not None else input_port.recv_latest()
+                    pending_task = None
 
                     if task_data:
                         # ===== 数据验证日志 =====
@@ -295,6 +302,7 @@ def main():
                                                 f"接收到新任务/计划版本，停止发送当前路径: "
                                                 f"{new_task_id} v{new_revision}"
                                             )
+                                            pending_task = new_task
                                             break  # 退出循环，重新规划新任务
 
                                     time.sleep(0.1)  # 10Hz发送频率，与RTK发送频率协调

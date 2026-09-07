@@ -47,8 +47,8 @@ params:
   planning_strategy:
     type: string
     default: parallel
-    enum: [parallel, contour_spiral]
-    description: "规划策略：parallel 用于平行作业行，contour_spiral 用于带作业半径约束的旋耕轮廓/混合收尾覆盖"
+    enum: [parallel, contour_spiral, wide_turn]
+    description: "规划策略：parallel 平行行；contour_spiral 轮廓/混合收尾；wide_turn 凸无孔地块隔多行连续大回转（保留地头漏耕统计，不包含入口对接）"
 
   path_point_spacing:
     type: number

@@ -9,7 +9,7 @@ except ImportError:
         pass
 
 from edge.sdk.nodeflow_sdk import NodeFlowSDK
-from atom import compute_progress
+from atom import compute_progress, _path_stations
 
 
 class ProgressState(BaseModel):
@@ -51,6 +51,7 @@ def main():
         last_path_index = 0
         last_task_id = None
         last_plan_revision = 0
+        stations = None
 
         while True:
             plan = in_plan.recv_latest()
@@ -64,6 +65,10 @@ def main():
                     last_path_index = 0
                     last_task_id = task_id
                     last_plan_revision = plan_revision
+                    path = plan.get("path", [])
+                    if isinstance(path, dict):
+                        path = path.get("points", [])
+                    stations = _path_stations(path)
                     sdk.logger.info(
                         f"[计划更新] task={task_id}, revision={plan_revision}, "
                         f"points={len(plan.get('path', []))}, "
@@ -81,6 +86,7 @@ def main():
                     search_window=search_window,
                     relocalize_error_m=relocalize_error_m,
                     heading_match_weight_m=heading_match_weight_m,
+                    path_stations=stations,
                 )
                 if progress:
                     progress["timestamp"] = time.time()

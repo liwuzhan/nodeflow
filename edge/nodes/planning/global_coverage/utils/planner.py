@@ -6,6 +6,7 @@ from shapely.geometry import LineString, Polygon, MultiPolygon
 
 from .models import VehicleConfig, ParcelData
 from .contour_spiral import build_contour_spiral
+from .wide_turn import build_wide_turn_coverage
 from .safe_area import (
     build_safe_area,
     compute_job_direction
@@ -203,7 +204,7 @@ class GlobalCoveragePlanner:
             "spiral": "contour_spiral",
         }
         strategy = strategy_aliases.get(strategy, strategy)
-        if strategy not in {"parallel", "contour_spiral"}:
+        if strategy not in {"parallel", "contour_spiral", "wide_turn"}:
             raise ValueError(f"Unsupported planning strategy: {planning_strategy}")
 
         self.last_keypoints = []
@@ -229,6 +230,38 @@ class GlobalCoveragePlanner:
 
         if isinstance(work_area, MultiPolygon):
             self.logger.info(f"  多边形组件: {len(list(work_area.geoms))}个")
+
+        if strategy == "wide_turn":
+            entry_point = next((tuple(entry["point"]) for entry in parcel_data.entries
+                                if entry.get("type") == "entry" and entry.get("point")), None)
+            result = build_wide_turn_coverage(
+                work_area,
+                implement_width_m=vehicle_config.implement_width_m,
+                overlap_ratio=vehicle_config.overlap_ratio,
+                min_turn_radius_m=vehicle_config.effective_work_min_turn_radius_m,
+                max_curvature_rate_1pm2=vehicle_config.work_max_curvature_rate_1pm2,
+                path_point_spacing_m=path_point_spacing,
+                entry_point=entry_point,
+            )
+            self.last_path_zones = result.path_zones
+            self.last_plan_metadata = {
+                **result.metadata,
+                "execution_ready": True,
+                "coverage_scope": "work_area_after_setback",
+                "entry_manoeuvre_included": False,
+                "start_pose": {
+                    "x": result.path[0][0], "y": result.path[0][1],
+                    "theta": math.atan2(result.path[1][1]-result.path[0][1],
+                                        result.path[1][0]-result.path[0][0]),
+                },
+            }
+            self.logger.info(
+                f"[大回转] {result.metadata['row_count']}行，"
+                f"{result.metadata['turn_count']}次连续作业连接，"
+                f"最小半径 {result.metadata['achieved_min_turn_radius_m']:.2f}m，"
+                f"预计覆盖 {100 * result.metadata['coverage_ratio']:.1f}%"
+            )
+            return result.path
 
         if strategy == "contour_spiral":
             entry_point = None

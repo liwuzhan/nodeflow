@@ -25,6 +25,7 @@ def project_pose_to_path(
     search_start_idx: int = 0,
     search_window: int = 80,
     heading_match_weight_m: float = 2.0,
+    path_stations: Optional[List[float]] = None,
 ) -> Optional[Dict[str, Any]]:
     if not pose or len(path) < 2:
         return None
@@ -40,7 +41,9 @@ def project_pose_to_path(
         start = max(0, len(path) - 2)
         end = len(path) - 1
 
-    stations = _path_stations(path)
+    stations = path_stations if path_stations is not None else _path_stations(path)
+    if len(stations) != len(path):
+        raise ValueError("path_stations must match path length")
     best = None
     best_score = float("inf")
     pose_theta = pose.get("theta")
@@ -105,11 +108,12 @@ def distance_to_segment_end(
     path: List[Tuple[float, float]],
     station_m: float,
     segment: Optional[Dict[str, Any]],
+    path_stations: Optional[List[float]] = None,
 ) -> float:
     if not path:
         return 0.0
 
-    stations = _path_stations(path)
+    stations = path_stations if path_stations is not None else _path_stations(path)
     if segment:
         end_idx = max(0, min(int(segment.get("end_index", len(path) - 1)), len(path) - 1))
     else:
@@ -136,6 +140,7 @@ def compute_progress(
     search_window: int = 100,
     relocalize_error_m: float = 8.0,
     heading_match_weight_m: float = 2.0,
+    path_stations: Optional[List[float]] = None,
 ) -> Optional[Dict[str, Any]]:
     if not operation_plan or not pose:
         return None
@@ -152,6 +157,7 @@ def compute_progress(
         last_path_index,
         search_window,
         heading_match_weight_m=heading_match_weight_m,
+        path_stations=path_stations,
     )
     if not projection:
         return None
@@ -164,6 +170,7 @@ def compute_progress(
             0,
             len(path) - 1,
             heading_match_weight_m=heading_match_weight_m,
+            path_stations=path_stations,
         )
         if full_projection and abs(full_projection["cross_track_error_m"]) < abs(projection["cross_track_error_m"]):
             projection = full_projection
@@ -176,7 +183,7 @@ def compute_progress(
     pose_theta = float(pose.get("theta", 0.0) or 0.0)
     heading_error = normalize_angle(projection["path_heading_rad"] - pose_theta)
 
-    dist_to_end = distance_to_segment_end(path, projection["station_m"], segment)
+    dist_to_end = distance_to_segment_end(path, projection["station_m"], segment, path_stations)
 
     result = {
         "task_id": operation_plan.get("task_id"),
