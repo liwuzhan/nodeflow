@@ -243,6 +243,9 @@ class TillageController:
         """
         now = self._clock()
 
+        if next_point and isinstance(next_point.get("execution_progress"), dict):
+            path_progress = next_point["execution_progress"]
+
         # === 紧急停止处理 ===
         if emergency_stop and not self.state.emergency_stop_active:
             self.state.emergency_stop_active = True
@@ -403,6 +406,7 @@ class TillageController:
             )
         )
         feedback_ready = False
+        feedback_transport_ready = False
         if feedback_fresh:
             try:
                 hitch_height = float(implement_state.get("hitch_height", 0.0))
@@ -413,16 +417,30 @@ class TillageController:
                     and bool(implement_state.get("pto_on", False))
                     and pto_rpm >= self.config.pto_ready_rpm
                 )
+                feedback_transport_ready = (
+                    all(key in implement_state for key in ("hitch_height", "pto_on", "pto_rpm"))
+                    and math.isfinite(hitch_height) and math.isfinite(pto_rpm)
+                    and 0.0 <= hitch_height <= 0.05
+                    and not bool(implement_state.get("pto_on", False))
+                    and 0.0 <= pto_rpm <= 10.0
+                )
             except (TypeError, ValueError):
                 pass
         ready = logical_ready and (
             feedback_ready if self.config.require_implement_feedback else True
+        )
+        transport_ready = (
+            self.state.state == TillageState.TRANSPORT
+            and not self.state.pto_on and self.state.hitch_height <= 0.05
+            and not self.state.emergency_stop_active
+            and (feedback_transport_ready if self.config.require_implement_feedback else True)
         )
         return {
             "state": self.state.state.value,
             "hitch_height": round(self.state.hitch_height, 3),
             "pto_on": self.state.pto_on,
             "ready": ready,
+            "transport_ready": transport_ready,
             "logical_ready": logical_ready,
             "ready_source": "feedback" if self.config.require_implement_feedback else "timer",
             "feedback_fresh": feedback_fresh,

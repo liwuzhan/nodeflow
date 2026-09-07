@@ -1,6 +1,6 @@
 name: global_coverage
 version: 0.1.0
-description: 全局全覆盖路径规划节点 - 支持平行扫描和轮廓螺旋策略
+description: 全局覆盖规划 - 平行扫描、轮廓螺旋、大回转及沿边补作业
 
 metadata:
   coordinate_system: ENU          # 坐标系: ENU局部笛卡尔坐标
@@ -47,8 +47,18 @@ params:
   planning_strategy:
     type: string
     default: parallel
-    enum: [parallel, contour_spiral, wide_turn]
-    description: "规划策略：parallel 平行行；contour_spiral 轮廓/混合收尾；wide_turn 凸无孔地块隔多行连续大回转（保留地头漏耕统计，不包含入口对接）"
+    enum: [parallel, contour_spiral, wide_turn, wide_turn_boundary]
+    description: "parallel 平行行；contour_spiral 轮廓；wide_turn 连续隔行大回转；wide_turn_boundary 主体大回转加允许抬机具的沿边补作业（凸无孔地块，不含入口对接）"
+
+  boundary_target_coverage_ratio:
+    type: number
+    default: 0.98
+    description: "组合规划目标：退让后作业区域的预计覆盖比例；实际覆盖另由轨迹和机具反馈评价"
+
+  boundary_max_layers:
+    type: integer
+    default: 16
+    description: "最多考察的边界内缩层数；达到目标或没有有效增益后停止补段"
 
   path_point_spacing:
     type: number

@@ -180,6 +180,8 @@ class GlobalCoveragePlanner:
         turn_smoothing_radius_m: Optional[float] = None,
         turn_smoothing_min_angle_deg: float = 35.0,
         planning_strategy: str = "parallel",
+        boundary_target_coverage_ratio: float = 0.98,
+        boundary_max_layers: int = 16,
     ) -> List[Tuple[float, float]]:
         """
         执行全覆盖路径规划
@@ -204,7 +206,7 @@ class GlobalCoveragePlanner:
             "spiral": "contour_spiral",
         }
         strategy = strategy_aliases.get(strategy, strategy)
-        if strategy not in {"parallel", "contour_spiral", "wide_turn"}:
+        if strategy not in {"parallel", "contour_spiral", "wide_turn", "wide_turn_boundary"}:
             raise ValueError(f"Unsupported planning strategy: {planning_strategy}")
 
         self.last_keypoints = []
@@ -231,10 +233,19 @@ class GlobalCoveragePlanner:
         if isinstance(work_area, MultiPolygon):
             self.logger.info(f"  多边形组件: {len(list(work_area.geoms))}个")
 
-        if strategy == "wide_turn":
+        if strategy in {"wide_turn", "wide_turn_boundary"}:
             entry_point = next((tuple(entry["point"]) for entry in parcel_data.entries
                                 if entry.get("type") == "entry" and entry.get("point")), None)
-            result = build_wide_turn_coverage(
+            coverage_builder = build_wide_turn_coverage
+            boundary_options = {}
+            if strategy == "wide_turn_boundary":
+                from .hybrid_coverage import build_hybrid_coverage
+                coverage_builder = build_hybrid_coverage
+                boundary_options = {
+                    "target_coverage_ratio": boundary_target_coverage_ratio,
+                    "max_boundary_layers": boundary_max_layers,
+                }
+            result = coverage_builder(
                 work_area,
                 implement_width_m=vehicle_config.implement_width_m,
                 overlap_ratio=vehicle_config.overlap_ratio,
@@ -242,6 +253,7 @@ class GlobalCoveragePlanner:
                 max_curvature_rate_1pm2=vehicle_config.work_max_curvature_rate_1pm2,
                 path_point_spacing_m=path_point_spacing,
                 entry_point=entry_point,
+                **boundary_options,
             )
             self.last_path_zones = result.path_zones
             self.last_plan_metadata = {
@@ -261,6 +273,11 @@ class GlobalCoveragePlanner:
                 f"最小半径 {result.metadata['achieved_min_turn_radius_m']:.2f}m，"
                 f"预计覆盖 {100 * result.metadata['coverage_ratio']:.1f}%"
             )
+            if strategy == "wide_turn_boundary":
+                self.logger.info(
+                    f"[沿边补作业] 目标覆盖 {boundary_target_coverage_ratio * 100:.1f}%，"
+                    f"预计剩余 {result.metadata['missed_work_area_m2']:.2f}m²"
+                )
             return result.path
 
         if strategy == "contour_spiral":

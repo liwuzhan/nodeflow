@@ -159,6 +159,25 @@ def compute_velocity_cmd(
     if not pose_enu or not npkt:
         return {"linear_velocity": 0.0, "angular_velocity": 0.0, "timestamp": now}
 
+    execution_phase = npkt.get("execution_phase")
+    staged_execution = isinstance(npkt.get("execution_progress"), dict)
+    if staged_execution:
+        path_progress = npkt["execution_progress"]
+        if execution_phase in ("hold", "complete"):
+            return {"linear_velocity": 0.0, "angular_velocity": 0.0, "timestamp": now,
+                    "status": "arrived" if execution_phase == "complete" else "stage_stop",
+                    "arrived": execution_phase == "complete", "speed_factor": 0.0}
+        if path_progress.get("zone") == "transit":
+            if not tillage_status or not tillage_status.get("transport_ready", False):
+                return {"linear_velocity": 0.0, "angular_velocity": 0.0, "timestamp": now,
+                        "status": "waiting_for_implement_raise", "speed_factor": 0.0}
+        if execution_phase == "align":
+            error = normalize_angle(float(npkt["execution_heading_rad"])-float(pose_enu.get("theta", 0.0)))
+            return {"linear_velocity": 0.0,
+                    "angular_velocity": max(-max_w, min(max_w, kp*error)),
+                    "timestamp": now, "status": "turn_align", "speed_factor": 0.0,
+                    "heading_error_deg": math.degrees(error)}
+
     cx = pose_enu.get("x", 0.0)
     cy = pose_enu.get("y", 0.0)
     nx = npkt.get("x", cx)
@@ -207,7 +226,7 @@ def compute_velocity_cmd(
             "speed_factor": 0.0,
         }
 
-    if require_implement_ready and work_requested:
+    if (require_implement_ready or staged_execution) and work_requested:
         ready = bool(
             tillage_status
             and tillage_status.get("state") == "working"
@@ -342,6 +361,9 @@ def compute_velocity_cmd(
         v *= speed_factor
         if v < min_speed:
             v = min_speed
+        if staged_execution:
+            remaining = float(path_progress.get("distance_to_segment_end_m", 0.0))
+            v = min(v, max(0.06, 0.6*remaining))
 
     # 边走边转时保留至少一半角速度；原地转向不能再被速度因子削弱。
     if speed_factor < 1.0 and target_mode != "path_heading" and v > 0.0:

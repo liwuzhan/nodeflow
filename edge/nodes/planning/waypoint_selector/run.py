@@ -21,7 +21,10 @@ except ImportError:
     def Field(*args, **kwargs): return None
 
 from edge.sdk.nodeflow_sdk import NodeFlowSDK
-from atom import WaypointSelector, ViewConfig
+if __package__:
+    from .atom import WaypointSelector, ViewConfig
+else:
+    from atom import WaypointSelector, ViewConfig
 
 # --- Schema Definitions ---
 
@@ -39,6 +42,7 @@ class OperationPlan(BaseModel):
     path_zones: list = []
     segments: list = []
     status: str = "success"
+    summary: dict = {}
 
 class PathProgress(BaseModel):
     task_id: str | None = None
@@ -68,6 +72,10 @@ class NextPoint(BaseModel):
     zone: str = ""  # "work" / "transit" / "" (auto)
     upcoming_turn_angle_deg: float = 0.0
     upcoming_turn_distance: float = 0.0
+    execution_progress: dict | None = None
+    execution_phase: str = ""
+    execution_heading_rad: float | None = None
+    execution_stage_index: int | None = None
 
 # --- End Schema Definitions ---
 
@@ -183,6 +191,7 @@ def main():
                     "path": plan_path,
                     "path_zones": plan_pkt.get("path_zones", []),
                     "segments": plan_pkt.get("segments", []),
+                    "summary": plan_pkt.get("summary", {}),
                     "status": plan_pkt.get("status", "success"),
                     "message": "Loaded from operation_plan",
                 }

@@ -77,6 +77,9 @@ def run_coverage_experiment(plan, parcel, vehicle, *, duration_s=1800.0, seed=42
     arrived_since = stalled_since = None
     stop_reason = "duration_limit"
     last_coverage_working = None
+    staged = bool(plan.get("summary", {}).get("planner", {}).get("staged_execution"))
+    main_stage_metrics = None
+    last_execution_stage = 0
     for step in range(math.ceil(duration_s/e.dt_s)+1):
         now = sim.state.sim_time
         if step % 5 == 0:
@@ -115,6 +118,13 @@ def run_coverage_experiment(plan, parcel, vehicle, *, duration_s=1800.0, seed=42
         if step % 10 == 0:
             state = sim.state
             truth = {"x": state.x, "y": state.y, "theta": state.yaw}
+            execution_stage = int((target or {}).get("execution_stage_index") or 0)
+            if staged and execution_stage != last_execution_stage:
+                if main_stage_metrics is None:
+                    main_stage_metrics = evaluator.metrics()
+                stage_list = plan["summary"]["planner"]["execution_stages"]
+                truth_index = stage_list[execution_stage]["start_index"]
+                last_execution_stage = execution_stage
             truth_progress = compute_progress(plan, truth, truth_index, path_stations=stations, **progress_params)
             truth_index = truth_progress["path_index"]
             working = state.hitch_height >= .95 and state.pto_on
@@ -132,6 +142,9 @@ def run_coverage_experiment(plan, parcel, vehicle, *, duration_s=1800.0, seed=42
                          "pto_rpm": state.pto_rpm, "implement_ready": tillage_status["ready"],
                          "command_v_mps": command["linear_velocity"],
                          "command_w_radps": command["angular_velocity"],
+                         "execution_stage_index": execution_stage if staged else None,
+                         "execution_phase": (target or {}).get("execution_phase", ""),
+                         "execution_zone": ((target or {}).get("execution_progress") or {}).get("zone", ""),
                          "status": command.get("status", "tracking")})
         if arrived_since is not None and now-arrived_since >= 2.0:
             stop_reason = "reported_arrived"
@@ -152,6 +165,12 @@ def run_coverage_experiment(plan, parcel, vehicle, *, duration_s=1800.0, seed=42
         "path_length_m": stations[-1], "final_path_station_m": rows[-1]["path_station_m"],
         "mid_work_pto_disengagements": sum(a["pto_on"] and not b["pto_on"] and b["status"] != "arrived"
                                              for a, b in zip(rows, rows[1:])),
+        "main_stage_pto_disengagements": sum(a["pto_on"] and not b["pto_on"]
+            and b["execution_stage_index"] == 0 and b["execution_phase"] not in ("hold", "complete")
+            for a, b in zip(rows, rows[1:])) if staged else None,
+        "loaded_pivot_sample_count": sum(r["hitch_height"] >= .95 and r["pto_on"]
+            and abs(r["true_v_mps"]) < .02 and abs(r["true_w_radps"]) > .05 for r in rows),
+        "main_stage_metrics": main_stage_metrics,
         "status_frames": status_counts,
         "initialization": "aligned_with_first_segment; entry manoeuvre excluded",
         "evaluation_source": "simulated_true_pose_and_implement_feedback",
@@ -174,11 +193,15 @@ def write_runtime_fixture(plan, parcel, vehicle, output_dir):
     server["field"] = {"boundary": parcel.outer, "fixed_holes": parcel.holes}
     server["vehicle"] = asdict(vehicle)
     graph = yaml.safe_load((ROOT/e.graph_path).read_text())
-    graph["description"] = "大半径连续旋耕演示；仿真初始位置与首段对齐"
+    graph["description"] = "覆盖规划演示；仿真初始位置与首段对齐"
     for node in graph["nodes"]:
         if node["id"] == "global_coverage":
             node["params"].update(planning_strategy=plan["summary"]["planner"]["strategy"],
                                   path_point_spacing=.25, work_speed_limit_mps=.8)
+            metadata = plan["summary"]["planner"]
+            if metadata.get("staged_execution"):
+                node["params"].update(boundary_target_coverage_ratio=metadata["target_coverage_ratio"],
+                                       boundary_max_layers=metadata["max_boundary_layers"])
         elif node["id"] == "sim_output":
             node["params"].update({k: v for k, v in asdict(vehicle).items() if v is not None})
     for name, config in (("server.yaml", server), ("graph.yaml", graph)):
@@ -226,8 +249,9 @@ def plot_tracking(plan, parcel, result, rows, output):
     error.set(xlabel="Simulation time (min)", ylabel="True lateral error (m)", title="Tracking error along the full route")
     error.grid(alpha=.2)
     metrics = result["metrics"]
-    fig.suptitle(f"Wide-turn coverage | completed: {metrics['completed']} | "
-                 f"intermediate PTO releases: {metrics['mid_work_pto_disengagements']}\n"
+    label = "Main passes + boundary cleanup" if plan["summary"]["planner"].get("staged_execution") else "Wide-turn coverage"
+    fig.suptitle(f"{label} | completed: {metrics['completed']} | "
+                 f"PTO releases before final arrival: {metrics['mid_work_pto_disengagements']}\n"
                  f"Whole-field coverage {metrics['coverage_rate_percent']:.1f}% | "
                  f"outside {metrics['outside_area_m2']:.2f} m2 | aligned start, ideal RTK", fontsize=12)
     fig.savefig(output, dpi=170)
@@ -236,7 +260,9 @@ def plot_tracking(plan, parcel, result, rows, output):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--strategy", choices=["wide_turn", "contour_spiral"], default="wide_turn")
+    parser.add_argument("--strategy", choices=["wide_turn", "wide_turn_boundary", "contour_spiral"], default="wide_turn")
+    parser.add_argument("--coverage-target", type=float, default=.98)
+    parser.add_argument("--boundary-layers", type=int, default=16)
     parser.add_argument("--width", type=float, default=40)
     parser.add_argument("--length", type=float, default=70)
     parser.add_argument("--radius", type=float, default=4)
@@ -249,7 +275,9 @@ def main(argv=None):
                             pivot_turn=False, work_min_turn_radius_m=args.radius,
                             work_max_curvature_rate_1pm2=.08)
     planner = GlobalCoveragePlanner()
-    path = planner.plan(parcel, vehicle, path_point_spacing=.25, planning_strategy=args.strategy)
+    path = planner.plan(parcel, vehicle, path_point_spacing=.25, planning_strategy=args.strategy,
+                        boundary_target_coverage_ratio=args.coverage_target,
+                        boundary_max_layers=args.boundary_layers)
     plan = build_operation_plan("coverage_experiment", path, vehicle, timestamp=0,
                                 work_speed_mps=.8, turn_speed_mps=.5,
                                 path_zones=planner.last_path_zones, planner_metadata=planner.last_plan_metadata)

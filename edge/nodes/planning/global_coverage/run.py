@@ -135,6 +135,8 @@ def main():
             # 读取参数
             path_point_spacing = float(sdk.params.get('path_point_spacing', 0.5))
             planning_strategy = str(sdk.params.get('planning_strategy', 'parallel'))
+            boundary_target_coverage_ratio = float(sdk.params.get('boundary_target_coverage_ratio', 0.98))
+            boundary_max_layers = int(sdk.params.get('boundary_max_layers', 16))
             turn_angle_threshold_deg = float(sdk.params.get('turn_angle_threshold_deg', 45.0))
             turn_zone_radius_m = float(sdk.params.get('turn_zone_radius_m', 4.0))
             work_speed_limit_mps = float(sdk.params.get('work_speed_limit_mps', 1.2))
@@ -238,6 +240,8 @@ def main():
                                     turn_smoothing_radius_m=turn_smoothing_radius_m,
                                     turn_smoothing_min_angle_deg=turn_smoothing_min_angle_deg,
                                     planning_strategy=planning_strategy,
+                                    boundary_target_coverage_ratio=boundary_target_coverage_ratio,
+                                    boundary_max_layers=boundary_max_layers,
                                 )
 
                                 duration = time.time() - start_time

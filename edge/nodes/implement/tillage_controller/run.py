@@ -20,7 +20,10 @@ except ImportError:
     def Field(*args, **kwargs): return None
 
 from edge.sdk.nodeflow_sdk import NodeFlowSDK
-from atom import TillageController, TillageConfig
+if __package__:
+    from .atom import TillageController, TillageConfig
+else:
+    from atom import TillageController, TillageConfig
 
 # --- Schema Definitions ---
 
@@ -74,6 +77,7 @@ class TillageStatus(BaseModel):
     hitch_height: float
     pto_on: bool
     ready: bool = False
+    transport_ready: bool = False
     logical_ready: bool = False
     ready_source: str = "timer"
     feedback_fresh: bool = False

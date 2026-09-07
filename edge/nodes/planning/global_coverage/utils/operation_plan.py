@@ -198,6 +198,17 @@ def build_operation_plan(
         transit_segment_type=transit_segment_type,
     )
 
+    metadata = dict(planner_metadata or {})
+    if metadata.get("staged_execution"):
+        stages = []
+        for source in metadata.get("execution_stages", []):
+            stage = dict(source)
+            working = stage["zone"] == "work"
+            stage["motion"] = {"speed_limit_mps": work_speed_mps if working else turn_speed_mps}
+            stage["implement"] = {"pto": "on" if working else "off", "hitch": "down" if working else "up"}
+            stages.append(stage)
+        metadata["execution_stages"] = stages
+
     return {
         "task_id": task_id,
         "timestamp": timestamp,
@@ -222,6 +233,6 @@ def build_operation_plan(
             "work_segment_count": sum(1 for s in segments if s.get("type") == "work"),
             "turn_segment_count": sum(1 for s in segments if s.get("type") == "headland_turn"),
             "transit_segment_count": sum(1 for s in segments if s.get("type") == "transit"),
-            "planner": dict(planner_metadata or {}),
+            "planner": metadata,
         },
     }

@@ -10,6 +10,7 @@ WaypointSelector 核心算法 (L4 原子层)
 """
 
 import math
+import time
 from typing import Optional, List, Tuple, Dict, Any
 from dataclasses import dataclass, field
 
@@ -77,6 +78,7 @@ class WaypointSelector:
         """
         self.config = config or ViewConfig()
         self.state = SelectorState()
+        self._execution_stages = []
 
     @staticmethod
     def euclidean_distance(x1: float, y1: float, x2: float, y2: float) -> float:
@@ -147,11 +149,14 @@ class WaypointSelector:
 
         task_id = path_data.get("task_id")
         plan_revision = int(path_data.get("plan_revision", 0) or 0)
+        metadata = (path_data.get("summary", {}).get("planner", {}) or {})
+        stage_upgrade = bool(metadata.get("staged_execution") and not self._execution_stages)
 
         # 同一任务只有同一计划版本才是重复发布；replan 必须被加载。
         if (
             task_id and task_id == self.state.task_id
             and plan_revision == self.state.plan_revision
+            and not stage_upgrade
         ):
             return None
 
@@ -162,6 +167,26 @@ class WaypointSelector:
         self.state.first_unconsumed_idx = 0
         self.state.in_view_indices = []
         self.state.path_zones = path_data.get("path_zones", [])
+        self._execution_stages = []
+        if metadata.get("staged_execution"):
+            previous_end = 0
+            for stage in metadata.get("execution_stages", []):
+                start, end = int(stage["start_index"]), int(stage["end_index"])
+                if start != previous_end or not start < end < len(self.state.path):
+                    raise ValueError("Execution stages must be contiguous and share endpoints")
+                if stage.get("zone") not in ("work", "transit"):
+                    raise ValueError("Execution stages require work or transit zones")
+                self._execution_stages.append(dict(stage))
+                previous_end = end
+            if not self._execution_stages or previous_end != len(self.state.path) - 1:
+                raise ValueError("Execution stages must cover the complete path")
+        self._execution_stage_index = 0
+        self._execution_path_index = 0
+        self._execution_phase = "align"
+        self._execution_hold_started = None
+        self._execution_stations = [0.0]
+        for a, b in zip(self.state.path, self.state.path[1:]):
+            self._execution_stations.append(self._execution_stations[-1] + math.dist(a, b))
 
         if not self.state.path:
             return None
@@ -254,6 +279,9 @@ class WaypointSelector:
         if vx is None or vy is None:
             return None
 
+        if getattr(self, "_execution_stages", None):
+            return self._select_execution_stage(pose)
+
         # 1. 持续消费：自动消费距离过近的点（防止跳过点导致回头）
         self._continuous_consume(vx, vy)
 
@@ -292,6 +320,108 @@ class WaypointSelector:
         if target["final"]:
             target["mode"] = "finished" if target["arrived"] else "tracking"
         return target
+
+    def _select_execution_stage(self, pose: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute only explicitly staged plans; geometric progress remains observational.
+
+        A stage ends with a stop, then the next heading is aligned with the
+        implement raised. Long continuous work stages retain ordinary lookahead.
+        """
+        px, py, theta = pose["x"], pose["y"], float(pose.get("theta", 0.0))
+        now = float(pose.get("sim_time", pose.get("timestamp", time.monotonic())))
+        if self._execution_phase == "hold" and now - self._execution_hold_started >= 0.3:
+            self._execution_stage_index += 1
+            self._execution_phase = "align"
+            self._execution_path_index = self._execution_stages[self._execution_stage_index]["start_index"]
+        stage = self._execution_stages[self._execution_stage_index]
+        start, end = stage["start_index"], stage["end_index"]
+        path, stations = self.state.path, self._execution_stations
+        first_heading = next(
+            math.atan2(path[i+1][1]-path[i][1], path[i+1][0]-path[i][0])
+            for i in range(start, end) if math.dist(path[i], path[i+1]) > 1e-6
+        )
+        if self._execution_phase == "align" and abs(self._normalize_angle(first_heading-theta)) <= math.radians(5):
+            self._execution_phase = "track"
+
+        # Limit projection to the current stage and a short forward window.
+        # This also prevents overlapping finishing strips from jumping ahead.
+        best = None
+        search_start = max(start, self._execution_path_index - 1)
+        for i in range(search_start, min(end, search_start + 100)):
+            x0, y0 = path[i]
+            dx, dy = path[i+1][0]-x0, path[i+1][1]-y0
+            length = math.hypot(dx, dy)
+            if length <= 1e-6:
+                continue
+            fraction = max(0.0, min(1.0, ((px-x0)*dx+(py-y0)*dy)/(length*length)))
+            qx, qy = x0+fraction*dx, y0+fraction*dy
+            heading = math.atan2(dy, dx)
+            score = math.hypot(px-qx, py-qy) + 2.0*abs(self._normalize_angle(heading-theta))/math.pi
+            if best is None or score < best[0]:
+                best = (score, i, fraction, stations[i]+fraction*length,
+                        (dx*(py-y0)-dy*(px-x0))/length, heading)
+        if best is None:
+            raise ValueError("Execution stage has no nonzero path edge")
+        _, index, fraction, station, cte, heading = best
+        self._execution_path_index = index
+        remaining = max(0.0, stations[end]-station)
+        if self._execution_phase == "track" and remaining <= 0.08 and abs(cte) <= 0.35:
+            if self._execution_stage_index == len(self._execution_stages)-1:
+                self._execution_phase = "complete"
+            else:
+                self._execution_phase = "hold"
+                self._execution_hold_started = now
+
+        phase = self._execution_phase
+        zone = stage["zone"] if phase == "track" else "transit"
+        motion = dict(stage.get("motion", {}))
+        if "speed_limit_mps" in stage:
+            motion["speed_limit_mps"] = stage["speed_limit_mps"]
+        lookahead = self.config.progress_target_lookahead_m
+        target_station = min(stations[end], station + lookahead)
+        target_index = index
+        while target_index+1 < end and stations[target_index+1] < target_station:
+            target_index += 1
+        length = stations[target_index+1]-stations[target_index]
+        t = min(1.0, max(0.0, (target_station-stations[target_index])/max(1e-9, length)))
+        tx = path[target_index][0] + t*(path[target_index+1][0]-path[target_index][0])
+        ty = path[target_index][1] + t*(path[target_index+1][1]-path[target_index][1])
+        if phase == "align":
+            tx, ty = px+math.cos(first_heading), py+math.sin(first_heading)
+        elif phase == "track" and remaining < 0.5:
+            # Keep the last tangent as guidance while braking to the endpoint;
+            # a tiny lateral error must not request a work pivot at a short goal.
+            dx, dy = path[end][0]-path[end-1][0], path[end][1]-path[end-1][1]
+            norm = max(1e-9, math.hypot(dx, dy))
+            tx, ty = path[end][0]+0.5*dx/norm, path[end][1]+0.5*dy/norm
+        if phase == "complete":
+            tx, ty = path[end]
+        effective_progress = {
+            "task_id": self.state.task_id, "segment_id": stage.get("id", f"execution_{self._execution_stage_index}"),
+            "execution_stage_index": self._execution_stage_index, "execution_phase": phase,
+            "stop_tolerance_m": 0.08,
+            "segment_type": stage["zone"], "zone": zone, "path_index": index,
+            "segment_fraction": fraction, "station_m": station,
+            "cross_track_error_m": cte, "path_heading_rad": heading,
+            "distance_to_segment_end_m": remaining,
+            "motion": motion, "implement": {"pto": "on" if zone == "work" else "off",
+                                              "hitch": "down" if zone == "work" else "up"},
+        }
+        turn_info = self._compute_upcoming_turn_info(target_index, stop_index=end)
+        self.state.first_unconsumed_idx = index
+        self.state.in_view_indices = [
+            i for i in self._compute_in_view_points(px, py, theta) if i <= end
+        ]
+        return {
+            "x": tx, "y": ty, "final": phase == "complete", "arrived": phase == "complete",
+            "goal_distance_m": math.dist((px, py), path[-1]), "index": target_index,
+            "total": len(path), "consumed": index,
+            "in_view_count": max(len(self.state.in_view_indices), self.config.min_view_points),
+            "mode": "tracking", "zone": zone, "execution_phase": phase,
+            "execution_heading_rad": first_heading, "execution_progress": effective_progress,
+            "execution_stage_index": self._execution_stage_index,
+            **turn_info,
+        }
 
     def _initial_consume(self, vx: float, vy: float) -> int:
         """
@@ -467,14 +597,15 @@ class WaypointSelector:
             angle_rad += 2.0 * math.pi
         return angle_rad
 
-    def _compute_upcoming_turn_info(self, start_idx: int) -> Dict[str, Any]:
+    def _compute_upcoming_turn_info(self, start_idx: int, stop_index: Optional[int] = None) -> Dict[str, Any]:
         """
         计算从当前路径索引向前一段距离内的最大航向变化。
 
         返回值只描述路径几何，不直接决定控制速度。控制器可用它在急弯前提前减速。
         """
         path = self.state.path
-        if start_idx >= len(path) - 2:
+        end = len(path)-1 if stop_index is None else min(stop_index, len(path)-1)
+        if start_idx >= end - 1:
             return {
                 "upcoming_turn_angle_deg": 0.0,
                 "upcoming_turn_distance": 0.0,
@@ -491,7 +622,7 @@ class WaypointSelector:
         max_turn = 0.0
         turn_distance = 0.0
 
-        for i in range(base_idx + 1, len(path) - 1):
+        for i in range(base_idx + 1, end):
             prev_x, prev_y = path[i - 1]
             cur_x, cur_y = path[i]
             walked += self.euclidean_distance(prev_x, prev_y, cur_x, cur_y)
