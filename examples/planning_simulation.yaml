@@ -21,9 +21,9 @@
 #                      [sim_input] ──→ 仿真器 ──→ 更新位置
 #
 # 启动前准备：
-#   1. 启动仿真器: python3 simulator/server.py
-#   2. 运行场景: python3 -m runtime.main examples/planning_simulation.yaml
-#   3. 在浏览器中打开 http://localhost:8080 查看实时轨迹可视化
+#   1. 启动仿真器: python3 simulation/server.py
+#   2. 运行场景: python3 -m edge.runtime.main examples/planning_simulation.yaml
+#   3. 在浏览器中打开 http://localhost:8080/3d 查看三维农场观察
 
 graph_id: planning_simulation
 graph_version: 1.0
@@ -50,7 +50,7 @@ nodes:
       enable_imu: false          # 禁用IMU（不需要）
       enable_rtk: true           # 启用高精度RTK GPS ✅
       enable_odometry: false     # 禁用里程计
-      enable_state: false        # 禁用状态调试
+      enable_state: true         # 真值只用于观察与评估
 
       # 输出频率（匹配市面RTK设备标准频率）
       output_frequency: 20.0     # 20Hz 输出频率
@@ -211,10 +211,13 @@ nodes:
     package: observability/trajectory_viz
     description: "实时 Web 可视化（Flask + WebSocket + Plotly.js）"
     params:
-      web_host: "0.0.0.0"      # 仅本机访问（更安全）
+      web_host: "0.0.0.0"      # 监听本机与局域网接口
       web_port: 8080             # 使用 8080 端口（避免权限问题）
       timeout: 0.0               # 不自动退出
-      update_interval: 5.0       # 日志打印间隔（数据推送是近实时的）
+      update_interval: 5.0       # 日志打印间隔
+      frame_interval_s: 0.1
+      scene_interval_s: 1.0
+      stale_after_s: 1.0
 
   # ┌─────────────────────────────────────────────────────────────────────┐
   # │ 日志记录 (用于实时监测和复盘) - 暂时禁用以测试核心流程               │
@@ -330,6 +333,18 @@ edges:
   - from: global_coverage.operation_plan
     to: trajectory_viz.operation_plan
     description: "作业计划与段语义 → 可视化"
+
+  - from: sim_output.state_info
+    to: trajectory_viz.state_info
+    description: "仿真真值只用于观察"
+
+  - from: sim_output.rtk_fix
+    to: trajectory_viz.raw_rtk
+    description: "原始RTK状态只用于观察"
+
+  - from: sim_output.implement_state
+    to: trajectory_viz.implement_state
+    description: "机具实际反馈只用于观察"
 
   # ENU姿态 → 可视化
   - from: coord_transform.pose_enu

@@ -48,7 +48,9 @@ nodes:
 
       # 数据处理
       enable_smoothing: false
-      heading_source: "device"
+      heading_source: "dual_antenna"    # 主天线→从天线，不能用RMC运动方向替代
+      heading_timeout_s: 0.5
+      heading_offset_deg: 0.0           # 假定主→从与车头同向；接收机自身heading offset为0
 
       # 调试
       enable_raw_log: true
@@ -181,15 +183,15 @@ nodes:
   # └─────────────────────────────────────────────────────────────────────┘
   - id: trajectory_viz
     package: observability/trajectory_viz
-    description: "生成轨迹对比可视化图像"
+    description: "二维/三维车辆观察与作业覆盖"
     params:
-      output_dir: "/tmp/rtk_trajectory"
-      image_format: "png"
+      web_host: "127.0.0.1"     # 沿用本机访问；局域网监控可配置为0.0.0.0
+      web_port: 8080
       timeout: 0.0
-      update_interval: 10.0
-      dpi: 150
-      figsize_width: 14.0
-      figsize_height: 12.0
+      update_interval: 10.0      # 日志间隔
+      frame_interval_s: 0.1
+      scene_interval_s: 1.0
+      stale_after_s: 1.0
 
   # ┌─────────────────────────────────────────────────────────────────────┐
   # │ 日志记录与Web实时可视化（暂时禁用）                                   │
@@ -227,6 +229,10 @@ edges:
   # └─────────────────────────────────────────────────────────────────────┘
 
   # 真实RTK → RTK滤波
+  - from: rtk_sensor.rtk_fix
+    to: trajectory_viz.raw_rtk
+    description: "原始RTK状态只用于观察"
+
   - from: rtk_sensor.rtk_fix
     to: rtk_filter.rtk_fix
     description: "真实RTK数据 → 滤波"
@@ -380,14 +386,14 @@ edges:
 # 启动步骤：
 #
 # 1. 首次测试：确认 pwm_driver.dry_run_mode: true（不实际输出PWM）
-#    python3 -m runtime.main examples/planning_with_real_rtk.yaml
+#    python3 -m edge.runtime.main configs/graphs/planning_with_real_rtk.yaml
 #
 # 2. 确认工作正常后：
 #    修改 dry_run_mode: false
 #    降低速度：max_speed: 0.5, pwm_duty_scale: 0.3
 #
 # 3. 查看轨迹可视化
-#    打开 /tmp/rtk_trajectory/trajectory_latest.png
+#    打开 http://localhost:8080/3d（三维）或 http://localhost:8080/（二维）
 #
 # 4. 查看RTK原始日志
 #    tail -f /tmp/rtk_raw.log

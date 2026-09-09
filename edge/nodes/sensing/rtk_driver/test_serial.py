@@ -97,9 +97,11 @@ def test_serial_connection(port: str = "/dev/ttyUSB0", baudrate: int = 115200):
                     if 'alt' in data:
                         print(f"  海拔: {data['alt']:.2f} m")
                     if 'heading' in data:
-                        import math
-                        heading_deg = math.degrees(data['heading'])
-                        print(f"  航向: {heading_deg:.2f}°")
+                        heading = data['heading']
+                        if heading is not None and data.get('heading_valid', False):
+                            print(f"  主→从航向: {heading:.2f}°（北零、顺时针）")
+                        else:
+                            print("  航向: 无有效双天线定向")
                     if 'rtk_quality' in data:
                         quality_names = {0: "无效", 1: "单点", 2: "浮点", 3: "固定"}
                         quality = data['rtk_quality']

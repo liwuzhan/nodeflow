@@ -14,6 +14,7 @@ from typing import List, Tuple, Dict, Any, Optional
 import numpy as np
 
 from simulation.evaluation import CoverageAccumulator, is_working
+from shapely import STRtree, distance as geometry_distance, linestrings, points
 from shapely.geometry import Polygon
 from shapely.ops import triangulate
 
@@ -86,34 +87,23 @@ def calculate_lateral_errors(trajectory: List[Tuple[float, float]],
     Returns:
         横向误差列表（米）
     """
-    lateral_errors = []
+    if not trajectory or len(planned_path) < 2:
+        return []
 
-    for actual_point in trajectory:
-        min_dist = float('inf')
+    # Index every segment, not sampled vertices: nearest distance remains the
+    # exact distance to the complete polyline, including sharp corners.
+    coordinates = np.asarray(planned_path, dtype=float)[:, :2]
+    segments = linestrings(np.stack((coordinates[:-1], coordinates[1:]), axis=1))
+    repeated = np.all(coordinates[:-1] == coordinates[1:], axis=1)
+    if np.any(repeated):
+        # A zero-length segment has the same distance as its endpoint. Represent
+        # it as a valid Point rather than indexing a degenerate LineString.
+        segments[repeated] = points(coordinates[:-1][repeated])
 
-        for i in range(len(planned_path) - 1):
-            p1 = planned_path[i]
-            p2 = planned_path[i + 1]
-
-            dx = p2[0] - p1[0]
-            dy = p2[1] - p1[1]
-
-            # 点到线段的距离
-            if dx*dx + dy*dy == 0:
-                dist = euclidean_distance(actual_point, p1)
-            else:
-                t = max(0, min(1, ((actual_point[0] - p1[0]) * dx +
-                                   (actual_point[1] - p1[1]) * dy) /
-                               (dx * dx + dy * dy)))
-                closest = (p1[0] + t * dx, p1[1] + t * dy)
-                dist = euclidean_distance(actual_point, closest)
-
-            min_dist = min(min_dist, dist)
-
-        if min_dist != float('inf'):
-            lateral_errors.append(min_dist)
-
-    return lateral_errors
+    tree = STRtree(segments)
+    observations = points(np.asarray(trajectory, dtype=float)[:, :2])
+    nearest_indices = tree.nearest(observations)
+    return geometry_distance(observations, segments[nearest_indices]).tolist()
 
 
 def calculate_trajectory_metrics(planned_path: List[Tuple[float, float]],
@@ -282,9 +272,34 @@ def build_coverage_overlay(
         "active_segments": 0, "implement_width_m": implement_width_m,
     }
     display_geometry_truncated = False
+    spatial_layers = {key: [] for key in ("covered", "repeated", "missed", "outside")}
     if accumulator is not None:
         polygons = []
-        covered = accumulator.geometries()["covered"].simplify(
+        geometries = accumulator.geometries()
+
+        def polygon_regions(geometry):
+            if isinstance(geometry, Polygon):
+                if not geometry.is_empty:
+                    yield geometry
+            elif hasattr(geometry, "geoms"):
+                for child in geometry.geoms:
+                    yield from polygon_regions(child)
+
+        # The 3D view accepts holes directly; keep legacy flattened polygons for
+        # the 2D page. Display simplification never feeds back into area metrics.
+        for key, geometry in geometries.items():
+            display = geometry.simplify(0.03, preserve_topology=True)
+            if key != "outside":
+                display = display.intersection(accumulator.field)
+            for region in polygon_regions(display):
+                if len(spatial_layers[key]) >= max_polygons:
+                    display_geometry_truncated = True
+                    break
+                spatial_layers[key].append({
+                    "exterior": list(region.exterior.coords),
+                    "holes": [list(ring.coords) for ring in region.interiors],
+                })
+        covered = geometries["covered"].simplify(
             0.03, preserve_topology=True).intersection(accumulator.field)
         regions = [covered] if isinstance(covered, Polygon) else list(covered.geoms)
         for region in regions:
@@ -305,6 +320,7 @@ def build_coverage_overlay(
     result = {
         **summary,
         **metrics,
+        **spatial_layers,
         "polygons": polygons,
         "planned_polygons": [],
         "display_sample_count": len(replay_samples),
@@ -359,7 +375,9 @@ def make_replay_sample(
     intent_working = (path_progress.get("zone") == "work") or (path_progress.get("segment_type") == "work")
 
     position_source = "estimated_pose"
-    implement_source = "feedback" if tillage_status else "command_estimate" if tillage_cmd else "unknown"
+    # TillageStatus is the controller's logical state, even when readiness
+    # was confirmed using feedback; its hitch fields are not measurements.
+    implement_source = "controller_status" if tillage_status else "command_estimate" if tillage_cmd else "unknown"
     if truth_state:
         pose = truth_state
         if "position" in truth_state:

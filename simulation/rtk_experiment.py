@@ -49,8 +49,11 @@ class Experiment:
     max_speed_mps: float = 2.0
     segment_speed_limit_mps: float = 1.2
     graph_path: str = "configs/graphs/planning_simulation.yaml"
+    tracking_method: str | None = None  # None沿用图；对照实验可显式覆盖
 
     def validate(self):
+        if self.tracking_method not in (None, "heading_p", "pure_pursuit"):
+            raise ValueError("tracking_method must be heading_p or pure_pursuit")
         if self.heading_mode != "dual_antenna":
             raise ValueError("This closed-loop experiment requires dual_antenna heading; "
                              "position_delta needs external motion/heading initialization")
@@ -85,6 +88,8 @@ def _node_parameters(experiment: Experiment):
     controller = {mapping.get(k, k): v for k, v in nodes["track_controller"].items()
                   if mapping.get(k, k) in allowed}
     controller.update(max_speed=experiment.max_speed_mps, require_implement_ready=False)
+    if experiment.tracking_method is not None:
+        controller["tracking_method"] = experiment.tracking_method
     selector_keys = {item.name for item in fields(ViewConfig)}
     selector = {k: v for k, v in nodes["waypoint_selector"].items() if k in selector_keys}
     selector["goal_tolerance"] = controller["final_stop_dist"]

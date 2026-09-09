@@ -54,7 +54,9 @@ def transform_pose(rtk_data: dict, ref_lon: float, ref_lat: float) -> dict | Non
         'rtk_status': rtk_data.get('rtk_status', 'unknown')
     }
     for key in ('seq', 'heading_valid', 'heading_mode', 'timestamp_source',
-                'acquisition_timestamp', 'received_timestamp', 'sim_time'):
+                'acquisition_timestamp', 'received_timestamp', 'sim_time',
+                'heading_source', 'heading_age_s', 'antenna_heading_deg',
+                'heading_offset_deg'):
         if key in rtk_data:
             pose_enu[key] = rtk_data[key]
     return pose_enu

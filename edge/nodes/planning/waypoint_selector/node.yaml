@@ -114,6 +114,11 @@ params:
     default: true
     description: "启用后优先使用 path_progress 沿路径里程生成前瞻目标，视野算法作为兜底"
 
+  progress_timeout_s:
+    type: number
+    default: 0.5
+    description: "路径进度更新超时后改用实时位姿本地选点 (秒)，0 禁用超时"
+
   progress_target_lookahead_m:
     type: number
     default: 2.5

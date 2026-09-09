@@ -408,8 +408,9 @@ class PWMDriverNode:
                         }
                     else:
                         # ---- differential 模式（默认）----
-                        # 应用角速度偏置校准
-                        w_angular += self.angular_velocity_bias
+                        # 零指令始终保持中位；偏置只校准有意的行走或原地转向。
+                        if v_linear != 0.0 or w_angular != 0.0:
+                            w_angular += self.angular_velocity_bias
 
                         # 安全检查：限制速度范围
                         if self.enable_safety_check:

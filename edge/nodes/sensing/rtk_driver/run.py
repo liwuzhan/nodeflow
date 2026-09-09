@@ -9,8 +9,12 @@ import time
 import math
 
 from edge.sdk.nodeflow_sdk import NodeFlowSDK, die
-from nmea_parser import NMEAParser
-from device_interface import create_interface
+if __package__:
+    from .nmea_parser import NMEAParser
+    from .device_interface import create_interface
+else:
+    from nmea_parser import NMEAParser
+    from device_interface import create_interface
 
 
 class RTKDriverNode:
@@ -39,6 +43,13 @@ class RTKDriverNode:
         self.enable_smoothing = self.sdk.get_param("enable_smoothing", False)
         self.smoothing_alpha = self.sdk.get_param("smoothing_alpha", 0.3)
         self.heading_source = self.sdk.get_param("heading_source", "dual_antenna")
+        # 兼容旧真机图的 device 名称；两者均要求设备双天线实测航向。
+        if self.heading_source == "device":
+            self.heading_source = "dual_antenna"
+        if self.heading_source != "dual_antenna":
+            raise ValueError("rtk_driver requires heading_source=dual_antenna; "
+                             "course over ground is not antenna heading")
+        self.heading_timeout_s = float(self.sdk.get_param("heading_timeout_s", 0.5))
         self.enable_raw_log = self.sdk.get_param("enable_raw_log", False)
         self.raw_log_path = self.sdk.get_param("raw_log_path", "/tmp/rtk_raw.log")
 
@@ -46,7 +57,6 @@ class RTKDriverNode:
         self.antenna_offset_x = self.sdk.get_param("antenna_offset_x", 0.0)
         self.antenna_offset_y = self.sdk.get_param("antenna_offset_y", 0.0)
         self.heading_offset_deg = self.sdk.get_param("heading_offset_deg", 0.0)
-        self.heading_offset_rad = math.radians(self.heading_offset_deg)
 
         # 创建输出端口
         self.output_port = self.sdk.create_output_port("rtk_fix")
@@ -64,7 +74,7 @@ class RTKDriverNode:
         self.device = create_interface(config)
 
         # 创建NMEA解析器
-        self.parser = NMEAParser()
+        self.parser = NMEAParser(heading_timeout_s=self.heading_timeout_s)
 
         # 状态变量
         self.last_valid_data = None
@@ -123,6 +133,7 @@ class RTKDriverNode:
         """主循环：读取并解析NMEA数据"""
         # 检查连接状态，如果断开则尝试重连
         if not self.device.is_connected():
+            self.parser.reset_heading()
             self.logger.warning("Device disconnected, attempting to reconnect...")
             if self.device.connect():
                 self.logger.info("✓ Device reconnected")
@@ -323,9 +334,18 @@ class RTKDriverNode:
         """
         METERS_PER_DEG_LAT = 111320.0
 
-        # 航向校正（度数相减）
-        if self.heading_offset_deg != 0.0 and 'heading' in data:
-            data['heading'] = (data['heading'] - self.heading_offset_deg) % 360.0
+        # 原始主天线→从天线的角度单独保留；安装角只应用一次。
+        heading = data.get('heading')
+        if data.get('heading_valid') is False or heading is None:
+            return data
+        heading = float(heading)
+        if not math.isfinite(heading):
+            data['heading'] = None
+            data['heading_valid'] = False
+            return data
+        data['antenna_heading_deg'] = heading % 360.0
+        data['heading_offset_deg'] = self.heading_offset_deg
+        data['heading'] = (heading - self.heading_offset_deg) % 360.0
 
         # 位置校正
         if (self.antenna_offset_x != 0.0 or self.antenna_offset_y != 0.0) \
@@ -336,9 +356,9 @@ class RTKDriverNode:
 
             # 车体坐标系(前x右y) → ENU坐标系(东x北y) 的旋转
             dx_enu = self.antenna_offset_x * math.cos(heading_rad) \
-                - self.antenna_offset_y * math.sin(heading_rad)
+                + self.antenna_offset_y * math.sin(heading_rad)
             dy_enu = self.antenna_offset_x * math.sin(heading_rad) \
-                + self.antenna_offset_y * math.cos(heading_rad)
+                - self.antenna_offset_y * math.cos(heading_rad)
 
             # 天线偏移取反：天线在前方 → 车体中心在天线后方
             data['lon'] = data['lon'] - dx_enu / (METERS_PER_DEG_LAT * math.cos(lat_rad))
@@ -362,11 +382,17 @@ class RTKDriverNode:
             'lat': data['lat'],
             'lon': data['lon'],
             'alt': data.get('alt', 0.0),
-            'heading': data.get('heading', 0.0),
+            'heading': data.get('heading'),
+            'heading_valid': data.get('heading_valid', False),
+            'heading_mode': data.get('heading_mode', 'dual_antenna'),
             'rtk_status': self._get_rtk_status_string(data.get('rtk_quality', 0)),
             'rtk_quality': data.get('rtk_quality', 0),
             'num_satellites': data.get('num_satellites', 0),
         }
+        for key in ('heading_source', 'heading_age_s', 'antenna_heading_deg',
+                    'heading_offset_deg', 'ground_track_deg', 'timestamp_source'):
+            if key in data:
+                output[key] = data[key]
 
         # 可选字段（如果存在）
         if 'ground_speed' in data:
@@ -408,13 +434,14 @@ class RTKDriverNode:
         """记录RTK状态"""
         rtk_status = self._get_rtk_status_string(data.get('rtk_quality', 0))
         num_sats = data.get('num_satellites', 0)
-        heading_deg = math.degrees(data.get('heading', 0.0))
+        heading = data.get('heading')
+        heading_text = f"{heading:.1f}°" if heading is not None else "invalid"
 
         self.logger.info(
             f"RTK Status: {rtk_status} | "
             f"Sats: {num_sats} | "
             f"Pos: ({data['lat']:.8f}, {data['lon']:.8f}) | "
-            f"Heading: {heading_deg:.1f}° | "
+            f"Heading: {heading_text} | "
             f"Messages: {self.message_count}"
         )
 

@@ -98,23 +98,28 @@ params:
   heading_source:
     type: str
     default: "dual_antenna"
-    description: "航向来源（dual_antenna=双天线, velocity=速度推算, external=外部IMU）"
+    description: "双天线实测航向；dual_antenna（旧值device为别名），不使用RMC运动方向替代"
+
+  heading_timeout_s:
+    type: float
+    default: 0.5
+    description: "双天线航向接收后允许复用的最长秒数；过期标为无效，位置报文不刷新航向年龄"
 
   # 天线安装校准
   antenna_offset_x:
     type: float
     default: 0.0
-    description: "定位天线到车体中心的前向偏移（米），正值=天线在车体前方"
+    description: "从车体控制中心到主定位天线的前向偏移（米），正值=天线在车体前方"
 
   antenna_offset_y:
     type: float
     default: 0.0
-    description: "定位天线到车体中心的右向偏移（米），正值=天线在车体右侧"
+    description: "从车体控制中心到主定位天线的右向偏移（米），正值=天线在车体右侧"
 
   heading_offset_deg:
     type: float
     default: 0.0
-    description: "双天线航向偏移（度，北基准顺时针）。横装时设90或-90"
+    description: "主→从基线相对车头的顺时针安装角；车体heading=天线航向-此角。默认0，不隐式翻转180°"
 
   # 调试选项
   enable_raw_log:

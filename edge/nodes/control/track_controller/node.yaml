@@ -64,6 +64,14 @@ failure_policy:
           latch: asserted
   deadline_ms: null
 params:
+  tracking_method:
+    type: string
+    default: heading_p
+    description: "heading_p=原前瞻点比例控制；pure_pursuit=按前瞻点曲率跟踪。两者共用机具升降、停转和段限速规则"
+  pure_pursuit_min_distance_m:
+    type: float
+    default: 0.1
+    description: "纯跟踪曲率计算的距离分母下限（米），不是前瞻距离；前瞻点仍由waypoint_selector选择"
   require_implement_ready:
     type: boolean
     default: false
@@ -85,6 +93,7 @@ params:
   heading_p_gain:
     type: float
     default: 2.5
+    description: "heading_p行驶及两种方法原地对齐时使用的航向增益"
   max_angular_velocity:
     type: float
     default: 1.0

@@ -61,6 +61,25 @@ Web Editor API 由同一 FastAPI 应用挂在 `/editor`，不属于 `/api/v1` �
 
 当前协议版本为 `1.0`。任务包含目标机器、preset、节点参数、地块/路径引用、坐标系、规划模式和校验和。
 
+### 按任务组合节点与算法
+
+农场侧模型可以准备图YAML、选择已有节点并填写参数。车辆运行时按照确定的图执行；模型负责按作业需求组织这些能力。例如，路径形状、跟踪方法和机具升降规则可以分别选择，同一控制节点可以服务连续大回转或停车抬升接续任务。
+
+现有任务接口通过 `preset_yaml` 选择边缘已安装在 `examples/` 下的图，再用 `node_params` 按**节点实例ID**覆盖参数。以下是完整任务中的参数片段，其他任务字段仍须按契约提供：
+
+```yaml
+preset_yaml: planning_with_real_rtk
+node_params:
+  track_controller:
+    tracking_method: pure_pursuit  # heading_p 保留原比例控制
+    pure_pursuit_min_distance_m: 0.1
+    allow_work_pivot: false
+```
+
+Agent已转发这两个字段，Runtime在启动本次数据流前恢复图的基准参数，再合并本次覆盖，避免上一次任务的选择残留。控制器参数在节点启动时读取；运行中切换须先结束当前数据流再启动下一任务。新增节点或修改连线需要先部署相应图文件，`node_params` 仅覆盖已有节点参数。见[跟踪方法与作业规则](UM982_HEADING_AND_TRACKING.md#按任务选择跟踪方法)。
+
+### 规划与状态
+
 规划模式：
 
 | 模式 | 行为 |

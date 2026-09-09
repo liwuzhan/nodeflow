@@ -3,19 +3,59 @@ NMEA消息解析器
 支持 $KSXT, $GPGGA, $GPRMC, $GPTHS 等标准和自定义NMEA语句
 """
 
-import re
 import math
-from typing import Dict, Optional, Tuple
-from datetime import datetime
+import time
+from typing import Callable, Dict, Optional
+from datetime import datetime, timezone
 
 
 class NMEAParser:
     """NMEA 0183 消息解析器"""
 
-    def __init__(self):
+    def __init__(self, heading_timeout_s: float = 0.5,
+                 clock: Optional[Callable[[], float]] = None):
+        if not math.isfinite(heading_timeout_s) or heading_timeout_s <= 0:
+            raise ValueError('heading_timeout_s must be finite and positive')
+        self.heading_timeout_s = heading_timeout_s
+        self._clock = clock if clock is not None else time.monotonic
         self.last_position = None  # (lat, lon, alt)
-        self.last_heading = None
         self.last_timestamp = None
+        self.reset_heading()
+
+    def reset_heading(self):
+        """断开或重新连接设备时丢弃上一连接的定向结果。"""
+        self.last_heading = None
+        self._heading_source = None
+        self._heading_received_at = None
+
+    def _update_heading(self, value: Optional[float], source: str):
+        self.reset_heading()
+        self._heading_source = source
+        if value is not None and math.isfinite(value):
+            # 原始主天线→从天线；北零、顺时针，不应用安装角。
+            self.last_heading = value % 360.0
+            self._heading_received_at = self._clock()
+
+    def _heading_fields(self) -> Dict:
+        age = (max(0.0, self._clock() - self._heading_received_at)
+               if self._heading_received_at is not None else None)
+        valid = (self.last_heading is not None and age is not None
+                 and age <= self.heading_timeout_s)
+        return {
+            'heading': self.last_heading if valid else None,
+            'heading_valid': valid,
+            'heading_mode': 'dual_antenna',
+            'heading_source': self._heading_source,
+            'heading_age_s': age,
+        }
+
+    @staticmethod
+    def _optional_float(value: str) -> Optional[float]:
+        """空的可选字段保留为缺失，不伪造零值。"""
+        if not value:
+            return None
+        result = float(value)
+        return result if math.isfinite(result) else None
 
     @staticmethod
     def validate_checksum(sentence: str) -> bool:
@@ -46,97 +86,58 @@ class NMEAParser:
             return False
 
     def parse_ksxt(self, sentence: str) -> Optional[Dict]:
-        """
-        解析 $KSXT 消息（集成定位定向数据）
+        """解析芯星通 KSXT（N4 命令手册表7-107）。
 
-        格式示例：
-        $KSXT,20231215120530.00,116.12345678,39.98765432,123.456,
-        1.234,5.678,90.123,1.234,0.567,3,3,12,10,
-        1234.567,5678.901,23.456,0.123,0.456,0.789*5C
-
-        字段说明：
-        - 时间戳: yyyymmddhhmmss.ss
-        - 经纬度: lon, lat (度)
-        - 高度: MSL高 (米)
-        - 速度: 东向, 北向, 天向 (m/s)
-        - 姿态: 航向, 俯仰, 横滚 (度)
-        - 质量: Pos qual, Heading qual
-        - 卫星数: #msolnSVs, #hsolnSVs
-        - NEU坐标: north, east, up (米)
-        - NEU速度: vn, ve, vu (m/s)
+        heading 与 track true 分开，速度原单位为 km/h；位置固定与
+        双天线定向固定是两个独立状态。可选的姿态和相对坐标可以为空。
         """
         if not sentence.startswith('$KSXT'):
             return None
 
         try:
-            parts = sentence.split(',')
-            if len(parts) < 19:
+            parts = sentence.split('*', 1)[0].split(',')
+            if len(parts) < 14:
+                self._update_heading(None, 'KSXT')
                 return None
 
-            # 时间戳
-            time_str = parts[1]  # yyyymmddhhmmss.ss
-            timestamp = self._parse_ksxt_time(time_str)
-
-            # 位置（WGS84）
-            lon = float(parts[2])
-            lat = float(parts[3])
-            alt = float(parts[4])
-
-            # 速度（ENU坐标系，m/s）
-            vel_east = float(parts[5])
-            vel_north = float(parts[6])
-            vel_up = float(parts[7])
-
-            # 姿态（度）
-            heading_deg = float(parts[8])
-            pitch_deg = float(parts[9])
-            roll_deg = float(parts[10])
-
-            # 质量标识
-            pos_qual = int(parts[11])  # 0=无效, 1=单点, 2=浮点, 3=固定
-            heading_qual = int(parts[12])
-
-            # 卫星数
-            num_sats_pos = int(parts[13])
-            num_sats_heading = int(parts[14])
-
-            # NEU坐标（米，相对参考点）
-            neu_north = float(parts[15])
-            neu_east = float(parts[16])
-            neu_up = float(parts[17])
-
-            # NEU速度（m/s）
-            neu_vn = float(parts[18].split('*')[0])  # 最后一个字段包含校验和
-            # 如果有更多字段
-            neu_ve = float(parts[19].split('*')[0]) if len(parts) > 19 else vel_east
-            neu_vu = float(parts[20].split('*')[0]) if len(parts) > 20 else vel_up
-
-            # 航向角保持地理坐标系（北=0°, CW正, [0,360)），不在此处转换
-            heading_geo_deg = heading_deg % 360.0
-
-            return {
+            timestamp = self._parse_ksxt_time(parts[1])
+            lon, lat, alt = float(parts[2]), float(parts[3]), float(parts[4])
+            pos_qual, heading_qual = int(parts[10]), int(parts[11])
+            heading = self._optional_float(parts[5])
+            self._update_heading(heading if heading_qual == 3 else None, 'KSXT')
+            result = {
                 'timestamp': timestamp,
                 'lat': lat,
                 'lon': lon,
                 'alt': alt,
-                'heading': heading_geo_deg,
-                'pitch': math.radians(pitch_deg),
-                'roll': math.radians(roll_deg),
-                'vel_east': vel_east,
-                'vel_north': vel_north,
-                'vel_up': vel_up,
-                'ground_speed': math.sqrt(vel_east**2 + vel_north**2),
-                'rtk_quality': pos_qual,  # 0/1/2/3
+                **self._heading_fields(),
+                'rtk_quality': pos_qual,
                 'heading_quality': heading_qual,
-                'num_satellites': num_sats_pos,
-                'num_satellites_heading': num_sats_heading,
-                'neu_north': neu_north,
-                'neu_east': neu_east,
-                'neu_up': neu_up,
-                'message_type': 'KSXT'
+                'num_satellites': int(parts[13]) if parts[13] else 0,
+                'num_satellites_heading': int(parts[12]) if parts[12] else 0,
+                'message_type': 'KSXT',
             }
+            # 地理角保持度；现有 pitch/roll 接口保持弧度。
+            for index, key, scale in (
+                (6, 'pitch', math.pi / 180.0),
+                (7, 'ground_track_deg', 1.0),
+                (8, 'ground_speed', 1.0 / 3.6),
+                (9, 'roll', math.pi / 180.0),
+                (14, 'neu_east', 1.0), (15, 'neu_north', 1.0),
+                (16, 'neu_up', 1.0),
+                (17, 'vel_east', 1.0 / 3.6),
+                (18, 'vel_north', 1.0 / 3.6),
+                (19, 'vel_up', 1.0 / 3.6),
+            ):
+                value = self._optional_float(parts[index]) if len(parts) > index else None
+                if value is not None:
+                    result[key] = value * scale
+            if 'ground_track_deg' in result:
+                result['ground_track_deg'] %= 360.0
+            return result
 
-        except (ValueError, IndexError) as e:
+        except (ValueError, IndexError):
+            self._update_heading(None, 'KSXT')
             return None
 
     def parse_gpgga(self, sentence: str) -> Optional[Dict]:
@@ -201,7 +202,7 @@ class NMEAParser:
                 'lat': lat,
                 'lon': lon,
                 'alt': alt,
-                'heading': self.last_heading if self.last_heading else 0.0,
+                **self._heading_fields(),
                 'rtk_quality': rtk_quality,
                 'num_satellites': num_sats,
                 'hdop': hdop,
@@ -231,7 +232,7 @@ class NMEAParser:
             return None
 
         try:
-            parts = sentence.split(',')
+            parts = sentence.split('*', 1)[0].split(',')
             if len(parts) < 12:
                 return None
 
@@ -241,7 +242,7 @@ class NMEAParser:
 
             # UTC时间
             time_str = parts[1]
-            timestamp = self._parse_gga_time(time_str)
+            timestamp = self._parse_rmc_time(time_str, parts[9])
 
             # 纬度
             lat_str = parts[3]
@@ -257,15 +258,10 @@ class NMEAParser:
             speed_knots = float(parts[7]) if parts[7] else 0.0
             ground_speed = speed_knots * 0.514444
 
-            # 地面航向（度，北=0，顺时针）— 保持地理坐标系
-            heading_north_deg = float(parts[8]) if parts[8] else 0.0
-            ground_track_deg = heading_north_deg % 360.0
-
-            # 优先使用双天线航向（由GPHDT/GPTHS设置），否则用地面航迹
-            if self.last_heading is not None:
-                heading_geo_deg = self.last_heading
-            else:
-                heading_geo_deg = ground_track_deg
+            # 运动方向只用于观测；静止、低速和倒车时均不替代双天线定向。
+            ground_track_deg = self._optional_float(parts[8])
+            if ground_track_deg is not None:
+                ground_track_deg %= 360.0
 
             # 提取 mode indicator（NMEA 4.1+，第12个字段）
             # A=自主, D=差分, R=RTK固定, F=RTK浮点, N=无效
@@ -276,7 +272,8 @@ class NMEAParser:
                 'timestamp': timestamp,
                 'lat': lat,
                 'lon': lon,
-                'heading': heading_geo_deg,
+                **self._heading_fields(),
+                'ground_track_deg': ground_track_deg,
                 'ground_speed': ground_speed,
                 'rtk_quality': rtk_quality,
                 'message_type': 'GPRMC'
@@ -286,82 +283,28 @@ class NMEAParser:
             return None
 
     def parse_gpths(self, sentence: str) -> Optional[Dict]:
-        """
-        解析 $GPTHS 消息（航向信息）
-
-        格式示例：
-        $GPTHS,90.12,A*5C
-
-        字段说明：
-        - 航向（度，北=0，顺时针）
-        - 状态: A=有效
-        """
+        """THS 的 A 表示实测；V/M/S/E 都不能充当双天线实测航向。"""
         if not (sentence.startswith('$GPTHS') or sentence.startswith('$GNTHS')):
             return None
-
         try:
-            parts = sentence.split(',')
-            if len(parts) < 3:
-                return None
-
-            # 航向（度，北=0）— 保持地理坐标系
-            heading_north_deg = float(parts[1])
-
-            # 状态
-            status = parts[2].split('*')[0]
-            if status != 'A':
-                return None
-
-            heading_geo_deg = heading_north_deg % 360.0
-
-            # 保存航向（地理度数）
-            self.last_heading = heading_geo_deg
-
-            return {
-                'heading': heading_geo_deg,
-                'message_type': 'GPTHS'
-            }
-
+            parts = sentence.split('*', 1)[0].split(',')
+            heading = self._optional_float(parts[1]) if parts[2] == 'A' else None
         except (ValueError, IndexError):
-            return None
+            heading = None
+        self._update_heading(heading, 'THS')
+        return {**self._heading_fields(), 'message_type': 'GPTHS'}
 
     def parse_gphdt(self, sentence: str) -> Optional[Dict]:
-        """
-        解析 $GPHDT 消息（双天线真航向）
-
-        格式示例：
-        $GPHDT,27.8442,T*05
-
-        字段说明：
-        - 航向（度，北=0，顺时针）
-        - T: True heading（真北）
-        """
+        """兼容旧设备的真北航向；HDT 本身不包含 THS 的解状态。"""
         if not (sentence.startswith('$GPHDT') or sentence.startswith('$GNHDT')):
             return None
-
         try:
-            parts = sentence.split(',')
-            if len(parts) < 3:
-                return None
-
-            # 航向为空则无效
-            if not parts[1]:
-                return None
-
-            heading_north_deg = float(parts[1])
-
-            heading_geo_deg = heading_north_deg % 360.0
-
-            # 保存航向（地理度数）
-            self.last_heading = heading_geo_deg
-
-            return {
-                'heading': heading_geo_deg,
-                'message_type': 'GPHDT'
-            }
-
+            parts = sentence.split('*', 1)[0].split(',')
+            heading = self._optional_float(parts[1]) if parts[2] == 'T' else None
         except (ValueError, IndexError):
-            return None
+            heading = None
+        self._update_heading(heading, 'HDT')
+        return {**self._heading_fields(), 'message_type': 'GPHDT'}
 
     def parse(self, sentence: str) -> Optional[Dict]:
         """
@@ -435,47 +378,40 @@ class NMEAParser:
 
     @staticmethod
     def _parse_ksxt_time(time_str: str) -> float:
-        """
-        解析KSXT时间戳: yyyymmddhhmmss.ss
-
-        Returns:
-            Unix时间戳（秒）
-        """
+        """KSXT 的 yyyymmddhhmmss.ss 是 UTC，不按主机本地时区解释。"""
         try:
-            # 提取年月日时分秒
-            year = int(time_str[0:4])
-            month = int(time_str[4:6])
-            day = int(time_str[6:8])
-            hour = int(time_str[8:10])
-            minute = int(time_str[10:12])
-            second = float(time_str[12:])
-
-            dt = datetime(year, month, day, hour, minute, int(second))
-            timestamp = dt.timestamp() + (second - int(second))
-            return timestamp
-
-        except (ValueError, IndexError):
+            year, month, day = int(time_str[:4]), int(time_str[4:6]), int(time_str[6:8])
+            hour, minute, second = int(time_str[8:10]), int(time_str[10:12]), float(time_str[12:])
+            dt = datetime(year, month, day, hour, minute, int(second), tzinfo=timezone.utc)
+            return dt.timestamp() + (second - int(second))
+        except (ValueError, IndexError, OverflowError):
             return 0.0
 
     @staticmethod
-    def _parse_gga_time(time_str: str) -> float:
-        """
-        解析GGA/RMC时间戳: hhmmss.ss
-
-        Returns:
-            Unix时间戳（秒），使用今天日期
-        """
+    def _parse_rmc_time(time_str: str, date_str: str) -> float:
+        """RMC 同时提供 UTC 日期(ddmmyy)和时间，保留报文日期用于回放。"""
         try:
-            hour = int(time_str[0:2])
-            minute = int(time_str[2:4])
-            second = float(time_str[4:])
+            day = datetime.strptime(date_str, '%d%m%y')
+            hour, minute, second = int(time_str[:2]), int(time_str[2:4]), float(time_str[4:])
+            dt = day.replace(hour=hour, minute=minute, second=int(second), tzinfo=timezone.utc)
+            return dt.timestamp() + (second - int(second))
+        except (ValueError, IndexError, OverflowError):
+            return 0.0
 
-            now = datetime.now()
-            dt = datetime(now.year, now.month, now.day, hour, minute, int(second))
+    @staticmethod
+    def _parse_gga_time(time_str: str, now: Optional[datetime] = None) -> float:
+        """GGA 无日期：取距当前 UTC 最近的一天，处理午夜前后报文。"""
+        try:
+            hour, minute, second = int(time_str[:2]), int(time_str[2:4]), float(time_str[4:])
+            now = now if now is not None else datetime.now(timezone.utc)
+            if now.tzinfo is None:
+                now = now.replace(tzinfo=timezone.utc)
+            now = now.astimezone(timezone.utc)
+            dt = now.replace(hour=hour, minute=minute, second=int(second), microsecond=0)
             timestamp = dt.timestamp() + (second - int(second))
-            return timestamp
-
-        except (ValueError, IndexError):
+            return min((timestamp - 86400, timestamp, timestamp + 86400),
+                       key=lambda candidate: abs(candidate - now.timestamp()))
+        except (ValueError, IndexError, OverflowError):
             return 0.0
 
     @staticmethod

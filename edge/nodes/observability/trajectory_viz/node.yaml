@@ -1,6 +1,6 @@
 name: trajectory_viz
-version: "2.1.0"
-description: "轨迹实时可视化节点 - Web 版本（按L3/L4规范重构）"
+version: "2.2.0"
+description: "轨迹与三维作业观察节点：共用仿真真值、定位估计和实车反馈显示"
 
 entrypoints:
   linux:
@@ -29,7 +29,10 @@ ports:
       description: "ENU坐标系姿态，用于记录实际轨迹 (x, y, theta)"
     - name: state_info
       type: json
-      description: "可选：仿真器真值，仅用于评价，未接入时标注为观测估计"
+      description: "可选：仿真器真值，用于显示和评价；未接入时显示定位估计，不伪造真值"
+    - name: raw_rtk
+      type: sensor.rtk
+      description: "可选：原始RTK输出，观察接口保留定位质量、双天线航向有效性和数据年龄"
     - name: next_point
       type: planning.waypoint
       description: "可选：前瞻点和路径跟踪状态，用于复盘目标点选择"
@@ -38,10 +41,13 @@ ports:
       description: "可选：底盘速度指令，用于复盘限速、掉头减速和控制状态"
     - name: tillage_cmd
       type: implement.tillage_cmd
-      description: "可选：旋耕机具控制指令，用于显示 PTO/悬挂状态"
+      description: "可选：旋耕机具控制指令，用于旧版指令复盘；三维实际机具姿态只使用反馈或仿真真值"
     - name: tillage_status
       type: implement.tillage_status
-      description: "可选：旋耕机具反馈状态，优先用于复盘"
+      description: "可选：机具控制器逻辑状态，三维界面标为控制器估计；ready经反馈验证也不代表高度实测"
+    - name: implement_state
+      type: implement.state
+      description: "可选：机具实际状态反馈（hitch_height、pto_on、pto_rpm），显示优先于控制器逻辑状态"
     - name: path_progress
       type: planning.path_progress
       description: "可选：路径进度状态，用于显示段语义、横向误差和到段尾距离"
@@ -69,7 +75,22 @@ params:
   update_interval:
     type: float
     default: 5.0
-    description: "日志打印间隔（秒）。数据推送是近实时的（0.5秒防抖），此参数仅控制日志频率"
+    description: "日志打印间隔（秒），不控制姿态与场景推送频率"
+
+  frame_interval_s:
+    type: float
+    default: 0.1
+    description: "姿态与状态刷新间隔（秒），断流后继续更新年龄并冻结最后有效姿态"
+
+  scene_interval_s:
+    type: float
+    default: 1.0
+    description: "地块、路径和覆盖图刷新间隔（秒），不按每帧重新计算覆盖"
+
+  stale_after_s:
+    type: float
+    default: 1.0
+    description: "本地收到最后有效数据后，超过此秒数显示陈旧；仅影响观察界面"
 
   max_replay_samples:
     type: integer

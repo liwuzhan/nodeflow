@@ -117,6 +117,7 @@ def main():
         progress_target_max_cross_track_m = float(
             sdk.params.get("progress_target_max_cross_track_m", progress_sync_max_cross_track_m)
         )
+        progress_timeout_s = float(sdk.params.get("progress_timeout_s", 0.5))
 
         sdk.logger.info(f"初始消费: 检查{initial_check_points}点, 距离<{initial_consume_distance}m")
         sdk.logger.info(f"视野扩宽: 最少{min_view_points}点, 扩宽x{view_expand_factor}, 最大{max_view_width}m")
@@ -166,6 +167,7 @@ def main():
         # 缓存最新位置
         last_pose = None
         last_progress = None
+        last_progress_received_at = None
 
         # 4. 主循环 (L3 职责: 数据搬运)
         while True:
@@ -174,6 +176,7 @@ def main():
             path_pkt = in_path.recv_latest()
             pose = in_pose.recv_latest()
             progress = in_progress.recv_latest()
+            received_at = time.monotonic()
 
             # 更新位置缓存
             if pose:
@@ -200,6 +203,8 @@ def main():
             if path_pkt:
                 info = selector.set_path(path_pkt, initial_pose=last_pose)
                 if info:
+                    last_progress = None
+                    last_progress_received_at = None
                     sdk.logger.info(
                         f"[路径更新] 起点: ({info['start_x']:.1f}, {info['start_y']:.1f}), "
                         f"共 {info['count']} 个点, 初始消费: {info['initial_consumed']} 个"
@@ -215,7 +220,17 @@ def main():
 
             if progress:
                 last_progress = progress
+                last_progress_received_at = received_at
                 selector.sync_progress(progress)
+
+            if (
+                last_progress_received_at is not None
+                and progress_timeout_s > 0
+                and received_at - last_progress_received_at > progress_timeout_s
+            ):
+                # 上游投影停止更新时，用当前位姿继续本地选点，不能持续重发旧目标。
+                last_progress = None
+                last_progress_received_at = None
 
             # 4b. 调用 L4 原子层算法选择前瞻点
             if last_pose:

@@ -11,9 +11,18 @@
 """
 
 import threading
-from flask import Flask, render_template_string
+import time
+import copy
+from collections import deque
+from pathlib import Path
+from flask import Flask, render_template_string, jsonify, request, send_from_directory
 from flask_socketio import SocketIO, emit
 from typing import Dict, Any, Optional, List, Tuple
+
+if __package__:
+    from .replay_ground import build_replay_ground
+else:
+    from replay_ground import build_replay_ground
 
 # Flask 应用
 app = Flask(__name__)
@@ -22,7 +31,9 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 # 全局数据存储（简单内存缓存）
 current_data = {
+    "task_id": None,
     "field_boundary": None,
+    "field_holes": [],
     "planned_path": None,
     "path_zones": [],
     "operation_segments": [],
@@ -38,6 +49,102 @@ current_data = {
     "replay_events": [],
     "coverage_overlay": {}
 }
+
+_empty_data = copy.deepcopy(current_data)
+_monitor_lock = threading.RLock()
+_monitor_frame = None
+_monitor_frame_received_at = None
+_monitor_history = deque(maxlen=3000)
+_scene_revision = 0
+_scene_keys = ("task_id", "field_boundary", "field_holes", "planned_path",
+               "path_zones", "operation_segments", "actual_trajectory", "metrics", "coverage_overlay")
+
+
+def reset_monitor_data(*, max_history=3000):
+    """New task: clear both observation views and the bounded replay buffer."""
+    global _monitor_frame, _monitor_frame_received_at, _monitor_history, _scene_revision
+    with _monitor_lock:
+        current_data.clear()
+        current_data.update(copy.deepcopy(_empty_data))
+        _monitor_frame = None
+        _monitor_frame_received_at = None
+        _monitor_history = deque(maxlen=max(1, int(max_history)))
+        _scene_revision += 1
+    socketio.emit('trajectory_update', current_data)
+
+
+def update_monitor_frame(frame, record=False):
+    """Store observations only; these endpoints never send vehicle commands."""
+    global _monitor_frame, _monitor_frame_received_at
+    with _monitor_lock:
+        _monitor_frame = copy.deepcopy(frame)
+        _monitor_frame_received_at = time.monotonic() if frame is not None else None
+        if record and frame is not None:
+            _monitor_history.append(copy.deepcopy(frame))
+
+
+def _uncached_json(payload):
+    response = jsonify(payload)
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+@app.route('/3d')
+def monitor_3d():
+    return send_from_directory(Path(__file__).parent / 'static' / '3d', 'index.html')
+
+
+@app.route('/assets/tracked_tiller.glb')
+def tracked_tiller_model():
+    assets = Path(__file__).resolve().parents[4] / 'simulation' / 'assets' / 'tracked_tiller'
+    return send_from_directory(assets, 'tracked_tiller.glb', mimetype='model/gltf-binary')
+
+
+@app.route('/api/monitor/frame')
+def monitor_frame():
+    with _monitor_lock:
+        frame = copy.deepcopy(_monitor_frame)
+        if frame is not None and _monitor_frame_received_at is not None:
+            # HTTP may keep serving even when the observer loop has stopped.
+            # Age the copied response, never the saved frame or replay samples.
+            elapsed = max(0.0, time.monotonic() - _monitor_frame_received_at)
+            limit = frame.get('stale_after_s', 1.0)
+            for key in ('truth', 'estimate', 'implement', 'target', 'command', 'rtk'):
+                observation = frame.get(key)
+                if isinstance(observation, dict) and observation.get('age_s') is not None:
+                    observation['age_s'] += elapsed
+                    observation['stale'] = observation['age_s'] > limit
+                    if key == 'rtk' and observation.get('heading_age_s') is not None:
+                        observation['heading_age_s'] += elapsed
+            primary = frame.get(frame.get('primary_source', 'estimate'))
+            frame['status'] = ('waiting' if primary is None else
+                               'stale' if primary.get('stale', True) else 'live')
+        return _uncached_json(frame)
+
+
+@app.route('/api/monitor/scene')
+def monitor_scene():
+    with _monitor_lock:
+        if request.args.get('since', type=int) == _scene_revision:
+            return _uncached_json({'revision': _scene_revision, 'unchanged': True})
+        data = {key: copy.deepcopy(current_data[key]) for key in _scene_keys}
+        return _uncached_json({'revision': _scene_revision, 'data': data})
+
+
+@app.route('/api/monitor/replay')
+def monitor_replay():
+    include_ground = request.args.get('ground') == '1'
+    with _monitor_lock:
+        frames = copy.deepcopy(list(_monitor_history))
+        scene = ({key: copy.deepcopy(current_data[key])
+                  for key in ('task_id', 'field_boundary', 'field_holes', 'coverage_overlay')}
+                 if include_ground else None)
+    payload = {'frames': frames}
+    if include_ground:
+        # Geometry is built only when entering replay and never holds up the
+        # observation producer while working through the retained samples.
+        payload['ground'] = build_replay_ground(frames, scene)
+    return _uncached_json(payload)
 
 # HTML 模板（稍后创建独立文件）
 HTML_TEMPLATE = """
@@ -177,6 +284,7 @@ HTML_TEMPLATE = """
 <body>
     <div class="container">
         <h1>🚜 NodeFlow 轨迹实时可视化</h1>
+        <p style="text-align:center"><a href="/3d">打开三维农场观察</a></p>
         <div id="status" class="status disconnected">⏳ 连接中...</div>
 
         <div class="dashboard">
@@ -733,7 +841,7 @@ def update_trajectory_data(field_boundary=None, planned_path=None,
                           metrics=None, next_point=None, velocity_cmd=None,
                           tillage_cmd=None, tillage_status=None, path_progress=None,
                           replay_samples=None, replay_events=None,
-                          coverage_overlay=None):
+                          coverage_overlay=None, field_holes=None, task_id=None):
     """
     更新轨迹数据并推送到所有客户端
 
@@ -746,55 +854,24 @@ def update_trajectory_data(field_boundary=None, planned_path=None,
         actual_trajectory_with_heading: 带航向角的实际轨迹 [(x, y, theta), ...]
         metrics: 统计指标字典
     """
-    global current_data
-
-    if field_boundary is not None:
-        current_data["field_boundary"] = field_boundary
-
-    if planned_path is not None:
-        current_data["planned_path"] = planned_path
-
-    if path_zones is not None:
-        current_data["path_zones"] = path_zones
-
-    if operation_segments is not None:
-        current_data["operation_segments"] = operation_segments
-
-    if actual_trajectory is not None:
-        current_data["actual_trajectory"] = actual_trajectory
-
-    if actual_trajectory_with_heading is not None:
-        current_data["actual_trajectory_with_heading"] = actual_trajectory_with_heading
-
-    if metrics is not None:
-        current_data["metrics"] = metrics
-
-    if next_point is not None:
-        current_data["next_point"] = next_point
-
-    if velocity_cmd is not None:
-        current_data["velocity_cmd"] = velocity_cmd
-
-    if tillage_cmd is not None:
-        current_data["tillage_cmd"] = tillage_cmd
-
-    if tillage_status is not None:
-        current_data["tillage_status"] = tillage_status
-
-    if path_progress is not None:
-        current_data["path_progress"] = path_progress
-
-    if replay_samples is not None:
-        current_data["replay_samples"] = replay_samples
-
-    if replay_events is not None:
-        current_data["replay_events"] = replay_events
-
-    if coverage_overlay is not None:
-        current_data["coverage_overlay"] = coverage_overlay
-
-    # 推送到所有连接的客户端
-    socketio.emit('trajectory_update', current_data)
+    global _scene_revision
+    updates = {
+        "field_boundary": field_boundary, "field_holes": field_holes, "task_id": task_id,
+        "planned_path": planned_path, "path_zones": path_zones,
+        "operation_segments": operation_segments, "actual_trajectory": actual_trajectory,
+        "actual_trajectory_with_heading": actual_trajectory_with_heading,
+        "metrics": metrics, "next_point": next_point, "velocity_cmd": velocity_cmd,
+        "tillage_cmd": tillage_cmd, "tillage_status": tillage_status,
+        "path_progress": path_progress, "replay_samples": replay_samples,
+        "replay_events": replay_events, "coverage_overlay": coverage_overlay,
+    }
+    with _monitor_lock:
+        for key, value in updates.items():
+            if value is not None:
+                current_data[key] = copy.deepcopy(value)
+        _scene_revision += 1
+        payload = copy.deepcopy(current_data)
+    socketio.emit('trajectory_update', payload)
 
 
 def start_web_server(host='0.0.0.0', port=8080):

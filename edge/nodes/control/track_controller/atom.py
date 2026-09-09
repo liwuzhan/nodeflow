@@ -104,6 +104,19 @@ def normalize_angle(angle_rad: float) -> float:
         angle_rad += 2 * math.pi
     return angle_rad
 
+
+def validate_tracking_configuration(method, min_distance_m, use_path_heading=False):
+    if method not in ("heading_p", "pure_pursuit"):
+        raise ValueError("tracking_method must be heading_p or pure_pursuit")
+    try:
+        valid_distance = math.isfinite(min_distance_m) and min_distance_m > 0
+    except (TypeError, ValueError):
+        valid_distance = False
+    if not valid_distance:
+        raise ValueError("pure_pursuit_min_distance_m must be finite and positive")
+    if method == "pure_pursuit" and use_path_heading:
+        raise ValueError("headland_turn_use_path_heading only supports heading_p")
+
 def compute_velocity_cmd(
     pose_enu: dict | None,
     npkt: dict | None,
@@ -137,6 +150,8 @@ def compute_velocity_cmd(
     tillage_status: dict | None = None,
     require_implement_ready: bool = False,
     allow_work_pivot: bool = False,
+    tracking_method: str = "heading_p",
+    pure_pursuit_min_distance_m: float = 0.1,
 ) -> dict:
     """
     计算速度控制命令（ENU坐标系）
@@ -155,7 +170,11 @@ def compute_velocity_cmd(
         tillage_status: 可选机具状态；只使用本次运行收到的未过期状态
         require_implement_ready: 作业段先等机具 ready；未接机具的图保持 false
         allow_work_pivot: 作业段是否允许原地转向，默认禁止
+        tracking_method: heading_p 保留原比例控制；pure_pursuit 按前瞻点曲率行驶
+        pure_pursuit_min_distance_m: 曲率计算的距离分母下限（米）
     """
+    validate_tracking_configuration(tracking_method, pure_pursuit_min_distance_m,
+                                    headland_turn_use_path_heading)
     if not pose_enu or not npkt:
         return {"linear_velocity": 0.0, "angular_velocity": 0.0, "timestamp": now}
 
@@ -242,6 +261,12 @@ def compute_velocity_cmd(
                 "status": "waiting_for_implement",
                 "speed_factor": 0.0,
             }
+
+    if tracking_method == "pure_pursuit" and dist * dist <= 1e-12:
+        # 重合目标没有可靠方位，不能按 atan2(0, 0) 触发原地转向。
+        return {"linear_velocity": 0.0, "angular_velocity": 0.0,
+                "timestamp": now, "status": "target_too_close",
+                "speed_factor": 0.0}
 
     # 3. 计算目标方位角（数学坐标系，弧度）
     target_theta = math.atan2(ny - cy, nx - cx)
@@ -365,8 +390,19 @@ def compute_velocity_cmd(
             remaining = float(path_progress.get("distance_to_segment_end_m", 0.0))
             v = min(v, max(0.06, 0.6*remaining))
 
-    # 边走边转时保留至少一半角速度；原地转向不能再被速度因子削弱。
-    if speed_factor < 1.0 and target_mode != "path_heading" and v > 0.0:
+    curvature = None
+    if tracking_method == "pure_pursuit" and error_deg < active_pivot_threshold:
+        # 使用最终线速度：减速时同步减少角速度，保持目标圆弧。
+        # 明确的原地对齐仍走 P 控制；普通跟踪降到零速时角速度也为零。
+        lateral = -math.sin(current_theta) * (nx - cx) + math.cos(current_theta) * (ny - cy)
+        curvature = 2.0 * lateral / max(dist * dist, pure_pursuit_min_distance_m ** 2)
+        w = v * curvature
+        if abs(w) > max_w:
+            scale = max_w / abs(w)
+            v *= scale
+            w *= scale
+    elif speed_factor < 1.0 and target_mode != "path_heading" and v > 0.0:
+        # 原比例控制保持兼容；原地转向不被速度因子削弱。
         w *= max(speed_factor, 0.5)
 
     status = None
@@ -389,7 +425,10 @@ def compute_velocity_cmd(
         "cte_factor": cte_factor,
         "speed_limit_factor": speed_limit_factor,
         "target_mode": target_mode,
+        "tracking_method": tracking_method,
     }
+    if curvature is not None:
+        result["curvature_inv_m"] = curvature
     if is_headland_turn:
         result["headland_turn"] = True
         result["heading_error_deg"] = round(error_deg, 2)

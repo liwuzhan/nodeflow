@@ -2,6 +2,8 @@
 
 高精度RTK-GPS驱动节点，支持UM982/UMD982等双天线RTK设备，通过串口或网络接口读取NMEA消息并输出标准化的定位数据。
 
+当前航向约定及纠偏审查见[UM982 双天线与低速纠偏](../../../../docs/UM982_HEADING_AND_TRACKING.md)。原始定向是主天线→从天线，北零、顺时针、单位度；RMC 运动方向不替代双天线航向。
+
 ## 功能特性
 
 - ✅ **多种连接方式**：串口、TCP、UDP
@@ -23,7 +25,12 @@
     'lat': 39.98765432,                # 纬度（度，WGS84）
     'lon': 116.12345678,               # 经度（度，WGS84）
     'alt': 123.456,                    # 海拔高度（米，MSL）
-    'heading': 1.5708,                 # 航向角（弧度，数学坐标系：东=0，CCW正）
+    'heading': 90.0,                   # 航向（度，北=0，顺时针），失效为None
+    'antenna_heading_deg': 90.0,       # 原始主→从基线方位；安装补偿前
+    'heading_valid': True,            # 双天线定向有效且未过期
+    'heading_source': 'THS',           # THS / HDT / KSXT
+    'heading_mode': 'dual_antenna',
+    'heading_age_s': 0.01,             # 距有效航向接收的秒数
     'rtk_status': 'FIXED',             # RTK状态字符串
     'rtk_quality': 3,                  # RTK质量（0=无效, 1=单点, 2=浮点, 3=固定）
     'num_satellites': 15,              # 定位卫星数量
@@ -93,11 +100,13 @@
 | `network_protocol` | str | `tcp` | 网络协议（tcp/udp） |
 | `nmea_message` | str | `KSXT` | 主要NMEA消息类型 |
 | `output_frequency` | int | `20` | 输出频率（Hz） |
-| `min_rtk_quality` | int | `4` | 最低RTK质量（0-3） |
+| `min_rtk_quality` | int | `3` | 最低RTK质量（0-3） |
 | `min_satellites` | int | `10` | 最少卫星数量 |
 | `enable_smoothing` | bool | `false` | 是否启用平滑滤波 |
 | `smoothing_alpha` | float | `0.3` | 平滑系数（0-1） |
-| `heading_source` | str | `dual_antenna` | 航向来源 |
+| `heading_source` | str | `dual_antenna` | 严格双天线；旧值device为别名 |
+| `heading_timeout_s` | float | `0.5` | 航向有效期；位置更新不续期 |
+| `heading_offset_deg` | float | `0.0` | 主→从相对车头的顺时针安装角，输出heading减去此角 |
 | `enable_raw_log` | bool | `false` | 是否记录原始NMEA |
 | `raw_log_path` | str | `/tmp/rtk_raw.log` | 原始日志路径 |
 
@@ -197,10 +206,10 @@ edges:
 
 **示例**：
 ```
-$KSXT,20231215120530.00,116.12345678,39.98765432,123.456,
-1.234,5.678,90.123,1.234,0.567,3,3,12,10,
-1234.567,5678.901,23.456,0.123,0.456,0.789*5C
+$KSXT,20190909084745.00,116.23662400,40.07897925,68.3830,299.22,-67.03,190.28,0.022,,1,3,46,28,,,,-0.004,-0.021,-0.020,,*27
 ```
+
+这是厂家协议示例：航向299.22°、运动方向190.28°、定位质量1、定向质量3。默认要求定位质量3，所以该例用于解析测试，不能作为有效作业定位。原报文速度为km/h，驱动转换成m/s。
 
 ### $GPGGA + $GPRMC
 
@@ -212,7 +221,7 @@ $KSXT,20231215120530.00,116.12345678,39.98765432,123.456,
 
 **缺点**：
 - 需要两条消息合成
-- 航向依赖速度推算
+- 两者本身没有双天线航向。本驱动保留RMC运动方向为ground_track_deg；需另有THS/HDT才能输出有效heading。
 
 ### $GPGGA + $GPTHS
 
@@ -368,7 +377,7 @@ sudo ufw status
 ### 输出坐标系
 
 - **位置**: WGS84经纬度（度）+ MSL海拔高度（米）
-- **航向**: 数学坐标系（东=0°，逆时针为正），单位：弧度
+- **航向**: 北=0°、顺时针为正，单位度；安装角默认0，与主→从基线一致。`coord_transform` 才转成东零、逆时针的弧度角。
 - **速度**: ENU坐标系（东-北-天），单位：m/s
 
 ### 与其他节点配合

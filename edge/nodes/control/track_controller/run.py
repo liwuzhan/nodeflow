@@ -12,7 +12,10 @@ except ImportError:
     def Field(*args, **kwargs): return None
 
 from edge.sdk.nodeflow_sdk import NodeFlowSDK
-from atom import ControlSafetyGuard, compute_velocity_cmd
+if __package__:
+    from .atom import ControlSafetyGuard, compute_velocity_cmd, validate_tracking_configuration
+else:
+    from atom import ControlSafetyGuard, compute_velocity_cmd, validate_tracking_configuration
 
 # --- Schema Definitions ---
 
@@ -51,6 +54,11 @@ class VelocityCmd(BaseModel):
     linear_velocity: float
     angular_velocity: float
     timestamp: float
+    safety_stop: bool = False
+    input_age_s: Optional[float] = None
+    pivot_elapsed_s: Optional[float] = None
+    tracking_method: Optional[str] = None
+    curvature_inv_m: Optional[float] = None
     status: Optional[str] = None
     arrived: Optional[bool] = None
     speed_factor: Optional[float] = None
@@ -100,6 +108,10 @@ def main():
         headland_turn_align_threshold_deg = float(sdk.params.get("headland_turn_align_threshold_deg", 35.0))
         headland_turn_min_speed_factor = float(sdk.params.get("headland_turn_min_speed_factor", 0.25))
         headland_turn_use_path_heading = bool(sdk.params.get("headland_turn_use_path_heading", False))
+        tracking_method = sdk.params.get("tracking_method", "heading_p")
+        pure_pursuit_min_distance_m = float(sdk.params.get("pure_pursuit_min_distance_m", 0.1))
+        validate_tracking_configuration(tracking_method, pure_pursuit_min_distance_m,
+                                        headland_turn_use_path_heading)
         pose_timeout_s = float(sdk.params.get("pose_timeout_s", 0.5))
         target_timeout_s = float(sdk.params.get("target_timeout_s", 0.5))
         progress_timeout_s = float(sdk.params.get("progress_timeout_s", 0.5))
@@ -108,7 +120,7 @@ def main():
         allow_work_pivot = bool(sdk.params.get("allow_work_pivot", False))
         implement_status_timeout_s = float(sdk.params.get("implement_status_timeout_s", 0.5))
 
-        sdk.logger.info(f"参数: max_speed={max_speed}, kp={kp}, max_w={max_w}, pivot_th={pivot_th}°")
+        sdk.logger.info(f"参数: method={tracking_method}, max_speed={max_speed}, kp={kp}, max_w={max_w}, pivot_th={pivot_th}°")
         sdk.logger.info(
             f"减速参数: decel_start={decel_start_dist}m, min_factor={decel_min_factor}, "
             f"final_stop={final_stop_dist}m"
@@ -233,8 +245,11 @@ def main():
                 tillage_status=active_tillage,
                 require_implement_ready=require_implement_ready,
                 allow_work_pivot=allow_work_pivot,
+                tracking_method=tracking_method,
+                pure_pursuit_min_distance_m=pure_pursuit_min_distance_m,
             )
             cmd = safety_guard.apply(cmd, now=received_at, timestamp=now)
+            cmd["tracking_method"] = tracking_method
             out.send(cmd)
             time.sleep(0.005)  # 200Hz
 

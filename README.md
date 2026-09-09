@@ -14,7 +14,7 @@ NodeFlow 是一个面向农业机器人的配置驱动节点编排系统。运�
 | Edge Runtime | `edge/runtime/` | 解析图、校验拓扑、分层启动独立节点、监控退出、按策略重启和记录死亡现场；核心主路径 |
 | Node SDK / IPC | `edge/sdk/` | 参数、输入输出端口、健康心跳、输入断流看门狗、结构化日志和 mmap latest-value IPC |
 | Node Hub | `edge/nodes/` | 规划、定位、控制、传感、机具、I/O 与可观测节点；当前有 27 个 manifest |
-| Simulation | `simulation/` | 独立的 2D 农田/车辆/传感器仿真服务，通过 ZMQ 与桥接节点交互 |
+| Simulation | `simulation/` | 平面农田/车辆/传感器仿真服务，通过 ZMQ 与桥接节点交互；观察节点提供二维与三维显示 |
 | Edge Agent | `edge/agent/` | 接收 MQTT 任务、准备资产、控制 Runtime 数据流并回报状态 |
 | Cloud | `cloud/server/`, `cloud/web/` | 局域网地块、机器、作业和任务管理；不是边缘闭环的必需组件 |
 | Tools | `tools/` | CLI 是主要运维入口；Web Editor、GUI、MCP 和 Monitor 属于可选工具 |
@@ -42,6 +42,7 @@ flowchart TB
 - 节点死亡时保留退出码、stderr 尾部、最后健康快照和端口年龄等事故记录。
 - CLI 可聚合运行状态、健康心跳、端口活性和最近事故。
 - 仓库提供从地块规划、RTK/ENU 定位、路径跟踪到机具控制的完整农业作业图。
+- 三维观察窗口共用仿真与实车遥测输入，显示车辆、机具来源、路径和覆盖，支持有限内存回放。
 
 ## 环境与安装
 
@@ -97,6 +98,8 @@ python3 simulation/server.py
 nodeflow configs/graphs/planning_simulation.yaml
 ```
 
+浏览器打开 `http://localhost:8080/3d` 查看三维农场、真值与定位估计叠加及回放；原二维轨迹和曲线位于 `http://localhost:8080/`。窗口只读，暂停回放不会停止车辆。三维模型不改变原平面运动和覆盖计算，实车覆盖按已有定位及机具控制状态估算。启动与显示边界见 [轻量三维农场观察](docs/LIGHTWEIGHT_3D_SIMULATION.md)。
+
 前台模式会立即启动数据流，按 `Ctrl+C` 可优雅停止。也可以使用守护模式，把框架生命周期和数据流生命周期分开：
 
 ```bash
@@ -126,7 +129,7 @@ nodeflow-cli logs -f
 
 | 配置 | 用途 |
 |---|---|
-| `planning_simulation.yaml` | 仿真地块、全覆盖规划、跟踪控制、机具状态和轨迹可视化 |
+| `planning_simulation.yaml` | 仿真地块、全覆盖规划、跟踪控制、机具状态和二维/三维观察 |
 | `sim_arc_tracker.yaml` | 仿真中的弧线/Bezier 跟踪控制 |
 | `planning_with_real_rtk.yaml` | 使用真实 RTK 输入的规划闭环 |
 | `tillage_operation.yaml` | 旋耕作业完整节点图 |
@@ -173,6 +176,8 @@ NodeFlow/
 - [云边任务系统](docs/CLOUD_EDGE_TASKS.md)：Cloud API、MQTT、Edge Agent、任务状态和部署边界。
 - [仿真、CLI 与开发工具](docs/SIMULATION_AND_TOOLS.md)：仿真协议、诊断工具、编辑器、GUI 和 MCP。
 - [仿真闭环与纯 RTK 复现实验](docs/SIMULATION_RTK_EXPERIMENTS.md)：可重复直线实验、实态机具反馈和累计覆盖评价。
+- [轻量三维农场显示](docs/LIGHTWEIGHT_3D_SIMULATION.md)：已接入的实时三维窗口、仿真/实车来源、失联冻结与内存回放。
+- [UM982 双天线与低速纠偏](docs/UM982_HEADING_AND_TRACKING.md)：主从定向约定、输入链路修复、YAML选择跟踪方法与仿真对照。
 - [连续旋耕规划器](docs/CONTINUOUS_TILLAGE_PLANNERS.md)：大半径隔行回转、NEPath 螺旋候选和整田闭环对照。
 - [主体大回转与沿边补作业](docs/HYBRID_BOUNDARY_COVERAGE.md)：按剩余面积选取补边段，抬机具转场与实际覆盖验证。
 - [测试说明](tests/README.md)：权威测试入口、pytest 收集范围和 CI 范围。
