@@ -1,0 +1,198 @@
+name: track_controller
+version: "1.0"
+description: "轨迹跟踪控制器，支持履带底盘原地转向"
+
+metadata:
+  coordinate_system: ENU          # 局部坐标系: ENU (East-North-Up)
+  heading_convention: mathematical # 航向角约定: 东=0°, CCW正, (-π,π]
+
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+  windows:
+    kind: python
+    cmd: ["python", "run.py"]
+ports:
+  inputs:
+    - name: pose_enu
+      type: localization.pose_enu
+      description: |
+        ENU坐标系姿态
+        - x: 东向位置（米）
+        - y: 北向位置（米）
+        - theta: 航向角（弧度），数学坐标系，东=0，CCW正
+    - name: next_point
+      type: planning.waypoint
+      description: |
+        前瞻目标点
+        - x/y: ENU坐标（米）
+        - final: 是否为终点
+    - name: path_progress
+      type: planning.path_progress
+      description: "可选：当前路径段和误差信息，用于段限速和横向误差保护"
+    - name: tillage_status
+      type: implement.tillage_status
+      description: "可选：机具作业就绪状态；require_implement_ready 启用时等待 ready 才前进"
+  outputs:
+    - name: velocity_cmd
+      type: control.velocity
+      description: |
+        速度控制命令
+        - linear_velocity: 线速度（m/s），正=前进
+        - angular_velocity: 角速度（rad/s），正=CCW（逆时针）
+
+# 异常退出安全契约（2026-09-01 草案 §5.2）：死亡后框架向 velocity_cmd 写入
+# 明确的安全停止命令（safety_stop 语义，下游 pwm_driver 绕过一切补偿直接中位），
+# 并断言 drive_pwm 资源锁存。deadline_ms 待边侧停车预算冻结前保持 null
+# （真实输出模式由图级 safety_resources 绑定 + 校验门槛控制）。
+failure_policy:
+  apply_on:
+    - abnormal_exit
+  outputs:
+    velocity_cmd:
+      strategy: replace
+      value:
+        linear_velocity: 0.0
+        angular_velocity: 0.0
+        safety_stop: true
+        timestamp: "$event.wall_time"
+        status: "framework_failsafe"
+      completion:
+        resource: drive_pwm
+        require:
+          latch: asserted
+  deadline_ms: null
+params:
+  tracking_method:
+    type: string
+    default: heading_p
+    description: "heading_p=原前瞻点比例控制；pure_pursuit=按前瞻点曲率跟踪。两者共用机具升降、停转和段限速规则"
+  pure_pursuit_min_distance_m:
+    type: float
+    default: 0.1
+    description: "纯跟踪曲率计算的距离分母下限（米），不是前瞻距离；前瞻点仍由waypoint_selector选择"
+  require_implement_ready:
+    type: boolean
+    default: false
+    description: "作业段等待机具进入 working 且 PTO 启动；无机具反馈的图保持关闭"
+  allow_work_pivot:
+    type: boolean
+    default: false
+    description: "允许入土作业原地转向；默认停车并报告 needs_reposition"
+  implement_status_timeout_s:
+    type: float
+    default: 0.5
+    description: "超过该时间未收到机具状态，启用就绪等待的作业段停车"
+  max_speed:
+    type: float
+    default: 1.0
+  min_speed:
+    type: float
+    default: 0.0
+  heading_p_gain:
+    type: float
+    default: 2.5
+    description: "heading_p行驶及两种方法原地对齐时使用的航向增益"
+  max_angular_velocity:
+    type: float
+    default: 1.0
+  pivot_threshold_deg:
+    type: float
+    default: 15.0
+  decel_start_distance:
+    type: float
+    default: 3.0
+    description: "开始减速的距离阈值 (米)"
+  decel_min_factor:
+    type: float
+    default: 0.3
+    description: "距离减速的最小速度因子"
+  final_stop_distance:
+    type: float
+    default: 0.5
+    description: "终点停止距离阈值 (米)"
+  low_view_threshold:
+    type: integer
+    default: 2
+    description: "视野内路径点较少阈值"
+  low_view_speed_factor:
+    type: float
+    default: 0.7
+    description: "视野内路径点较少时的速度因子"
+  very_low_view_threshold:
+    type: integer
+    default: 1
+    description: "视野内路径点极少阈值"
+  very_low_view_speed_factor:
+    type: float
+    default: 0.45
+    description: "视野内路径点极少时的速度因子"
+  approach_mode_factor:
+    type: float
+    default: 0.5
+    description: "waypoint_selector 进入 approach 模式时的速度因子"
+  fallback_mode_factor:
+    type: float
+    default: 0.3
+    description: "waypoint_selector 进入 fallback 模式时的速度因子"
+  turn_slowdown_angle_deg:
+    type: float
+    default: 45.0
+    description: "前方路径转角达到该角度时开始减速"
+  sharp_turn_angle_deg:
+    type: float
+    default: 120.0
+    description: "前方路径转角达到该角度时执行强减速"
+  turn_speed_factor:
+    type: float
+    default: 0.65
+    description: "普通急转弯速度因子"
+  sharp_turn_speed_factor:
+    type: float
+    default: 0.35
+    description: "尖锐掉头速度因子"
+  cross_track_slowdown_error_m:
+    type: float
+    default: 0.5
+    description: "横向误差超过该值时开始额外降速"
+  cross_track_stop_error_m:
+    type: float
+    default: 1.5
+    description: "横向误差超过该值时进入低速恢复"
+  cross_track_recovery_factor:
+    type: float
+    default: 0.15
+    description: "横向误差过大时保留的低速恢复因子"
+  headland_turn_heading_gain:
+    type: float
+    default: 2.0
+    description: "headland_turn 段按路径切线航向控制时的航向增益"
+  headland_turn_use_path_heading:
+    type: boolean
+    default: false
+    description: "兼容开关：使用旧的路径切线控制；默认追踪前瞻点"
+  headland_turn_align_threshold_deg:
+    type: float
+    default: 35.0
+    description: "headland_turn 段航向误差超过该阈值时原地对齐"
+  headland_turn_min_speed_factor:
+    type: float
+    default: 0.25
+    description: "headland_turn 段最大速度因子，用于低速掉头"
+  pose_timeout_s:
+    type: float
+    default: 0.5
+    description: "超过该时间未收到新位姿时强制输出零速度"
+  target_timeout_s:
+    type: float
+    default: 0.5
+    description: "超过该时间未收到新前瞻点时强制输出零速度"
+  progress_timeout_s:
+    type: float
+    default: 0.5
+    description: "路径进度过期后停止使用段航向和限速，回退到前瞻点控制"
+  pivot_timeout_s:
+    type: float
+    default: 8.0
+    description: "连续原地对齐超过该时间后锁定停车，直到目标或控制状态变化"

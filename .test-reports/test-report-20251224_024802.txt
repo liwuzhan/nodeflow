@@ -1,0 +1,88 @@
+================================================
+NodeFlow 自动测试报告 - 2025-12-24 02:48:02
+================================================
+
+[1;33m[1/4] 检查代码规范...[0m
+
+[1;33m[2/4] 运行单元测试...[0m
+============================= test session starts ==============================
+platform darwin -- Python 3.12.0, pytest-9.0.2, pluggy-1.6.0 -- /Library/Frameworks/Python.framework/Versions/3.12/bin/python3
+cachedir: .pytest_cache
+rootdir: /Users/wuzhanli/Desktop/node
+plugins: anyio-4.12.0, cov-7.0.0
+collecting ... collected 4 items
+
+tests/unit/test_yaml_parser.py::TestYAMLParser::test_parse_runtime_config_success PASSED [ 25%]
+tests/unit/test_yaml_parser.py::TestYAMLParser::test_parse_runtime_config_file_not_found PASSED [ 50%]
+tests/unit/test_yaml_parser.py::TestYAMLParser::test_parse_node_manifest_success PASSED [ 75%]
+tests/unit/test_yaml_parser.py::TestYAMLParser::test_parse_node_manifest_file_not_found PASSED [100%]
+
+============================== 4 passed in 0.02s ===============================
+
+[1;33m[3/4] 验证 Mock 节点配置...[0m
+✓ mock_joystick 配置完整
+✓ mock_gps 配置完整
+✓ mock_imu 配置完整
+✓ mock_path_planner 配置完整
+✓ mock_controller_sim 配置完整
+✓ mock_motor_controller 配置完整
+✓ mock_sensor_fusion 配置完整
+✓ mock_data_generator 配置完整
+✓ mock_data_validator 配置完整
+✓ mock_throughput_monitor 配置完整
+
+[1;33m[4/4] 验证测试场景配置...[0m
+✓ test_mock_single.yaml 存在
+✓ test_mock_chain.yaml 存在
+✓ test_mock_multiport.yaml 存在
+✓ test_mock_processing.yaml 存在
+✓ test_mock_highfreq.yaml 存在
+✓ test_mock_errors.yaml 存在
+✓ test_mock_pipeline.yaml 存在
+
+[1;33m[统计信息][0m
+提交号: 72c0e1b
+提交者: liwuzhan <liwuzhan@live.com>
+提交信息: fix(deps): Add missing pyzmq dependency and create review fix plan
+
+## Changes
+
+- **fix**: Add pyzmq>=24.0.0 to requirements.txt (P0 Critical)
+  - SDK imports zmq but dependency was not declared
+  - Causes ImportError in clean environment
+  - Now explicitly declared to prevent installation failures
+
+- **docs**: Create comprehensive fix plan based on GPT review
+  - Document: docs/REVIEW_FINDINGS_AND_FIX_PLAN.md
+  - Addresses 3 major issues from review report
+  - Includes verification steps and acceptance criteria
+
+## Issues Addressed
+
+### P0 - FIXED ✅
+- pyzmq missing from requirements.txt
+
+### P1 - PLANNED
+- Late-Joiner semantic completeness
+- InputPort first read history values
+- Add test cases and documentation
+
+### P2 - PLANNED
+- Unify serialization to MsgPack for large data support
+- Mark legacy IPC stack as deprecated
+- Improve code clarity and maintainability
+
+## Next Steps
+
+1. P1: Implement history value reading on first connection
+2. P2: Migrate JSON→MsgPack serialization with numpy support
+3. P2: Clean up deprecated IPC stack
+
+🤖 Generated with Claude Code
+Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>
+修改文件数:        5
+代码行数:     6139 total
+
+================================================
+[0;32m✓ 测试完成，报告已保存到: /Users/wuzhanli/Desktop/node/.test-reports/test-report-20251224_024802.txt[0m
+================================================

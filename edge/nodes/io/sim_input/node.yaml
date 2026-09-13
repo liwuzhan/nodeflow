@@ -1,0 +1,70 @@
+name: sim_input
+version: "1.0"
+description: "仿真器输入节点 - 接收控制命令并发送到仿真器"
+
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+  windows:
+    kind: python
+    cmd: ["python", "run.py"]
+
+ports:
+  inputs:
+    - name: velocity_cmd
+      type: control.velocity
+      description: "速度控制命令 (linear_velocity, angular_velocity) - 优先级1"
+
+    - name: motor_cmd
+      type: json
+      description: "电机控制命令 (throttle, steering) - 优先级2"
+
+    - name: tillage_cmd
+      type: implement.tillage_cmd
+      description: "机具控制命令 (hitch_height, pto_on, pto_rpm)"
+
+params:
+  # 仿真器连接
+  simulator_host:
+    type: string
+    default: "localhost"
+    description: "仿真器主机地址"
+
+  simulator_port:
+    type: integer
+    default: 5555
+    description: "仿真器端口"
+
+  timeout:
+    type: integer
+    default: 1000
+    description: "ZMQ超时时间 (毫秒)"
+
+  watchdog_timeout_sec:
+    type: float
+    default: 0.5
+    description: "收到最后一个驱动命令后允许的实际秒数；超时发送零速度，未确认则持续重试"
+
+  # 命令缺字段时的默认值；看门狗停车始终发送零速度
+  default_linear_velocity:
+    type: float
+    default: 0.0
+    description: "默认线速度 (m/s)"
+
+  default_angular_velocity:
+    type: float
+    default: 0.0
+    description: "默认角速度 (rad/s)"
+
+  # 控制模式
+  control_mode:
+    type: string
+    default: "velocity"
+    description: "控制模式: velocity (优先) 或 motor"
+
+  # 频率控制
+  input_frequency:
+    type: float
+    default: 50.0
+    description: "输入检查频率 (Hz)"

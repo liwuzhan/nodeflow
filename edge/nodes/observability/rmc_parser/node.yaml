@@ -1,0 +1,21 @@
+name: rmc_parser
+version: 0.1.0
+description: NMEA RMC Parser - Parses raw NMEA strings into GPS data
+
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+  windows:
+    kind: python
+    cmd: ["python", "run.py"]
+
+ports:
+  inputs:
+    - name: nmea_raw
+      type: string
+      description: Raw NMEA sentence (e.g. from serial)
+  outputs:
+    - name: gps_fix
+      type: gps.fix
+      description: Parsed GPS data

@@ -1,0 +1,75 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# NodeFlow specific
+/tmp/
+/logs/
+/tmp/nodeflow_sockets/
+*.log
+
+# Node.js (if used)
+node_modules/
+npm-debug.log
+package-lock.json
+
+# Test coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Project specific
+*.bak
+.trae/
+
+# Local runtime artifacts
+cloud/server/*.db
+cloud/server/*.db-shm
+cloud/server/*.db-wal
+cloud/server/old/
+node-hub/global_coverage/txt/path_*.txt
+node-hub/global_coverage/txt/old/
+other/png/
+uml/
+
+# Test reports
+.test-reports/
+*.report.json
+unittest-*.log
+
+# Claude Code (只排除本地配置)
+.claude/*.local.json
+cloud/monitor/node_modules/
+cloud/monitor/dist/

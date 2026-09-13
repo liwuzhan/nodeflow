@@ -1,0 +1,86 @@
+================================================
+NodeFlow 自动测试报告 - 2025-12-22 21:18:14
+================================================
+
+[1;33m[1/4] 检查代码规范...[0m
+
+[1;33m[2/4] 运行单元测试...[0m
+============================= test session starts ==============================
+platform darwin -- Python 3.12.0, pytest-9.0.2, pluggy-1.6.0 -- /usr/local/bin/python3
+cachedir: .pytest_cache
+rootdir: /Users/wuzhanli/Desktop/node
+plugins: anyio-4.12.0, cov-7.0.0
+collecting ... collected 4 items
+
+tests/unit/test_yaml_parser.py::TestYAMLParser::test_parse_runtime_config_success PASSED [ 25%]
+tests/unit/test_yaml_parser.py::TestYAMLParser::test_parse_runtime_config_file_not_found PASSED [ 50%]
+tests/unit/test_yaml_parser.py::TestYAMLParser::test_parse_node_manifest_success PASSED [ 75%]
+tests/unit/test_yaml_parser.py::TestYAMLParser::test_parse_node_manifest_file_not_found PASSED [100%]
+
+============================== 4 passed in 0.02s ===============================
+
+[1;33m[3/4] 验证 Mock 节点配置...[0m
+✓ mock_joystick 配置完整
+✓ mock_gps 配置完整
+✓ mock_imu 配置完整
+✓ mock_path_planner 配置完整
+✓ mock_controller_sim 配置完整
+✓ mock_motor_controller 配置完整
+✓ mock_sensor_fusion 配置完整
+✓ mock_data_generator 配置完整
+✓ mock_data_validator 配置完整
+✓ mock_throughput_monitor 配置完整
+
+[1;33m[4/4] 验证测试场景配置...[0m
+✓ test_mock_single.yaml 存在
+✓ test_mock_chain.yaml 存在
+✓ test_mock_multiport.yaml 存在
+✓ test_mock_processing.yaml 存在
+✓ test_mock_highfreq.yaml 存在
+✓ test_mock_errors.yaml 存在
+✓ test_mock_pipeline.yaml 存在
+
+[1;33m[统计信息][0m
+提交号: 746f8bf
+提交者: liwuzhan <liwuzhan@live.com>
+提交信息: fix(mcp): Phase 1 - 修复路径安全边界缺失 (P0 Critical)
+
+问题描述:
+- 4 个 MCP 工具存在任意文件读写风险
+- handle_get_node_info/validate_yaml/edit_yaml/read_logs 未验证路径边界
+- 攻击者可通过路径穿越访问项目外文件 (如 /etc/passwd)
+
+修复内容:
+1. 新增 resolve_project_path() 函数实现项目根目录约束
+   - 统一处理相对/绝对路径解析
+   - 使用 Path.relative_to() 验证边界
+   - 路径穿越或项目外访问抛出 ValueError
+
+2. 更新 4 个工具的路径验证:
+   - handle_get_node_info: hub_path 参数验证
+   - handle_validate_yaml: yaml_path 参数验证
+   - handle_edit_yaml: yaml_path 写入前验证
+   - handle_read_logs: node_id 路径穿越防护
+
+3. 改进错误处理:
+   - 缺参情况返回 INVALID_INPUT (原 EXECUTION_ERROR)
+   - 错误信息中使用原始输入而非解析后路径
+
+测试结果:
+- tests/mcp/test_error_responses.py: 7/7 通过 ✅
+- 路径穿越 (../) 正确拒绝
+- 项目外路径正确拒绝
+
+影响文件:
+- mcp_server.py: 新增 resolve_project_path(), 修改 4 个工具
+- runtime_manager.py: read_logs() node_id 验证加固
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>
+修改文件数:        2
+代码行数:     5588 total
+
+================================================
+[0;32m✓ 测试完成，报告已保存到: /Users/wuzhanli/Desktop/node/.test-reports/test-report-20251222_211814.txt[0m
+================================================

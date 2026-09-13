@@ -1,0 +1,187 @@
+package: pwm_driver
+name: pwm_driver
+version: 1.0.0
+description: "香橙派5 Ultra PWM电机驱动节点 - 双轮差速控制"
+
+author: "NodeFlow Team"
+license: MIT
+
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+  windows:
+    kind: python
+    cmd: ["python", "run.py"]
+
+ports:
+  inputs:
+    - name: velocity_cmd
+      type: control.velocity
+      description: "速度控制命令 (线速度 + 角速度)"
+  outputs:
+    - name: pwm_status
+      type: control.pwm_status
+      description: "PWM状态输出（左轮PWM、右轮PWM）"
+
+# 输入看门狗（W3-3）：velocity_cmd 断流超时 → on_input_lost 回调（回中位安全值，
+# 见 run.py），是 SDK 看门狗机制的首个用户。仅声明在持续输出的端口上。
+input_watchdog:
+  velocity_cmd: 0.5
+
+# 异常退出安全契约（2026-09-01 草案 §5.4）：本节点死亡后由框架执行
+# drive_pwm.neutral 资源动作（需图级 safety_resources 绑定，默认 dry-run）。
+# pwm_status 的 typed invalidate 语义未定义（§5.3），首期 strategy 为 none。
+# anti_replay：重启后不消费启动前缓存的历史非零命令（§6.10）。
+# rearm：manual_then_fresh —— 人工授权前不得恢复运动（DEC-11 草案倾向）。
+failure_policy:
+  apply_on:
+    - abnormal_exit
+  outputs:
+    pwm_status:
+      strategy: none
+  resources:
+    drive_pwm:
+      action: neutral
+  anti_replay:
+    velocity_cmd: require_new_commit
+  rearm:
+    mode: manual_then_fresh
+    input: velocity_cmd
+  deadline_ms: null
+
+
+
+# 节点参数
+params:
+  # ========== PWM硬件配置 (sysfs) ==========
+  pwm_frequency:
+    type: float
+    default: 50.0
+    description: "PWM频率 (Hz)，RC信号通常50Hz"
+
+  left_pwmchip:
+    type: str
+    default: "pwmchip0"
+    description: "左轮PWM芯片 (sysfs路径: /sys/class/pwm/{value})"
+
+  left_pwm_channel:
+    type: int
+    default: 0
+    description: "左轮PWM通道号"
+
+  right_pwmchip:
+    type: str
+    default: "pwmchip4"
+    description: "右轮PWM芯片 (sysfs路径: /sys/class/pwm/{value})，香橙派5 Ultra的PWM14对应pwmchip4"
+
+  right_pwm_channel:
+    type: int
+    default: 0
+    description: "右轮PWM通道号"
+
+  # ========== RC PWM 脉宽参数 (纳秒) ==========
+  pwm_min_ns:
+    type: int
+    default: 1000000
+    description: "最小高电平时间 (ns)，默认1ms - 反向满油"
+
+  pwm_center_ns:
+    type: int
+    default: 1500000
+    description: "中位高电平时间 (ns)，默认1.5ms - 停止"
+
+  pwm_max_ns:
+    type: int
+    default: 2000000
+    description: "最大高电平时间 (ns)，默认2ms - 正向满油"
+
+  # ========== 车辆参数 ==========
+  drive_mode:
+    type: str
+    default: "differential"
+    description: "驱动模式: differential=差速(左右轮独立PWM), direct=直驱(通道1油门/通道2转向)"
+
+  wheel_base:
+    type: float
+    default: 0.5
+    description: "轮距/履带宽度 (m)"
+
+  max_linear_speed:
+    type: float
+    default: 2.0
+    description: "最大线速度 (m/s)"
+
+  max_angular_speed:
+    type: float
+    default: 1.0
+    description: "最大角速度 (rad/s)"
+
+  # ========== 速度到PWM映射参数 ==========
+  pwm_duty_scale:
+    type: float
+    default: 0.8
+    description: "PWM输出比例 (0-1)，实际输出范围 = center_ns ± (center_ns * scale)"
+
+  pwm_inverted_polarity:
+    type: bool
+    default: true
+    description: "PWM极性反转。true: duty_cycle为低电平时间（香橙派默认）；false: duty_cycle为高电平时间"
+
+  # ========== 电机校准参数 ==========
+  left_speed_scale:
+    type: float
+    default: 1.0
+    description: "左轮速度缩放 (0.5~1.5)，补偿左右电机差异"
+
+  right_speed_scale:
+    type: float
+    default: 1.0
+    description: "右轮速度缩放 (0.5~1.5)，补偿左右电机差异"
+
+  angular_velocity_bias:
+    type: float
+    default: 0.0
+    description: "角速度偏置 (rad/s)，补偿直线行驶时的偏移。车辆右偏设正值"
+
+  pwm_deadzone_ns:
+    type: int
+    default: 0
+    description: "ESC死区宽度 (ns，单侧)。非零速度时PWM从 center±deadzone 开始输出，跳过死区"
+
+  # ========== 安全参数 ==========
+  enable_safety_check:
+    type: bool
+    default: true
+    description: "启用安全检查（速度限制、PWM范围检查）"
+
+  emergency_stop:
+    type: bool
+    default: false
+    description: "紧急停止标志（true时输出中位PWM）"
+
+  command_timeout:
+    type: float
+    default: 0.5
+    description: "命令超时时间 (s)，超时后自动停止"
+
+  # ========== 调试参数 ==========
+  enable_verbose_log:
+    type: bool
+    default: false
+    description: "启用详细日志（打印每次PWM输出）"
+
+  dry_run_mode:
+    type: bool
+    default: false
+    description: "演习模式（不实际输出PWM，仅计算和记录）"
+
+# 依赖库
+dependencies: []  # 无需额外依赖，使用 Linux sysfs PWM 接口
+
+# 标签
+tags:
+  - motor_control
+  - pwm
+  - orangepi
+  - hardware_interface

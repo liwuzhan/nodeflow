@@ -1,0 +1,135 @@
+name: waypoint_selector
+version: "2.0"
+description: "基于视野区域的前瞻点选择器 (视野算法 v2.0)"
+
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+  darwin:
+    kind: python
+    cmd: ["python3", "run.py"]
+  windows:
+    kind: python
+    cmd: ["python", "run.py"]
+
+ports:
+  inputs:
+    - name: global_path
+      type: planning.path
+      description: "全局路径 (ENU 坐标)"
+    - name: operation_plan
+      type: planning.operation_plan
+      description: "可选：带段语义的作业计划；连接后优先于 global_path"
+    - name: pose_enu
+      type: localization.pose_enu
+      description: "车辆姿态 (x, y, theta) - 必须包含航向"
+    - name: path_progress
+      type: planning.path_progress
+      description: "可选：路径投影进度，用于同步已消费路径点，避免掉头/重启后追旧点"
+  outputs:
+    - name: next_point
+      type: planning.waypoint
+      description: "前瞻点坐标及状态信息"
+
+params:
+  # 视野区域参数
+  view_distance:
+    type: number
+    default: 3.0
+    description: "视野中心距车辆距离 (米)"
+
+  view_width:
+    type: number
+    default: 4.0
+    description: "视野矩形宽度 (米)"
+
+  view_depth:
+    type: number
+    default: 1.5
+    description: "视野矩形深度/厚度 (米)"
+
+  # 完成判定参数
+  goal_tolerance:
+    type: number
+    default: 1.5
+    description: "终点到达容差 (米)"
+
+  # 性能参数
+  max_search_points:
+    type: integer
+    default: 100
+    description: "每次最多检查的路径点数"
+
+  # 初始消费参数
+  initial_check_points:
+    type: integer
+    default: 10
+    description: "初始化时检查的前N个点"
+
+  initial_consume_distance:
+    type: number
+    default: 2.0
+    description: "距离小于此值的点视为已消费 (米)"
+
+  # 视野自动扩宽参数
+  min_view_points:
+    type: integer
+    default: 3
+    description: "视野内最少点数，少于此值时扩宽视野"
+
+  view_expand_factor:
+    type: number
+    default: 2.0
+    description: "视野扩宽倍数"
+
+  max_view_width:
+    type: number
+    default: 12.0
+    description: "最大视野宽度 (米)"
+
+  # 持续消费参数
+  continuous_consume_distance:
+    type: number
+    default: 1.5
+    description: "每帧检查，距离小于此值的点自动消费 (米) - 防止跳过点"
+
+  turn_preview_distance:
+    type: number
+    default: 8.0
+    description: "向前预览路径距离，用于输出急转弯预警 (米)"
+
+  progress_sync_max_cross_track_m:
+    type: number
+    default: 12.0
+    description: "路径进度同步允许的最大横向误差 (米)"
+
+  progress_sync_fraction_threshold:
+    type: number
+    default: 0.2
+    description: "路径投影超过当前线段该比例后，前瞻选择器消费当前路径点"
+
+  progress_target_enabled:
+    type: boolean
+    default: true
+    description: "启用后优先使用 path_progress 沿路径里程生成前瞻目标，视野算法作为兜底"
+
+  progress_timeout_s:
+    type: number
+    default: 0.5
+    description: "路径进度更新超时后改用实时位姿本地选点 (秒)，0 禁用超时"
+
+  progress_target_lookahead_m:
+    type: number
+    default: 2.5
+    description: "path_progress 前瞻目标距离 (米)"
+
+  progress_target_turn_lookahead_m:
+    type: number
+    default: 1.5
+    description: "headland_turn 段的前瞻目标距离 (米)"
+
+  progress_target_max_cross_track_m:
+    type: number
+    default: 12.0
+    description: "path_progress 前瞻目标允许的最大横向误差 (米)"

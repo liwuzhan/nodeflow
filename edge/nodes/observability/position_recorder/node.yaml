@@ -1,0 +1,43 @@
+name: position_recorder
+version: "1.0.0"
+description: "位置记录节点 - 手动/自动记录设备当前位置"
+
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+  darwin:
+    kind: python
+    cmd: ["python3", "run.py"]
+  windows:
+    kind: python
+    cmd: ["python", "run.py"]
+
+ports:
+  inputs:
+    - name: rtk_fix
+      type: sensor.rtk
+      description: "RTK定位数据输入"
+
+  outputs: []
+
+params:
+  web_port:
+    type: integer
+    default: 8082
+    description: "Web界面端口"
+
+  auto_record_interval:
+    type: float
+    default: 1.0
+    description: "自动记录间隔（秒）"
+
+  max_records:
+    type: integer
+    default: 10
+    description: "保留的最大记录文件数量"
+
+  record_format:
+    type: string
+    default: "csv"
+    description: "记录文件格式（csv/json）"

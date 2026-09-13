@@ -1,0 +1,32 @@
+name: rtk_filter
+version: "1.0"
+description: "RTK滤波/融合节点，输出平滑的经纬度与航向"
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+  windows:
+    kind: python
+    cmd: ["python", "run.py"]
+ports:
+  inputs:
+    - name: rtk_fix
+      type: sensor.rtk
+      description: "原始RTK数据"
+  outputs:
+    - name: filtered_rtk
+      type: sensor.rtk
+      description: "平滑后的RTK数据"
+params:
+  alpha_pos:
+    type: float
+    default: 0.2
+    description: "位置EMA系数"
+  alpha_heading:
+    type: float
+    default: 0.3
+    description: "航向EMA系数"
+  use_imu_yaw_rate:
+    type: bool
+    default: false
+    description: "是否融合IMU yaw rate"

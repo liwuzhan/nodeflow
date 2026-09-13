@@ -1,0 +1,93 @@
+package: web_teleop
+name: web_teleop
+version: 1.0.0
+description: "Web远程控制节点 - 提供HTTP界面进行速度控制"
+
+author: "NodeFlow Team"
+license: MIT
+
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+  windows:
+    kind: python
+    cmd: ["python", "run.py"]
+
+ports:
+  inputs:
+    - name: feedback
+      type: control.pwm_status
+      description: "状态反馈输入 (可选，用于显示当前实际速度)"
+      required: false
+
+    - name: auto_velocity
+      type: control.velocity
+      description: "自动控制速度输入 (透传模式下使用)"
+      required: false
+
+  outputs:
+    - name: velocity_cmd
+      type: control.velocity
+      description: "速度控制命令输出"
+
+params:
+  # ========== 服务器配置 ==========
+  http_port:
+    type: int
+    default: 9873
+    description: "HTTP服务端口"
+
+  http_host:
+    type: str
+    default: "0.0.0.0"
+    description: "HTTP监听地址 (0.0.0.0 允许局域网访问)"
+
+  # ========== 速度限制 ==========
+  max_linear_speed:
+    type: float
+    default: 1.0
+    description: "最大线速度 (m/s)"
+
+  max_angular_speed:
+    type: float
+    default: 1.0
+    description: "最大角速度 (rad/s)"
+
+  # ========== 持续输出模式 ==========
+  continuous_output:
+    type: bool
+    default: true
+    description: "持续输出速度命令 (保持最后的状态)"
+
+  output_rate:
+    type: float
+    default: 10.0
+    description: "持续输出频率 (Hz)"
+
+  # ========== 安全参数 ==========
+  require_stop_on_disconnect:
+    type: bool
+    default: false
+    description: "客户端断开时自动停止"
+
+  command_timeout:
+    type: float
+    default: 5.0
+    description: "无操作超时时间 (秒)，超时后自动停止"
+
+  # ========== 透传模式 ==========
+  passthrough_mode:
+    type: bool
+    default: false
+    description: "透传模式：直接转发自动控制的速度命令，Web遥控器禁用"
+
+# 依赖库
+dependencies: []
+
+# 标签
+tags:
+  - teleop
+  - web
+  - control
+  - ui

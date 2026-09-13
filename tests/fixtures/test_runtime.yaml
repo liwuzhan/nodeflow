@@ -1,0 +1,24 @@
+graph_id: test_graph
+graph_version: 1
+node_hub_path: ./node-hub
+
+nodes:
+  - id: node_a
+    package: test_node_a
+    params:
+      param1: value1
+      param2: 42
+
+  - id: node_b
+    package: test_node_b
+    params:
+      param1: value2
+
+edges:
+  - from: node_a.output1
+    to: node_b.input1
+    type: test.type
+
+restart_policy:
+  max_retries: 3
+  backoff_ms: 500

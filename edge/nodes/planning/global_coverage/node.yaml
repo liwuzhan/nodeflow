@@ -1,0 +1,101 @@
+name: global_coverage
+version: 0.1.0
+description: 全局覆盖规划 - 平行扫描、轮廓螺旋、大回转及沿边补作业
+
+metadata:
+  coordinate_system: ENU          # 坐标系: ENU局部笛卡尔坐标
+  heading_convention: mathematical # 航向角约定: 东=0, CCW正, 弧度
+
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+  windows:
+    kind: python
+    cmd: ["python", "run.py"]
+
+ports:
+  inputs:
+    - name: task_enu
+      type: planning.task_enu
+      description: |
+        规划任务请求（ENU坐标）
+        - parcel.outer: 地块外边界，ENU坐标 [(x,y),...] (米)
+        - parcel.holes: 孔洞列表（可选）
+        - vehicle: 车辆配置（幅宽、重叠率等）
+        - ref_lon/ref_lat: GPS参考点（元数据）
+  outputs:
+    - name: global_path
+      type: planning.path
+      description: |
+        规划生成的全局路径（ENU坐标）
+        - path: ENU路径点列表 [(x,y),...] (米)
+        - task_id: 任务ID
+      buffer_size: 3097152  # 3MB - 足以存储典型路径（几百个路径点）
+      conflate: true  # 覆盖模式 - 只保留最新规划结果
+    - name: operation_plan
+      type: planning.operation_plan
+      description: |
+        带作业语义的规划结果（兼容 global_path）
+        - path: ENU路径点列表 [(x,y),...] (米)
+        - path_zones: 每个路径点的 work/transit 标注
+        - segments: 作业段/掉头段语义、速度上限、机具意图
+      buffer_size: 3097152
+      conflate: true
+
+params:
+  planning_strategy:
+    type: string
+    default: parallel
+    enum: [parallel, contour_spiral, wide_turn, wide_turn_boundary]
+    description: "parallel 平行行；contour_spiral 轮廓；wide_turn 连续隔行大回转；wide_turn_boundary 主体大回转加允许抬机具的沿边补作业（凸无孔地块，不含入口对接）"
+
+  boundary_target_coverage_ratio:
+    type: number
+    default: 0.98
+    description: "组合规划目标：退让后作业区域的预计覆盖比例；实际覆盖另由轨迹和机具反馈评价"
+
+  boundary_max_layers:
+    type: integer
+    default: 16
+    description: "最多考察的边界内缩层数；达到目标或没有有效增益后停止补段"
+
+  path_point_spacing:
+    type: number
+    default: 0.5
+    description: "路径点间距 (米)，用于密化路径以便控制器跟踪"
+
+  turn_angle_threshold_deg:
+    type: number
+    default: 45.0
+    description: "几何转角超过该角度时标记为地头/掉头段"
+
+  turn_zone_radius_m:
+    type: number
+    default: 4.0
+    description: "转角点前后标记为 transit/headland_turn 的路径距离"
+
+  work_speed_limit_mps:
+    type: number
+    default: 1.2
+    description: "作业段默认速度上限"
+
+  turn_speed_limit_mps:
+    type: number
+    default: 0.5
+    description: "地头/掉头段默认速度上限"
+
+  smooth_turns:
+    type: bool
+    default: false
+    description: "是否在输出路径前对急转角做几何圆角平滑"
+
+  turn_smoothing_radius_m:
+    type: number
+    default: null
+    description: "掉头圆角半径；为空时根据最小转弯半径或机具幅宽自动估计"
+
+  turn_smoothing_min_angle_deg:
+    type: number
+    default: 35.0
+    description: "转角超过该角度才执行圆角平滑"

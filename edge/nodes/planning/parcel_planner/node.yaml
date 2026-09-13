@@ -1,0 +1,43 @@
+name: parcel_planner
+version: "1.0"
+description: "地块规划节点 - 支持 GPS 坐标转 ENU"
+
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+  macos:
+    kind: python
+    cmd: ["python3", "run.py"]
+  windows:
+    kind: python
+    cmd: ["python", "run.py"]
+
+ports:
+  inputs: []  # 源节点，无输入
+
+  outputs:
+    - name: task_enu
+      type: planning.task_enu
+      description: "规划任务（ENU坐标+参考点）"
+
+params:
+  parcel_name:
+    type: string
+    default: "default"
+    description: "地块配置名称"
+
+  send_interval:
+    type: float
+    default: 1.0
+    description: "发送间隔（秒），数据未变化时按此频率重发"
+
+  web_port:
+    type: integer
+    default: 8081
+    description: "Web界面端口（独立模式使用）"
+
+  amap_api_key:
+    type: string
+    default: ""
+    description: "高德地图API Key（通过环境变量 AMAP_API_KEY 设置）"

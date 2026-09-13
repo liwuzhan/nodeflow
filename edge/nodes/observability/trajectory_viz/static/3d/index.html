@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>农场三维观察 · NodeFlow</title>
+  <link rel="stylesheet" href="/static/3d/viewer.css">
+  <script type="importmap">
+    {"imports": {
+      "three": "/static/vendor/three/three.module.min.js",
+      "three/addons/controls/OrbitControls.js": "/static/vendor/three/OrbitControls.js",
+      "three/addons/loaders/GLTFLoader.js": "/static/vendor/three/GLTFLoader.js"
+    }}
+  </script>
+</head>
+<body>
+  <main class="viewer">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark">田</span><div><h1>农场三维观察</h1><p>轨迹 · 覆盖 · 车辆状态</p></div></div>
+      <div class="connection"><span id="status-dot" class="status-dot waiting"></span><span id="connection-status" role="status">等待数据</span></div>
+      <a class="flat-link" href="/">二维轨迹 ↗</a>
+    </header>
+    <section class="stage" aria-label="三维农场场景">
+      <div id="canvas-container"></div>
+      <nav class="view-tools" aria-label="观察视角">
+        <button data-view="oblique" class="active">斜视</button><button data-view="top">俯视</button><button data-view="follow">跟随</button><button id="fit-view">查看全场</button>
+      </nav>
+      <div class="scene-caption"><span id="task-name">尚未收到任务</span><span id="source-badge">等待位置来源</span></div>
+      <div id="empty-state" class="empty-state"><strong>等待车辆位置</strong><span>接收到仿真或实车数据后显示车辆与轨迹。</span></div>
+      <div id="error-message" class="error-message" role="alert" hidden></div>
+      <aside class="legend" aria-label="图例">
+        <span><i class="line planned"></i>规划路线</span><span><i class="line actual"></i>测量轨迹</span>
+        <span class="soil-legend"><i class="square worked"></i><b id="worked-label">已处理</b></span><span class="soil-legend"><i class="square untreated"></i><b id="untreated-label">未处理</b></span>
+        <span class="analysis-legend" hidden><i class="square covered"></i>已覆盖</span><span class="analysis-legend" hidden><i class="square repeated"></i>重复</span><span class="analysis-legend" hidden><i class="square missed"></i>遗漏</span>
+        <span><i class="square estimate"></i>位置估计</span><span><i class="target-symbol"></i>前瞻点</span>
+      </aside>
+      <div class="scene-hint">拖动旋转 · 滚轮缩放 · 右键平移 <span>东 → / 北 ↑（俯视）</span></div>
+    </section>
+    <section class="dashboard" aria-label="观察数据与回放">
+      <div class="toolbar">
+        <div class="segmented" aria-label="数据模式"><button id="live-mode" class="active">实时</button><button id="replay-mode">回放</button></div>
+        <label class="toggle"><input id="show-estimate" type="checkbox" checked> 真值 / 估计叠加</label>
+        <label class="toggle"><input id="show-coverage" type="checkbox" checked> 地面处理状态</label>
+        <label class="toggle"><input id="show-analysis" type="checkbox"> 覆盖分析</label>
+        <span id="coverage-note" class="subtle">覆盖依据：等待数据</span>
+      </div>
+      <div id="replay-controls" class="replay-controls" hidden>
+        <button id="play-replay" disabled>播放</button><label>速度 <select id="replay-speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></label>
+        <input id="replay-range" type="range" min="0" max="0" value="0" step="1" aria-label="回放位置" disabled><output id="replay-time">暂无记录</output>
+      </div>
+      <dl class="stats">
+        <div><dt>位置来源</dt><dd id="position-source">—</dd></div><div><dt>位姿年龄</dt><dd id="pose-age">—</dd></div>
+        <div><dt>速度指令</dt><dd id="speed-value">—</dd></div><div><dt>跟踪算法</dt><dd id="algorithm-value">—</dd></div>
+        <div><dt>机具状态</dt><dd id="implement-value">未知</dd></div><div><dt>累计覆盖率</dt><dd id="coverage-value">—</dd></div>
+      </dl>
+      <div class="footer-note"><span id="frame-time">等待首帧</span><span id="model-status">正在载入车辆模型</span><span>观察页面 · 不下发车辆指令</span></div>
+    </section>
+  </main>
+  <script type="module" src="/static/3d/viewer.js"></script>
+</body>
+</html>

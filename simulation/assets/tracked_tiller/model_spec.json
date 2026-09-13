@@ -1,0 +1,139 @@
+{
+  "purpose": "简化三维显示占位模型，不参与车辆运动或控制计算",
+  "version": 1,
+  "dimensions": {
+    "chassis_length_m": 1.6,
+    "chassis_width_m": 1.2,
+    "track_width_m": 0.22,
+    "cover_top_m": 0.96,
+    "rear_deck_top_m": 0.55,
+    "implement_width_m": 1.2,
+    "implement_rear_x_m": -1.43,
+    "antenna_top_m": 1.15
+  },
+  "confirmed_dimensions": [
+    "chassis_length_m",
+    "chassis_width_m"
+  ],
+  "illustrative_dimensions": "除底盘长1.6米、宽1.2米外，高度、轮径、电池包络、机具和天线位置均为示意。",
+  "reference": "用户提供的履带底盘四视图；前部高电池，后部低甲板和机具连杆。",
+  "coordinates": {
+    "units": "m",
+    "author": {
+      "x": "forward",
+      "y": "left",
+      "z": "up"
+    },
+    "gltf": {
+      "x": "forward",
+      "y": "up",
+      "z": "right"
+    },
+    "author_to_gltf": "(x, y, z) -> (x, z, -y)",
+    "enu_world_to_view": "(east, north, up) -> (east, up, -north)",
+    "enu_yaw_to_gltf_rotation": "rotation about +Y by the ENU yaw angle; model forward is +X"
+  },
+  "groups": {
+    "chassis": {
+      "origin_author_m": [
+        0,
+        0,
+        0
+      ]
+    },
+    "track_left": {
+      "origin_author_m": [
+        0,
+        0,
+        0
+      ]
+    },
+    "track_right": {
+      "origin_author_m": [
+        0,
+        0,
+        0
+      ]
+    },
+    "rear_deck": {
+      "origin_author_m": [
+        0,
+        0,
+        0
+      ]
+    },
+    "front_battery_cover": {
+      "origin_author_m": [
+        0,
+        0,
+        0
+      ],
+      "purpose": "Illustrative shell enclosing the front battery"
+    },
+    "antenna_front": {
+      "origin_author_m": [
+        0,
+        0,
+        0
+      ],
+      "purpose": "Position is illustrative; main/slave assignment is unspecified"
+    },
+    "antenna_rear": {
+      "origin_author_m": [
+        0,
+        0,
+        0
+      ],
+      "purpose": "Position is illustrative; main/slave assignment is unspecified"
+    },
+    "implement_lift": {
+      "origin_author_m": [
+        -0.8,
+        0,
+        0.43
+      ],
+      "purpose": "Move this node to illustrate lifting; display only",
+      "rotation_axis_view": [
+        0,
+        0,
+        -1
+      ],
+      "rotation_axis_author": [
+        0,
+        1,
+        0
+      ]
+    }
+  },
+  "antenna_note": "前后天线仅为显示提示，不定义主从关系，不能从模型推导UM982安装偏移。",
+  "palette_note": "浅灰塑料盖、深色底盘、少量橙色标识为暂定显示配色。",
+  "validation": {
+    "triangles": 7104,
+    "meshes": 27,
+    "bytes": 619488,
+    "whole_model_bounds_author_m": {
+      "min": [
+        -1.4629999999999999,
+        -0.6,
+        4.336808689942018e-18
+      ],
+      "max": [
+        0.7980708154636884,
+        0.6,
+        1.15
+      ]
+    },
+    "vehicle_bounds_author_m": {
+      "min": [
+        -0.8007600607559977,
+        -0.6,
+        4.336808689942018e-18
+      ],
+      "max": [
+        0.7980708154636884,
+        0.6,
+        1.15
+      ]
+    }
+  }
+}

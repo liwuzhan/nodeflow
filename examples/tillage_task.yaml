@@ -1,0 +1,26 @@
+# NodeFlow 离线任务定义 — 旋耕作业示例
+#
+# 使用方式：
+#   1. 启动 daemon:  nodeflow runtime start examples/tillage_operation.yaml --daemon
+#   2. 下发任务:    nodeflow task run examples/tillage_task.yaml
+#
+# 任务 = preset YAML + 节点参数覆盖
+# TaskExecutor 将 node_params 注入 runtime.control 缓冲区，
+# daemon 读取并合并到 NodeInstance.params，然后启动数据流。
+
+task_id: "local-tillage-001"
+preset_yaml: "tillage_operation"
+operation_type: "tillage"
+sequence_index: 0
+
+# 节点参数覆盖 — 这些值会在 start_dataflow 前注入到对应节点
+# 格式: <node_id>:
+#         <param_name>: <value>
+node_params:
+  parcel_planner:
+    parcel_name: "demo_field"
+  trajectory_loader:
+    trajectory_file: ""            # 留空自动选最新
+  sim_output:
+    simulator_host: localhost
+    simulator_port: 5555

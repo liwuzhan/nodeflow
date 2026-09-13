@@ -1,0 +1,37 @@
+name: pwm_controller
+version: 0.1.0
+description: PWM执行器节点 - 将控制命令转换为PWM信号
+
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+
+ports:
+  inputs:
+    - name: control_cmd
+      type: control.command
+      description: 车辆控制命令
+  outputs: []
+
+params:
+  vehicle_type:
+    type: string
+    default: car
+    description: 车辆类型 (car, tank)
+  pwm_frequency:
+    type: float
+    default: 50.0
+    description: PWM频率 (Hz)
+  throttle_pwm_chip:
+    type: string
+    default: pwmchip0
+  steering_pwm_chip:
+    type: string
+    default: pwmchip0
+  throttle_channel:
+    type: int
+    default: 0
+  steering_channel:
+    type: int
+    default: 1

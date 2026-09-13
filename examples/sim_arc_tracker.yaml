@@ -1,0 +1,187 @@
+# NodeFlow 贝塞尔弧线跟踪仿真场景
+#
+# 用贝塞尔曲线平滑路径 + Pure Pursuit 弧线跟踪替代
+# 传统的 waypoint_selector + track_controller 折线跟踪
+#
+# 数据流：
+#
+#   [trajectory_loader] ──→ bezier_path ──→ [arc_tracker] ──→ velocity_cmd ──→ [sim_input]
+#         │                                       ↑
+#         └──→ task_enu ──→ [coord_transform] ──→ pose_enu
+#                                  ↑
+#   [sim_output] ──→ [rtk_filter] ──→ filtered_rtk
+#
+#   可视化: trajectory_loader.global_path + coord_transform.pose_enu → [trajectory_viz]
+#
+# 使用说明：
+#   1. 启动仿真器: python3 simulator/server.py
+#   2. 先用 manual_trajectory_recording.yaml 录制一条轨迹（或准备轨迹文件）
+#   3. 启动: python3 -m runtime.main examples/sim_arc_tracker.yaml
+#   4. 浏览器打开 http://localhost:8080 查看实时轨迹
+
+graph_id: sim_arc_tracker
+graph_version: 1.0
+node_hub_path: ./edge/nodes
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 节点定义
+# ═══════════════════════════════════════════════════════════════════════════
+
+nodes:
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 仿真器输出 (传感器数据源)                                            │
+  # └─────────────────────────────────────────────────────────────────────┘
+  - id: sim_output
+    package: sensing/sim_output
+    description: "从仿真器读取传感器数据"
+    params:
+      simulator_host: localhost
+      simulator_port: 5555
+      timeout: 2000
+      enable_gps: false
+      enable_imu: false
+      enable_rtk: true
+      enable_odometry: false
+      enable_state: false
+      output_frequency: 20.0
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 轨迹加载器 - 加载录制轨迹 + 生成贝塞尔平滑路径                        │
+  # └─────────────────────────────────────────────────────────────────────┘
+  - id: trajectory_loader
+    package: planning/trajectory_loader
+    description: "加载轨迹并生成贝塞尔平滑路径"
+    params:
+      trajectory_file: ""            # 留空自动选最新
+      publish_interval: 0.1          # 10Hz
+      enable_bezier: true
+      corner_radius: 1.0             # 圆角半径 1m
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ RTK 滤波器                                                          │
+  # └─────────────────────────────────────────────────────────────────────┘
+  - id: rtk_filter
+    package: sensing/rtk_filter
+    description: "RTK数据滤波"
+    params:
+      alpha_pos: 0.2
+      alpha_heading: 0.3
+      use_imu_yaw_rate: false
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 坐标系转换 (WGS84 → ENU)                                            │
+  # └─────────────────────────────────────────────────────────────────────┘
+  - id: coord_transform
+    package: localization/coord_transform
+    description: "将WGS84坐标转换为ENU局部坐标系"
+    params: {}
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 弧线跟踪控制器 - Pure Pursuit + 贝塞尔路径                           │
+  # └─────────────────────────────────────────────────────────────────────┘
+  - id: arc_tracker
+    package: control/arc_tracker
+    description: "贝塞尔路径 Pure Pursuit 弧线跟踪"
+    params:
+      cruise_speed: 1.0              # 巡航速度 m/s
+      min_speed: 0.05
+      lookahead_base: 1.0            # 基础前瞻距离 m
+      lookahead_k: 0.5               # 前瞻随速度增长系数
+      max_angular_velocity: 1.5      # 最大角速度 rad/s
+      pivot_threshold_deg: 60.0      # 原地转阈值
+      curvature_decel_factor: 1.0    # 曲率减速系数
+      decel_distance: 2.0            # 终点减速距离 m
+      stop_distance: 0.3             # 停车距离 m
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 仿真器输入 (接收控制命令)                                            │
+  # └─────────────────────────────────────────────────────────────────────┘
+  - id: sim_input
+    package: io/sim_input
+    description: "将控制命令发送到仿真器"
+    params:
+      simulator_host: localhost
+      simulator_port: 5555
+      timeout: 2000
+      default_linear_velocity: 0.0
+      default_angular_velocity: 0.0
+      control_mode: velocity
+      input_frequency: 50.0
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 轨迹可视化                                                          │
+  # └─────────────────────────────────────────────────────────────────────┘
+  - id: trajectory_viz
+    package: observability/trajectory_viz
+    description: "实时 Web 可视化"
+    params:
+      web_host: "0.0.0.0"
+      web_port: 8080
+      timeout: 0.0
+      update_interval: 5.0
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 数据连接（边）
+# ═══════════════════════════════════════════════════════════════════════════
+
+edges:
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 轨迹加载 → 贝塞尔路径 → 弧线跟踪                                    │
+  # └─────────────────────────────────────────────────────────────────────┘
+
+  # 轨迹加载器 → 坐标转换（GPS参考点）
+  - from: trajectory_loader.task_enu
+    to: coord_transform.task_enu
+    description: "GPS参考点（用于 WGS84 → ENU 转换）"
+
+  # 轨迹加载器 → 弧线跟踪（贝塞尔平滑路径）
+  - from: trajectory_loader.bezier_path
+    to: arc_tracker.bezier_path
+    description: "贝塞尔平滑路径（ENU坐标）"
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 实时定位流                                                          │
+  # └─────────────────────────────────────────────────────────────────────┘
+
+  # RTK驱动 → RTK滤波
+  - from: sim_output.rtk_fix
+    to: rtk_filter.rtk_fix
+    description: "原始RTK定位数据"
+
+  # RTK滤波 → 坐标转换 (WGS84 → ENU)
+  - from: rtk_filter.filtered_rtk
+    to: coord_transform.rtk_fix
+    description: "滤波后的RTK → ENU坐标转换"
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 控制流                                                              │
+  # └─────────────────────────────────────────────────────────────────────┘
+
+  # ENU位姿 → 弧线跟踪
+  - from: coord_transform.pose_enu
+    to: arc_tracker.pose_enu
+    description: "实时ENU位姿 → 弧线跟踪控制"
+
+  # 速度指令 → 仿真器
+  - from: arc_tracker.velocity_cmd
+    to: sim_input.velocity_cmd
+    description: "速度命令（linear_velocity, angular_velocity）"
+
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │ 可视化数据流                                                        │
+  # └─────────────────────────────────────────────────────────────────────┘
+
+  # 地块信息 → 可视化
+  - from: coord_transform.task_enu
+    to: trajectory_viz.task_enu
+    description: "地块边界信息 (ENU坐标)"
+
+  # 原始路径 → 可视化（对比用）
+  - from: trajectory_loader.global_path
+    to: trajectory_viz.global_path
+    description: "原始折线路径 (ENU坐标)"
+
+  # 实际轨迹 → 可视化
+  - from: coord_transform.pose_enu
+    to: trajectory_viz.pose_enu
+    description: "实际行驶轨迹 (ENU坐标)"

@@ -1,0 +1,158 @@
+name: sim_output
+version: "1.0"
+description: "仿真器输出节点 - 统一提供所有传感器数据和环境信息"
+
+metadata:
+  coordinate_system: WGS84        # GPS 坐标系: WGS84
+  heading_convention: geographic  # 航向角约定: 北=0°, CW正, [0,360)
+
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+  windows:
+    kind: python
+    cmd: ["python", "run.py"]
+
+ports:
+  outputs:
+    # 只在传感器采样序号变化时输出；保留采样 timestamp，不按查询频率重发
+    - name: gps_fix
+      type: json
+      description: "普通GPS定位数据 (米级精度)"
+
+    - name: imu_data
+      type: json
+      description: "IMU数据 (加速度、角速度、磁力计)"
+
+    - name: rtk_fix
+      type: sensor.rtk
+      description: |
+        RTK GPS数据 (厘米级精度)
+        - latitude/longitude: WGS84 经纬度（度）
+        - heading: 航向角（度），地理坐标系，北=0，CW正，[0,360)
+
+    - name: odometry
+      type: json
+      description: "里程计数据 (编码器级精度)"
+
+    # 环境和任务输出（初始化后固定）
+    - name: field_info
+      type: json
+      description: "地块信息 (边界、孔洞、入口点等)"
+
+    - name: vehicle_config
+      type: json
+      description: "车辆配置 (作业幅宽、重叠率、转向参数等)"
+
+    - name: task_request
+      type: planning.task
+      description: "规划任务请求 (地块+车辆，兼容旧版本)"
+
+    - name: task_enu
+      type: planning.task_enu
+      description: "规划任务请求（ENU坐标+参考点）"
+      buffer_size: 1048576
+      conflate: true
+
+    - name: state_info
+      type: json
+      description: "完整物理真值；position 使用 task_enu 参考点，world_position 保留仿真世界位置；含机具状态及采样 sim_time/step_count"
+
+    - name: implement_state
+      type: implement.state
+      description: "机具状态 (hitch_height, pto_on, pto_rpm)"
+
+params:
+  # 仿真器连接
+  simulator_host:
+    type: string
+    default: "localhost"
+    description: "仿真器主机地址"
+
+  simulator_port:
+    type: integer
+    default: 5555
+    description: "仿真器端口"
+
+  timeout:
+    type: integer
+    default: 1000
+    description: "ZMQ超时时间 (毫秒)"
+
+  # 坐标系参考点（已废弃 - 自动从仿真器获取）
+  # ref_longitude/ref_latitude 现在自动从仿真器的 get_config API 获取
+  # 无需手动配置，保持与 simulator/config.yaml 中 gps_ref 一致
+
+  # 传感器开关
+  enable_gps:
+    type: bool
+    default: true
+    description: "启用GPS输出"
+
+  enable_imu:
+    type: bool
+    default: true
+    description: "启用IMU输出"
+
+  enable_rtk:
+    type: bool
+    default: true
+    description: "启用RTK输出"
+
+  enable_odometry:
+    type: bool
+    default: false
+    description: "启用里程计输出"
+
+  enable_state:
+    type: bool
+    default: false
+    description: "启用状态信息输出"
+
+  # 频率控制
+  output_frequency:
+    type: float
+    default: 50.0
+    description: "传感器查询频率 (Hz)；实际测量频率和延迟由仿真器配置决定"
+
+  # 车辆配置（用于组装 task_request）
+  implement_width_m:
+    type: float
+    default: 3.0
+    description: "作业幅宽 (米)"
+
+  overlap_ratio:
+    type: float
+    default: 0.1
+    description: "重叠率 (0-1)"
+
+  path_inset_m:
+    type: float
+    default: 1.0
+    description: "路径内缩距离 (米)"
+
+  pivot_turn:
+    type: bool
+    default: true
+    description: "是否使用原地转向"
+
+  yaw_rate_max_deg_s:
+    type: float
+    default: 60.0
+    description: "最大偏航率 (度/秒)"
+
+  min_turn_radius_m:
+    type: float
+    default: 2.0
+    description: "最小转弯半径 (米)"
+
+  work_min_turn_radius_m:
+    type: float
+    default: null
+    description: "机具入土时的前进最小转弯半径；为空时沿用车辆最小转弯半径"
+
+  work_max_curvature_rate_1pm2:
+    type: float
+    default: null
+    description: "机具入土换层曲线的最大曲率变化率 (1/米²)"

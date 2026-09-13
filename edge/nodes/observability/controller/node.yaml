@@ -1,0 +1,42 @@
+name: controller
+version: 0.1.0
+description: 车辆控制策略节点 - 接收GPS数据并生成控制命令
+
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+
+ports:
+  inputs:
+    - name: gps_fix
+      type: gps.fix
+      description: GPS定位数据
+    - name: global_path
+      type: planning.path
+      description: 全局规划路径 (WGS84经纬度列表)
+    - name: target_point
+      type: planning.target
+      description: 单个目标点 (测试用)
+  outputs:
+    - name: control_cmd
+      type: control.cmd
+      description: 车辆控制命令输出
+
+params:
+  vehicle_type:
+    type: string
+    required: true
+    description: 车辆类型：tracked（履带）/wheeled（轮式）
+  max_speed:
+    type: float
+    default: 2.0
+    description: 最大速度（m/s）
+  target_heading:
+    type: float
+    default: 90.0
+    description: 目标航向（度）
+  enable_control:
+    type: bool
+    default: true
+    description: 是否启用控制输出

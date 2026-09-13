@@ -1,0 +1,32 @@
+# 合成诊断场景，参数不是实车测量值。基于同一条直线逐项改变一个因素。
+# 当前图的滤波、选点与行走参数由 runner 读取，不在这里复制控制器增益。
+base:
+  seed: 42
+  path_length_m: 60.0
+  duration_s: 90.0
+  initial_y_m: 0.25
+  dt_s: 0.01
+  control_hz: 50.0
+  bridge_hz: 20.0
+  rtk_hz: 20.0
+  heading_mode: dual_antenna
+
+scenarios:
+  ideal: {}
+  position_noise:
+    position_noise_std_m: 0.03
+  heading_noise:
+    heading_noise_std_deg: 2.0
+  rtk_delay:
+    rtk_latency_s: 0.3
+  response_lag:
+    angular_response_time_s: 0.7
+  combined:
+    position_noise_std_m: 0.03
+    heading_noise_std_deg: 2.0
+    rtk_latency_s: 0.3
+    angular_response_time_s: 0.7
+  combined_no_delay:
+    position_noise_std_m: 0.03
+    heading_noise_std_deg: 2.0
+    angular_response_time_s: 0.7

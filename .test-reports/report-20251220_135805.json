@@ -1,0 +1,52 @@
+{
+  "timestamp": "2025-12-20T13:58:05.045564",
+  "tests": {
+    "syntax": {
+      "status": "pass",
+      "errors": [],
+      "total_files": 75
+    },
+    "nodes": {
+      "status": "pass",
+      "nodes": {
+        "mock_joystick": "ok",
+        "mock_gps": "ok",
+        "mock_imu": "ok",
+        "mock_path_planner": "ok",
+        "mock_controller_sim": "ok",
+        "mock_motor_controller": "ok",
+        "mock_sensor_fusion": "ok",
+        "mock_data_generator": "ok",
+        "mock_data_validator": "ok",
+        "mock_throughput_monitor": "ok"
+      },
+      "total": 10,
+      "complete": 10,
+      "errors": []
+    },
+    "scenarios": {
+      "status": "pass",
+      "scenarios": {
+        "test_mock_single": "ok",
+        "test_mock_chain": "ok",
+        "test_mock_multiport": "ok",
+        "test_mock_processing": "ok",
+        "test_mock_highfreq": "ok",
+        "test_mock_errors": "ok",
+        "test_mock_pipeline": "ok"
+      },
+      "total": 7,
+      "complete": 7,
+      "errors": []
+    }
+  },
+  "summary": {
+    "python_files": 75,
+    "total_lines": 10790,
+    "yaml_files": 32,
+    "doc_files": 15,
+    "git_hash": "1915ecf",
+    "git_author": "liwuzhan",
+    "timestamp": "2025-12-20T13:58:05.239987"
+  }
+}

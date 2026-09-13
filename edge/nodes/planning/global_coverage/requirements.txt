@@ -1,0 +1,4 @@
+# 全局路径规划节点依赖
+shapely>=2.0.0
+numpy>=1.20.0
+pyclothoids>=0.2,<0.3

@@ -1,0 +1,155 @@
+================================================
+NodeFlow 自动测试报告 - 2025-12-24 03:07:21
+================================================
+
+[1;33m[1/4] 检查代码规范...[0m
+
+[1;33m[2/4] 运行单元测试...[0m
+============================= test session starts ==============================
+platform darwin -- Python 3.12.0, pytest-9.0.2, pluggy-1.6.0 -- /Library/Frameworks/Python.framework/Versions/3.12/bin/python3
+cachedir: .pytest_cache
+rootdir: /Users/wuzhanli/Desktop/node
+plugins: anyio-4.12.0, cov-7.0.0
+collecting ... collected 4 items
+
+tests/unit/test_yaml_parser.py::TestYAMLParser::test_parse_runtime_config_success PASSED [ 25%]
+tests/unit/test_yaml_parser.py::TestYAMLParser::test_parse_runtime_config_file_not_found PASSED [ 50%]
+tests/unit/test_yaml_parser.py::TestYAMLParser::test_parse_node_manifest_success PASSED [ 75%]
+tests/unit/test_yaml_parser.py::TestYAMLParser::test_parse_node_manifest_file_not_found PASSED [100%]
+
+============================== 4 passed in 0.02s ===============================
+
+[1;33m[3/4] 验证 Mock 节点配置...[0m
+✓ mock_joystick 配置完整
+✓ mock_gps 配置完整
+✓ mock_imu 配置完整
+✓ mock_path_planner 配置完整
+✓ mock_controller_sim 配置完整
+✓ mock_motor_controller 配置完整
+✓ mock_sensor_fusion 配置完整
+✓ mock_data_generator 配置完整
+✓ mock_data_validator 配置完整
+✓ mock_throughput_monitor 配置完整
+
+[1;33m[4/4] 验证测试场景配置...[0m
+✓ test_mock_single.yaml 存在
+✓ test_mock_chain.yaml 存在
+✓ test_mock_multiport.yaml 存在
+✓ test_mock_processing.yaml 存在
+✓ test_mock_highfreq.yaml 存在
+✓ test_mock_errors.yaml 存在
+✓ test_mock_pipeline.yaml 存在
+
+[1;33m[统计信息][0m
+提交号: be936c7
+提交者: liwuzhan <liwuzhan@live.com>
+提交信息: feat(serialization): Migrate from JSON to MsgPack with numpy support
+
+## Summary
+
+Fix P2 issue from GPT review: Replace JSON serialization with MsgPack in SharedBufferLite for better performance and support for large data (LiDAR, cameras, numpy arrays).
+
+## Problem Fixed
+
+JSON serialization had limitations:
+- Cannot serialize numpy.ndarray (critical for sensor data)
+- Cannot serialize bytes (binary data)
+- Slower performance for large datasets
+- Not suitable for LiDAR/camera data as documented in README
+
+## Solution
+
+Implement MsgPack serialization in sdk/shared_buffer_lite.py with custom numpy encoder/decoder:
+
+### 1. Replace JSON with MsgPack (line 14)
+```python
+import msgpack  # replaces json
+```
+
+### 2. Add numpy encoder (line 62-75)
+```python
+@staticmethod
+def _encode_numpy(obj):
+    if isinstance(obj, np.ndarray):
+        return {
+            '__ndarray__': True,
+            'dtype': str(obj.dtype),
+            'shape': tuple(obj.shape),
+            'data': obj.tobytes()
+        }
+```
+
+### 3. Add numpy decoder (line 77-87)
+```python
+@staticmethod
+def _decode_numpy(obj):
+    if isinstance(obj, dict) and obj.get('__ndarray__'):
+        return np.frombuffer(obj['data'], dtype=obj['dtype']).reshape(obj['shape'])
+```
+
+### 4. Update write() and read() methods
+- write(): msgpack.packb(data, default=self._encode_numpy)
+- read(): msgpack.unpackb(data, object_hook=self._decode_numpy)
+
+## Performance Results
+
+**Serialization speed: 3.6x faster**
+- JSON: 0.129ms average (100 iterations)
+- MsgPack: 0.036ms average (100 iterations)
+
+**Large data handling**:
+- 10000×100 numpy array: 0.006s write, 0.002s read
+- No errors with large datasets
+
+## Supported Data Types
+
+| Type | JSON | MsgPack | Use Case |
+|------|------|---------|----------|
+| dict/list/str | ✅ | ✅ | Basic data |
+| int/float/bool | ✅ | ✅ | Primitives |
+| bytes | ❌ | ✅ | Binary data |
+| numpy.ndarray | ❌ | ✅ | LiDAR/Camera |
+| nested | ✅ | ✅ | Complex structures |
+
+## Test Coverage
+
+New test suite: tests/integration/test_msgpack_buffer.py (330+ lines)
+- ✅ test_basic_types: dict, list, str, int, float, bool, None
+- ✅ test_bytes_type: Binary data
+- ✅ test_numpy_array: 1D, 2D, 3D arrays with various dtypes
+- ✅ test_large_data: 1M elements numpy array
+- ✅ test_performance_comparison: JSON vs MsgPack
+
+## Backward Compatibility
+
+**All tests pass**: 17/17 ✅
+- 7/7 buffer config tests (backward compatible)
+- 5/5 late-joiner tests (backward compatible)
+- 5/5 msgpack tests (new functionality)
+
+## Documentation
+
+Update docs/REVIEW_FINDINGS_AND_FIX_PLAN.md:
+- Mark P2 serialization as complete
+- Document performance improvements
+- Add data type support matrix
+- Record test results
+
+## Verification
+
+Serialization verified:
+✅ Basic types work correctly
+✅ Binary data (bytes) supported
+✅ NumPy arrays (all dtypes) supported
+✅ Large data handles efficiently
+✅ 3.6x faster than JSON
+✅ 100% backward compatible
+
+🤖 Generated with Claude Code
+Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>
+修改文件数:        4
+代码行数:     6207 total
+
+================================================
+[0;32m✓ 测试完成，报告已保存到: /Users/wuzhanli/Desktop/node/.test-reports/test-report-20251224_030721.txt[0m
+================================================

@@ -1,0 +1,111 @@
+================================================
+NodeFlow 自动测试报告 - 2025-12-20 13:59:23
+================================================
+
+[1;33m[1/4] 检查代码规范...[0m
+
+[1;33m[2/4] 运行单元测试...[0m
+============================= test session starts ==============================
+platform darwin -- Python 3.9.6, pytest-8.4.2, pluggy-1.6.0 -- /Library/Developer/CommandLineTools/usr/bin/python3
+cachedir: .pytest_cache
+rootdir: /Users/wuzhanli/Desktop/node
+plugins: anyio-4.8.0, cov-7.0.0
+collecting ... collected 4 items
+
+tests/unit/test_yaml_parser.py::TestYAMLParser::test_parse_runtime_config_success PASSED [ 25%]
+tests/unit/test_yaml_parser.py::TestYAMLParser::test_parse_runtime_config_file_not_found PASSED [ 50%]
+tests/unit/test_yaml_parser.py::TestYAMLParser::test_parse_node_manifest_success PASSED [ 75%]
+tests/unit/test_yaml_parser.py::TestYAMLParser::test_parse_node_manifest_file_not_found PASSED [100%]
+
+============================== 4 passed in 0.03s ===============================
+
+[1;33m[3/4] 验证 Mock 节点配置...[0m
+✓ mock_joystick 配置完整
+✓ mock_gps 配置完整
+✓ mock_imu 配置完整
+✓ mock_path_planner 配置完整
+✓ mock_controller_sim 配置完整
+✓ mock_motor_controller 配置完整
+✓ mock_sensor_fusion 配置完整
+✓ mock_data_generator 配置完整
+✓ mock_data_validator 配置完整
+✓ mock_throughput_monitor 配置完整
+
+[1;33m[4/4] 验证测试场景配置...[0m
+✓ test_mock_single.yaml 存在
+✓ test_mock_chain.yaml 存在
+✓ test_mock_multiport.yaml 存在
+✓ test_mock_processing.yaml 存在
+✓ test_mock_highfreq.yaml 存在
+✓ test_mock_errors.yaml 存在
+✓ test_mock_pipeline.yaml 存在
+
+[1;33m[统计信息][0m
+提交号: e635d28
+提交者: liwuzhan <liwuzhan@live.com>
+提交信息: feat: 添加完整的自动化测试系统
+
+配置了三层自动化测试体系：本地 Git Hooks、手动测试脚本、GitHub Actions CI/CD
+
+## 新增功能
+
+### 1. Git Hooks 自动测试
+- 文件: .git/hooks/post-commit
+- 功能: 每次提交后自动运行测试
+- 内容: 代码检查、配置验证、统计信息
+- 报告: .test-reports/test-report-*.txt
+
+### 2. 测试运行脚本
+- 文件: tools/run_tests.sh
+- 模式: quick (快速) / full (完整) / scenario (场景)
+- 功能:
+  * 代码语法检查
+  * Mock 节点配置验证 (10个)
+  * 测试场景检查 (7个)
+  * 单元测试 (pytest)
+  * Scenario 1 集成测试
+
+### 3. Python 测试报告生成器
+- 文件: tools/test_reporter.py
+- 输出格式:
+  * JSON - 机器可读
+  * HTML - 浏览器查看
+  * 彩色终端 - 快速查看
+- 统计: Python文件、代码行数、YAML配置等
+
+### 4. GitHub Actions CI/CD
+- 文件: .github/workflows/test.yml
+- 测试矩阵: Ubuntu/macOS × Python 3.9/3.10/3.11
+- 功能:
+  * 自动运行测试
+  * 上传测试报告 (Artifacts)
+  * PR 自动评论
+
+## 文档
+
+- TESTING_GUIDE.md - 完整的测试系统使用指南 (6000+ 字)
+- docs/AUTO_TEST_SETUP.md - 配置说明和验证结果
+
+## 验证结果
+
+✅ 测试脚本运行成功
+✅ 所有 75 个 Python 文件语法通过
+✅ 10 个 Mock 节点配置完整
+✅ 7 个测试场景配置有效
+✅ 测试报告生成成功
+
+项目统计:
+- Python 文件: 75 个
+- 代码行数: 10,790 行
+- YAML 配置: 32 个
+- 文档文件: 15 个
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>
+修改文件数:        5
+代码行数:     5152 total
+
+================================================
+[0;32m✓ 测试完成，报告已保存到: /Users/wuzhanli/Desktop/node/.test-reports/test-report-20251220_135923.txt[0m
+================================================

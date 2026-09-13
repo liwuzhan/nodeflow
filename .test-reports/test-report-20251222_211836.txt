@@ -1,0 +1,100 @@
+================================================
+NodeFlow 自动测试报告 - 2025-12-22 21:18:36
+================================================
+
+[1;33m[1/4] 检查代码规范...[0m
+
+[1;33m[2/4] 运行单元测试...[0m
+============================= test session starts ==============================
+platform darwin -- Python 3.12.0, pytest-9.0.2, pluggy-1.6.0 -- /usr/local/bin/python3
+cachedir: .pytest_cache
+rootdir: /Users/wuzhanli/Desktop/node
+plugins: anyio-4.12.0, cov-7.0.0
+collecting ... collected 4 items
+
+tests/unit/test_yaml_parser.py::TestYAMLParser::test_parse_runtime_config_success PASSED [ 25%]
+tests/unit/test_yaml_parser.py::TestYAMLParser::test_parse_runtime_config_file_not_found PASSED [ 50%]
+tests/unit/test_yaml_parser.py::TestYAMLParser::test_parse_node_manifest_success PASSED [ 75%]
+tests/unit/test_yaml_parser.py::TestYAMLParser::test_parse_node_manifest_file_not_found PASSED [100%]
+
+============================== 4 passed in 0.01s ===============================
+
+[1;33m[3/4] 验证 Mock 节点配置...[0m
+✓ mock_joystick 配置完整
+✓ mock_gps 配置完整
+✓ mock_imu 配置完整
+✓ mock_path_planner 配置完整
+✓ mock_controller_sim 配置完整
+✓ mock_motor_controller 配置完整
+✓ mock_sensor_fusion 配置完整
+✓ mock_data_generator 配置完整
+✓ mock_data_validator 配置完整
+✓ mock_throughput_monitor 配置完整
+
+[1;33m[4/4] 验证测试场景配置...[0m
+✓ test_mock_single.yaml 存在
+✓ test_mock_chain.yaml 存在
+✓ test_mock_multiport.yaml 存在
+✓ test_mock_processing.yaml 存在
+✓ test_mock_highfreq.yaml 存在
+✓ test_mock_errors.yaml 存在
+✓ test_mock_pipeline.yaml 存在
+
+[1;33m[统计信息][0m
+提交号: bf4f7e5
+提交者: liwuzhan <liwuzhan@live.com>
+提交信息: fix(mcp): Phase 3 - 工程化改进和类型安全修复 (P2 Minor)
+
+问题描述:
+- 依赖声明不一致 (requirements.txt 注释混乱)
+- setup.py Python 版本要求与 MCP SDK 不匹配 (>=3.8 vs >=3.10)
+- pytest 函数命名冲突导致采集失败
+- mypy 类型错误 24 个 (变量未定义、类型推断失败)
+
+修复内容:
+1. 依赖管理统一:
+   - requirements.txt: 明确 mcp>=1.25.0 版本要求
+   - setup.py: 更新 python_requires 从 '>=3.8' 到 '>=3.10'
+
+2. 测试基础设施修复:
+   - tests/mcp/test_error_responses.py:
+     * 重命名 test_error_response() → run_error_response_test()
+     * 避免 pytest 自动采集辅助函数
+     * 保持 7/7 测试通过
+
+3. mypy 类型错误修复:
+   - mcp_server.py:
+     * 修复未定义变量: hub_path → hub_path_raw
+     * 修复未定义变量: yaml_path → yaml_path_raw
+     * handle_run_runtime: 添加 yaml_path_raw 参数验证
+     * _validate_yaml_file: 添加 result 类型注解
+     * handle_get_runtime_status: 添加 result 类型注解
+     * CallToolResult content: 使用 cast(Any, ...) 解决类型变异问题
+   - runtime_manager.py:
+     * read_logs: 添加 result 类型注解 Dict[str, Any]
+
+4. 代码质量改进:
+   - black 格式化保持 88 字符行宽
+   - mypy --ignore-missing-imports 零错误 (除预存在的 topology.py)
+
+测试结果:
+- tests/mcp/test_error_responses.py: 7/7 通过 ✅
+- black --check: 无格式警告 ✅
+- mypy: mcp_server.py, runtime_manager.py 零错误 ✅
+
+影响文件:
+- requirements.txt: 明确 MCP SDK 版本
+- setup.py: Python 版本要求对齐
+- tests/mcp/test_error_responses.py: 重命名辅助函数
+- mcp_server.py: 类型注解和变量修复
+- runtime_manager.py: 类型注解修复
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>
+修改文件数:        3
+代码行数:     5588 total
+
+================================================
+[0;32m✓ 测试完成，报告已保存到: /Users/wuzhanli/Desktop/node/.test-reports/test-report-20251222_211836.txt[0m
+================================================

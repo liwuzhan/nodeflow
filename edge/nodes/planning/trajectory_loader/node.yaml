@@ -1,0 +1,132 @@
+name: trajectory_loader
+version: 1.0.0
+description: 轨迹加载器 - 加载录制的轨迹并转换为可执行路径
+
+metadata:
+  coordinate_system: ENU          # 输出坐标系: ENU局部笛卡尔坐标
+  heading_convention: mathematical # 航向角约定: 东=0, CCW正, 弧度
+
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+  darwin:
+    kind: python
+    cmd: ["python3", "run.py"]
+  windows:
+    kind: python
+    cmd: ["python", "run.py"]
+
+ports:
+  inputs: []
+
+  outputs:
+    - name: global_path
+      type: planning.path
+      description: |
+        加载的轨迹路径（ENU坐标）
+        - path: ENU路径点列表 [(x,y),...] (米)
+        - task_id: 任务ID
+      buffer_size: 3097152  # 3MB
+      conflate: true        # 覆盖模式 - 只保留最新
+
+    - name: operation_plan
+      type: planning.operation_plan
+      description: |
+        从录制轨迹生成的作业计划
+        - path_zones: work/transit 标注
+        - segments: 作业段/掉头段、速度上限、机具意图
+      buffer_size: 3097152
+      conflate: true
+
+    - name: task_enu
+      type: planning.task_enu
+      description: |
+        GPS参考点信息（提供给 coord_transform）
+        - ref_lon: 参考点经度
+        - ref_lat: 参考点纬度
+      buffer_size: 1048576  # 1MB
+      conflate: true        # 覆盖模式
+
+    - name: bezier_path
+      type: planning.bezier_path
+      description: |
+        贝塞尔平滑路径（ENU坐标）
+        - segments: 贝塞尔段列表，每段4个控制点
+        - total_length: 估算总弧长（米）
+      buffer_size: 3097152  # 3MB
+      conflate: true        # 覆盖模式
+
+params:
+  operation_plan_file:
+    type: string
+    default: ""
+    description: "云端生成的版本化 MsgPack 作业计划；设置后优先于 trajectory_file"
+
+  trajectory_file:
+    type: string
+    default: ""
+    description: |
+      轨迹文件路径（绝对路径）
+      留空则自动加载 records_dir 中最新的文件
+
+  records_dir:
+    type: string
+    default: ""
+    description: |
+      轨迹记录目录
+      默认使用 position_recorder 的输出目录
+
+  ref_lon:
+    type: float
+    default: null
+    description: |
+      GPS参考点经度（可选）
+      留空则使用轨迹第一个点的经度
+
+  ref_lat:
+    type: float
+    default: null
+    description: |
+      GPS参考点纬度（可选）
+      留空则使用轨迹第一个点的纬度
+
+  publish_interval:
+    type: float
+    default: 0.1
+    description: |
+      路径发布间隔（秒）
+      建议 0.1s（10Hz），与其他规划节点一致
+
+  enable_bezier:
+    type: bool
+    default: true
+    description: |
+      是否生成贝塞尔平滑路径
+      启用后会额外输出 bezier_path 端口
+
+  corner_radius:
+    type: float
+    default: 1.0
+    description: |
+      圆角半径（米），越大弯道越平滑，但偏离原始航点越远
+
+  turn_angle_threshold_deg:
+    type: float
+    default: 45.0
+    description: "几何转角超过该角度时标记 transit/headland_turn"
+
+  turn_zone_radius_m:
+    type: float
+    default: 4.0
+    description: "转角前后标记为 transit 的路径距离"
+
+  work_speed_limit_mps:
+    type: float
+    default: 1.0
+    description: "作业段默认速度上限"
+
+  turn_speed_limit_mps:
+    type: float
+    default: 0.5
+    description: "掉头/转场段默认速度上限"

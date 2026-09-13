@@ -1,0 +1,49 @@
+name: coord_transform
+version: "1.0"
+description: "坐标系转换节点 - 将WGS84坐标转换为ENU局部笛卡尔坐标系"
+
+metadata:
+  input_coordinate_system: WGS84
+  output_coordinate_system: ENU
+  heading_convention_in: geographic   # 输入: 北=0, CW正, 度
+  heading_convention_out: mathematical # 输出: 东=0, CCW正, 弧度
+
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+  macos:
+    kind: python
+    cmd: ["python3", "run.py"]
+  windows:
+    kind: python
+    cmd: ["python", "run.py"]
+
+ports:
+  inputs:
+    - name: task_enu
+      type: planning.task_enu
+      description: "规划任务请求（ENU坐标+参考点），用于网关模式设置参考点"
+
+    - name: rtk_fix
+      type: sensor.rtk
+      description: |
+        RTK GPS数据 (WGS84)
+        - latitude/longitude: 度
+        - heading: 度, 地理坐标系 (北=0, CW正)
+
+  outputs:
+    - name: task_enu
+      type: planning.task_enu
+      description: "转发规划任务到下游节点"
+
+    - name: pose_enu
+      type: localization.pose_enu
+      description: |
+        ENU局部坐标系姿态
+        - x: 东向距离 (米)
+        - y: 北向距离 (米)
+        - theta: 航向角 (弧度, 数学坐标系, 东=0, CCW正)
+        - timestamp: 时间戳
+
+params: {}  # 网关模式：参考点从task_enu动态获取

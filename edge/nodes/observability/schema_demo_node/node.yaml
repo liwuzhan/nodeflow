@@ -1,0 +1,28 @@
+name: schema_demo_node
+version: 1.0.0
+description: "演示 Pydantic Schema 校验功能的节点"
+author: "AI Assistant"
+
+entrypoints:
+  linux:
+    kind: python
+    cmd: ["python3", "run.py"]
+  macos:
+    kind: python
+    cmd: ["python3", "run.py"]
+
+ports:
+  outputs:
+    - name: valid_data
+      description: "发送符合 Schema 的数据"
+      type: custom
+
+    - name: invalid_data
+      description: "尝试发送不符合 Schema 的数据"
+      type: custom
+
+params:
+  interval:
+    type: float
+    default: 1.0
+    description: "发送间隔"
