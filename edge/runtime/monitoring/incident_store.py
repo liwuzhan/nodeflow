@@ -135,6 +135,8 @@ def build_death_record(
     sig = None
     if exit_code is not None and exit_code < 0:
         sig = -exit_code  # POSIX: 负退出码 = 被信号终止
+    elif exit_code == 128 + 15:
+        sig = 15  # SDK 把 SIGTERM 转为 SystemExit(143) 优雅退出，仍记为 SIGTERM
 
     will: Dict[str, Any] = {}
     if frozen_health:

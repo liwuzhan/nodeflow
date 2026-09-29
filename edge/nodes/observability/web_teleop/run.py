@@ -156,7 +156,7 @@ class WebTeleopNode:
         self.continuous_output = sdk.get_param('continuous_output', True)
         self.output_rate = float(sdk.get_param('output_rate', 10.0))
         self.require_stop_on_disconnect = sdk.get_param('require_stop_on_disconnect', False)
-        self.command_timeout = float(sdk.get_param('command_timeout', 5.0))
+        self.command_timeout = float(sdk.get_param('command_timeout', 1.0))
         self.passthrough_mode = sdk.get_param('passthrough_mode', False)
 
         # ========== 创建端口 ==========

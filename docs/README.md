@@ -27,7 +27,6 @@
 - [边缘调试指南](EDGE_DEBUG_GUIDE.md)
 - [云端开发](../cloud/docs/DEVELOPMENT.md)、[前端指南](../cloud/docs/FRONTEND_GUIDE.md) 与 [云边集成](../cloud/doc/CLOUD_INTEGRATION.md)
 - [仿真文档索引](../simulation/docs/README.md)
-- [田间测试计划](FIELD_TEST_PLAN.md)
 
 专题文档可能包含特定阶段的参数或命令。若与当前入口文档、`setup.py`、`tools/run_tests.sh`、实际 CLI `--help` 或源码冲突，以后者为准。
 
@@ -38,6 +37,7 @@
 - `PROJECT_*`、`SESSION_*`、`*_REPORT*`、`*_PLAN*` 等带日期文档
 - CORDIS 调研、死亡治理和最小改造计划
 - 控制算法、前瞻点、掉头、轨迹与车辆停止问题的专题分析
+- [田间测试计划（已废弃）](FIELD_TEST_PLAN.md)：2026-05 实车试验快照，启动命令、模块路径和图文件均已过期
 - `docs/评审报告/` 中的外部模型或阶段性评审
 
 已被替代的资料位于 `docs/old/` 和 `docs/archive/`。迁移后的目录归属见根目录 [DISPOSITION.md](../DISPOSITION.md)。

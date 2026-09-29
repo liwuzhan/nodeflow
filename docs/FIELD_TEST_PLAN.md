@@ -1,4 +1,4 @@
-# NodeFlow 实机测试计划
+# [已废弃] NodeFlow 实机测试计划（2026-05 快照；命令、路径和图文件均已过期，勿照此执行——现场以 configs/graphs/ 与源码为准）
 
 > 日期: 2026-05-01  
 > 硬件: 履带底盘 + UM982 RTK + Orange Pi 5 Ultra  

@@ -87,7 +87,7 @@ class SerialInterface(DeviceInterface):
         if self.serial and self.serial.is_open:
             try:
                 self.serial.close()
-            except:
+            except Exception:
                 pass
         self.serial = None
         self.buffer = b""
@@ -208,7 +208,7 @@ class TCPInterface(DeviceInterface):
         if self.socket:
             try:
                 self.socket.close()
-            except:
+            except Exception:
                 pass
         self.socket = None
         self.buffer = b""
@@ -297,7 +297,7 @@ class UDPInterface(DeviceInterface):
         if self.socket:
             try:
                 self.socket.close()
-            except:
+            except Exception:
                 pass
         self.socket = None
 

@@ -7,6 +7,7 @@ import os
 import sys
 import json
 import time
+import signal
 import traceback
 import threading
 from typing import Dict, Any, Optional, Type, Callable, TYPE_CHECKING
@@ -67,6 +68,73 @@ def die(reason: str, code: int = 1) -> None:
     os._exit(code)
 
 
+# SIGTERM 优雅退出：Python 默认对 SIGTERM 直接终止进程，节点的 finally /
+# 上下文退出都不会执行——执行器节点（如 pwm_driver）因此无法回中位，sysfs PWM
+# 保持最后一个脉宽。SDK 在主线程把 SIGTERM 转为 SystemExit(143)，走正常的
+# finally → __exit__ 路径；143 = 128 + SIGTERM，incident_store 仍能识别信号来源。
+#
+# 信号可能恰好在析构函数（如 SharedBufferLite.__del__）或弱引用回调中被处理，
+# 这类上下文抛出的异常会被解释器吞掉（"Exception ignored ..."），主循环照常运行、
+# 直到 5 秒后被 SIGKILL——等于回到原问题。unraisablehook 识别被吞的退出并重新投递。
+SIGTERM_EXIT_CODE = 128 + signal.SIGTERM
+_SIGTERM_HANDLER_INSTALLED = False
+_SIGTERM_EXITING = False
+_PREV_UNRAISABLE_HOOK = None
+
+
+class _SigtermExit(SystemExit):
+    """SIGTERM 转换出的退出；独立类型便于在 unraisablehook 中识别。"""
+
+
+def _sigterm_to_system_exit(signum, frame):
+    global _SIGTERM_EXITING
+    if _SIGTERM_EXITING:
+        # 退出已在传播：重复的 SIGTERM 不得打断 finally（例如回中位写入）。
+        # 清理卡住时由 runtime 的 SIGKILL 兜底。
+        return
+    _SIGTERM_EXITING = True
+    raise _SigtermExit(SIGTERM_EXIT_CODE)
+
+
+def _sigterm_unraisable_hook(unraisable):
+    global _SIGTERM_EXITING
+    if isinstance(getattr(unraisable, "exc_value", None), _SigtermExit):
+        # 退出被析构函数吞掉：复位并重新投递。不能在本钩子内直接 os.kill——
+        # 发给自身的信号会立刻在钩子里被处理、再次被吞。改由辅助线程稍后发送，
+        # 主线程在下一个字节码边界（已离开析构上下文）处理并抛出。
+        _SIGTERM_EXITING = False
+
+        def _redeliver():
+            time.sleep(0.01)
+            try:
+                os.kill(os.getpid(), signal.SIGTERM)
+            except OSError:
+                pass
+
+        threading.Thread(target=_redeliver, name="sigterm-redeliver", daemon=True).start()
+        return
+    (_PREV_UNRAISABLE_HOOK or sys.__unraisablehook__)(unraisable)
+
+
+def install_sigterm_handler() -> bool:
+    """在主线程安装 SIGTERM → SystemExit 转换；节点已自带处理器时不覆盖。"""
+    global _SIGTERM_HANDLER_INSTALLED, _PREV_UNRAISABLE_HOOK
+    if _SIGTERM_HANDLER_INSTALLED:
+        return True
+    if threading.current_thread() is not threading.main_thread():
+        return False
+    try:
+        if signal.getsignal(signal.SIGTERM) not in (signal.SIG_DFL, None):
+            return False
+        signal.signal(signal.SIGTERM, _sigterm_to_system_exit)
+    except (ValueError, OSError):
+        return False
+    _PREV_UNRAISABLE_HOOK = sys.unraisablehook
+    sys.unraisablehook = _sigterm_unraisable_hook
+    _SIGTERM_HANDLER_INSTALLED = True
+    return True
+
+
 class ParentProcessWatchdog:
     """
     父进程监控守护线程
@@ -91,7 +159,10 @@ class ParentProcessWatchdog:
         self.node_id = node_id
         self.logger = logger_instance
         self.check_interval = check_interval
+        self.graceful_exit_timeout = 3.0
         self.running = False
+        # 可中断的等待：stop() 立即唤醒，SDK shutdown 不必等满一个检查周期
+        self._stop_event = threading.Event()
         self.thread: Optional[threading.Thread] = None
 
         # 记录初始的父进程ID
@@ -110,6 +181,7 @@ class ParentProcessWatchdog:
             return
 
         self.running = True
+        self._stop_event.clear()
         self.thread = threading.Thread(
             target=self._monitor_loop,
             name=f"ParentWatchdog-{self.node_id}",
@@ -121,6 +193,7 @@ class ParentProcessWatchdog:
     def stop(self):
         """停止监控线程"""
         self.running = False
+        self._stop_event.set()
         if self.thread:
             self.thread.join(timeout=2.0)
         self.logger.debug(f"ParentProcessWatchdog stopped for '{self.node_id}'")
@@ -129,7 +202,7 @@ class ParentProcessWatchdog:
         """监控循环（在守护线程中运行）"""
         try:
             while self.running:
-                time.sleep(self.check_interval)
+                self._stop_event.wait(self.check_interval)
 
                 if not self.running:
                     break
@@ -145,7 +218,24 @@ class ParentProcessWatchdog:
                         new_ppid=current_ppid
                     )
 
-                    # 父进程已死，节点应该退出
+                    # 父进程已死，节点应该退出。
+                    # 优先让主线程走 SIGTERM 优雅路径（节点 finally 得以执行，
+                    # 执行器回安全值）；主线程在宽限期内未退出才硬退出。
+                    if _SIGTERM_HANDLER_INSTALLED:
+                        try:
+                            os.kill(os.getpid(), signal.SIGTERM)
+                        except OSError:
+                            pass
+                        deadline = time.monotonic() + self.graceful_exit_timeout
+                        while self.running and time.monotonic() < deadline:
+                            time.sleep(0.05)
+                        if not self.running:
+                            return  # 主线程已进入 SDK shutdown，正常退出中
+                        self.logger.warning(
+                            f"Node '{self.node_id}' did not exit gracefully in "
+                            f"{self.graceful_exit_timeout}s after parent death, forcing exit"
+                        )
+
                     # 先触发 atexit 清理回调（包括 SDK 的 __exit__ 和资源释放）
                     # 再用 os._exit() 终止进程
                     import atexit
@@ -200,6 +290,9 @@ class NodeFlowSDK:
 
         if not self.node_id:
             raise ValueError("NODE_ID environment variable not set")
+
+        # SIGTERM → SystemExit：runtime 停节点时节点 finally/清理得以执行
+        install_sigterm_handler()
 
         # IPC 版本握手（W2-1）：launcher 注入 NODEFLOW_IPC_VERSION，
         # 不符则大声退出——杜绝旧读者把 ts 字节当 payload 的静默混读窗口。
@@ -275,6 +368,7 @@ class NodeFlowSDK:
 
         # 健康心跳线程
         self._health_running = True
+        self._health_stop_event = threading.Event()
         self._health_thread: Optional[threading.Thread] = None
         health_interval = float(os.getenv('NODE_HEALTH_INTERVAL', '2.0'))
         self._health_interval = max(0.5, health_interval)
@@ -592,13 +686,14 @@ class NodeFlowSDK:
 
     def _stop_health_heartbeat(self):
         self._health_running = False
+        self._health_stop_event.set()
         if self._health_thread:
             self._health_thread.join(timeout=2.0)
 
     def _health_loop(self):
         while self._health_running:
             self.report_health()
-            time.sleep(self._health_interval)
+            self._health_stop_event.wait(self._health_interval)
 
     def shutdown(self):
         """

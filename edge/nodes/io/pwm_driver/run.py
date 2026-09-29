@@ -149,6 +149,7 @@ class PWMDriverNode:
 
         # 命令超时检查
         self.last_command_time = time.time()
+        self._timeout_logged = False
 
         # 资源安全锁存守卫（2026-09-01 草案）：锁存期间拒绝非零命令
         self.latch_guard = DriveLatchGuard(sdk.logger, resource="drive_pwm")
@@ -281,15 +282,20 @@ class PWMDriverNode:
         # 转换为 sysfs duty_cycle
         return self._pulse_to_duty_ns(expected_ns)
 
-    def _stop_motors(self) -> None:
-        """停止电机（输出中位PWM）"""
+    def _stop_motors(self, log: bool = True) -> None:
+        """停止电机（输出中位PWM）。
+
+        周期性保持中位的调用方（超时分支 200Hz、看门狗回调）传 log=False，
+        自行只记一次日志——否则空闲时每秒刷 200 行。
+        """
         center_duty = self._pulse_to_duty_ns(self.pwm_center_ns)
         self._write_pwm_ns(center_duty, center_duty)
-        self.sdk.logger.info("Motors stopped (center PWM)")
+        if log:
+            self.sdk.logger.info("Motors stopped (center PWM)")
 
     def _on_velocity_cmd_lost(self, port_name: str) -> None:
         """SDK 输入看门狗回调：断流超时 → 电机回中位（安全值输出，P2 例外）"""
-        self._stop_motors()
+        self._stop_motors(log=False)
         if not self._watchdog_stop_logged:
             self.sdk.logger.warning(
                 f"Input watchdog: '{port_name}' stale over timeout, motors at center"
@@ -317,11 +323,12 @@ class PWMDriverNode:
 
     def run(self) -> None:
         """主循环"""
-        self.sdk.logger.info("PWM Driver node started")
-        self.sdk.logger.info(f"Listening on port: velocity_cmd")
-        self.sdk.logger.info(f"Publishing on port: pwm_status")
-
         try:
+            # 日志放在 try 内：启动日志期间收到 SIGTERM 也要走 finally 回中位
+            self.sdk.logger.info("PWM Driver node started")
+            self.sdk.logger.info(f"Listening on port: velocity_cmd")
+            self.sdk.logger.info(f"Publishing on port: pwm_status")
+
             while self.running:
                 # 检查紧急停止
                 if self.emergency_stop:
@@ -357,8 +364,10 @@ class PWMDriverNode:
                 velocity_data = self.velocity_cmd_port.recv_latest()
 
                 if velocity_data is not None:
-                    # 更新最后命令时间
+                    # 更新最后命令时间；指令恢复后重新允许超时/看门狗各记一次日志
                     self.last_command_time = time.time()
+                    self._timeout_logged = False
+                    self._watchdog_stop_logged = False
 
                     # 获取速度命令
                     v_linear = velocity_data.get('linear_velocity', 0.0)
@@ -465,13 +474,13 @@ class PWMDriverNode:
                     # 检查命令超时
                     time_since_last_cmd = time.time() - self.last_command_time
                     if time_since_last_cmd > self.command_timeout:
-                        # 超时，停止电机
-                        self._stop_motors()
-                        # 只记录一次超时日志
-                        if time_since_last_cmd < self.command_timeout + 0.1:
+                        # 超时，持续保持中位；每次超时只记录一次日志
+                        self._stop_motors(log=False)
+                        if not self._timeout_logged:
                             self.sdk.logger.warning(
                                 f"Command timeout ({self.command_timeout}s), motors stopped"
                             )
+                            self._timeout_logged = True
 
                 # 控制循环频率（200Hz）
                 time.sleep(0.005)

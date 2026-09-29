@@ -237,6 +237,10 @@ InputPort 自身负责 buffer 重新打开和世代重同步。对 manifest 明�
 
 节点 SDK 默认监控父进程。父进程消失时节点会退出，减少孤儿节点。Runtime 正常停止会先清理数据流；异常退出时注册的紧急清理尽力终止仍存活的子进程组。
 
+Runtime 停节点发送 SIGTERM（5 秒后 SIGKILL）。SDK 在主线程把 SIGTERM 转为 `SystemExit(143)`，节点的 `finally` 与上下文退出照常执行——`pwm_driver` 依此在停止时回中位；Python 默认的 SIGTERM 处理会直接终止进程、跳过这些清理，sysfs PWM 会保持最后脉宽。节点自带 SIGTERM 处理器时 SDK 不覆盖。父进程看门狗同样先走这条路径，3 秒内主线程未退出才硬退出。退出码 143 在死亡记录中仍记为 `signal: 15`。节点主循环不要用裸 `except:` 或 `except BaseException`，否则会吞掉该退出。
+
+SIGKILL、段错误等无法执行清理的死亡，由图级 `safety_resources` 绑定兜底（`pwm_driver` 死亡后 runtime 直接写 sysfs 回中）。实车图已声明该绑定但保持 `dry_run: true`，台架确认极性与周期后再启用。
+
 这些机制不能替代独立硬件急停和失能设计。
 
 ## 8. 死亡记录与运行现场

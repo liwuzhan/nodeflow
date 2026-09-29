@@ -382,3 +382,61 @@ class TestJSONEncoding:
 if __name__ == "__main__":
     # 直接运行此文件执行测试
     pytest.main([__file__, "-v", "--tb=short"])
+
+
+class TestHeartbeatTimeout:
+    """前端心跳 + 后端超时：按住不动持续行驶，断线后 command_timeout 内停车"""
+
+    @staticmethod
+    def _make(params):
+        sdk = MockSDK()
+        sdk.params = params
+        with patch.object(run, 'ThreadedHTTPServer'):
+            with patch.object(run.threading, 'Thread'):
+                return run.WebTeleopNode(sdk), sdk
+
+    @staticmethod
+    def _start(node):
+        import threading as _th
+        t = _th.Thread(target=node.run, daemon=True)
+        t.start()
+        return t
+
+    @staticmethod
+    def _last_cmd(sdk):
+        return sdk.ports['velocity_cmd'].send.call_args[0][0]
+
+    def test_default_timeout_is_one_second(self):
+        node, _ = self._make({})
+        assert node.command_timeout == 1.0
+
+    def test_stops_after_timeout_without_heartbeat(self):
+        node, sdk = self._make({'command_timeout': 0.3, 'output_rate': 20.0})
+        t = self._start(node)
+        try:
+            node.set_velocity(0.5, 0.0)
+            time.sleep(0.6)
+            cmd = self._last_cmd(sdk)
+            assert cmd['linear_velocity'] == 0.0
+            assert cmd['angular_velocity'] == 0.0
+        finally:
+            node.running = False
+            t.join(timeout=2)
+
+    def test_heartbeat_keeps_command_alive(self):
+        node, sdk = self._make({'command_timeout': 0.3, 'output_rate': 20.0})
+        t = self._start(node)
+        try:
+            for _ in range(8):  # 模拟前端 100ms 心跳，总时长远超 timeout
+                node.set_velocity(0.5, 0.0)
+                time.sleep(0.1)
+            assert self._last_cmd(sdk)['linear_velocity'] == 0.5
+        finally:
+            node.running = False
+            t.join(timeout=2)
+
+    def test_frontend_has_heartbeat_and_stop_hooks(self):
+        html = (node_dir / 'static' / 'index.html').read_text(encoding='utf-8')
+        for needle in ('HEARTBEAT_MS', "'touchcancel'", "'visibilitychange'",
+                       "'blur'", "'pagehide'", 'identifier'):
+            assert needle in html, needle

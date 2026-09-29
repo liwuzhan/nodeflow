@@ -393,9 +393,11 @@
         const API_BASE = '';
 
         // 发送控制命令
+        let controlInFlight = false;
         async function sendControl() {
             if (passthroughEnabled) return;  // 透传模式下不发送手动控制
 
+            controlInFlight = true;
             try {
                 await fetch(API_BASE + '/api/control', {
                     method: 'POST',
@@ -408,6 +410,8 @@
                 updateConnectionStatus(true);
             } catch (e) {
                 updateConnectionStatus(false);
+            } finally {
+                controlInFlight = false;
             }
         }
 
@@ -495,6 +499,8 @@
                 this.handle.addEventListener('touchstart', (e) => this.onStart(e));
                 this.container.addEventListener('touchmove', (e) => this.onMove(e));
                 document.addEventListener('touchend', (e) => this.onEnd(e));
+                // 系统打断触摸（通知、来电、手势）时不会有 touchend，必须同样归零
+                document.addEventListener('touchcancel', (e) => this.onEnd(e));
 
                 // 鼠标事件
                 this.handle.addEventListener('mousedown', (e) => this.onStart(e));
@@ -505,7 +511,8 @@
             onStart(e) {
                 e.preventDefault();
                 this.active = true;
-                const pos = e.touches ? e.touches[0] : e;
+                // 记住按下本手柄的那根手指；双指操作时各自只读自己的手指
+                this.touchId = e.changedTouches ? e.changedTouches[0].identifier : null;
                 const rect = this.container.getBoundingClientRect();
                 this.startPos = {
                     x: rect.left + rect.width / 2,
@@ -517,7 +524,11 @@
                 if (!this.active) return;
                 e.preventDefault();
 
-                const pos = e.touches ? e.touches[0] : e;
+                let pos = e;
+                if (e.touches) {
+                    pos = Array.from(e.touches).find(t => t.identifier === this.touchId);
+                    if (!pos) return;
+                }
                 const rect = this.container.getBoundingClientRect();
                 const maxOffset = rect.width / 2 - 35; // 35是手柄半径
 
@@ -537,8 +548,14 @@
             }
 
             onEnd(e) {
+                // 触摸事件：只有本手柄的手指抬起/被取消才归零
+                if (e && e.changedTouches && this.touchId !== null && this.touchId !== undefined) {
+                    const mine = Array.from(e.changedTouches).some(t => t.identifier === this.touchId);
+                    if (!mine) return;
+                }
                 if (this.active) {
                     this.active = false;
+                    this.touchId = null;
                     this.currentValue = 0;
                     this.onChange(0);
                 }
@@ -649,6 +666,35 @@
                 updateConnectionStatus(false);
             }
         }, 200);
+
+        // 心跳：非零指令期间每 200ms 重发。后端 command_timeout（默认 1s）
+        // 据此区分“手指按住不动”和“网络断开/页面卡死”——后者自动停车。
+        const HEARTBEAT_MS = 200;
+        setInterval(() => {
+            if (passthroughEnabled || controlInFlight) return;
+            if (state.linear !== 0 || state.angular !== 0) sendControl();
+        }, HEARTBEAT_MS);
+
+        // 失焦/切后台/离开页面：一律归零停车
+        function stopAll() {
+            for (const k in keys) keys[k] = false;
+            for (const js of [linearJoystick, angularJoystick]) {
+                js.active = false;
+                js.touchId = null;
+                js.setValue(0);
+            }
+            state.linear = 0;
+            state.angular = 0;
+            updateDisplay();
+            sendControl();
+        }
+        window.addEventListener('blur', stopAll);
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) stopAll();
+        });
+        window.addEventListener('pagehide', () => {
+            if (navigator.sendBeacon) navigator.sendBeacon(API_BASE + '/api/stop');
+        });
 
         // 初始化显示
         updateDisplay();

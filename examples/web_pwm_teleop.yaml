@@ -10,7 +10,7 @@
 #     └───── 状态反馈 ─────────┘
 #
 # 启动:
-#   python3 -m runtime.main examples/web_pwm_teleop.yaml
+#   python3 -m edge.runtime.main configs/graphs/web_pwm_teleop.yaml
 #
 # Web界面:
 #   http://localhost:9873
@@ -31,7 +31,7 @@ nodes:
       max_angular_speed: 4.0
       continuous_output: true
       output_rate: 10.0
-      command_timeout: 5.0
+      command_timeout: 1.0          # 前端按住时 200ms 心跳；断线 1s 停车
 
   - id: pwm_driver
     package: io/pwm_driver
@@ -60,9 +60,32 @@ nodes:
       emergency_stop: false
       command_timeout: 0.5
 
-      # 调试 - 初次测试建议先开dry_run
+      # 调试 - 默认 dry_run，确认网页与链路正常后再切 false
       enable_verbose_log: false
-      dry_run_mode: false
+      dry_run_mode: true                # 默认不输出PWM；现场确认链路后改 false
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 资源安全绑定（节点异常退出契约）：pwm_driver 崩溃/被 SIGKILL 时由 runtime 回中位。
+# 当前 dry_run: true —— 只在死亡记录中写 planned，不触碰 sysfs。
+# 台架确认极性/周期后启用真实写入：本处 dry_run: false，并在
+# edge/nodes/io/pwm_driver/node.yaml 填写 failure_policy.deadline_ms。
+# （正常停止路径由 SDK 的 SIGTERM 优雅退出负责回中，不依赖本绑定。）
+# ═══════════════════════════════════════════════════════════════════════════
+safety_resources:
+  drive_pwm:
+    owner: pwm_driver
+    handler: linux_sysfs_pwm_pair
+    dry_run: true
+    params_from_owner:
+      frequency_hz: pwm_frequency
+      neutral_high_pulse_ns: pwm_center_ns
+      left_chip: left_pwmchip
+      left_channel: left_pwm_channel
+      right_chip: right_pwmchip
+      right_channel: right_pwm_channel
+      inverted_mapping: pwm_inverted_polarity
+      dry_run: dry_run_mode
+
 
 edges:
   # Web遥控 → PWM驱动

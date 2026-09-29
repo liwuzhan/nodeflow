@@ -30,7 +30,7 @@
 #   1. 连接RTK GPS设备（串口或网络）
 #   2. 确保PWM硬件已正确配置（香橙派5 Ultra）
 #   3. 根据实际情况修改配置参数
-#   4. 运行场景: python3 -m runtime.main examples/manual_trajectory_recording.yaml
+#   4. 运行场景: python3 -m edge.runtime.main configs/graphs/manual_trajectory_recording.yaml
 #
 # Web界面：
 #   - 遥控界面: http://localhost:9873 (键盘WASD或虚拟手柄控制车辆)
@@ -151,7 +151,7 @@ nodes:
       output_rate: 10.0                # 输出频率（Hz）
 
       # ========== 安全参数 ==========
-      command_timeout: 5.0             # 命令超时时间（秒）
+      command_timeout: 1.0             # 命令超时（秒）；前端按住时 200ms 心跳
                                        # 超过此时间未收到新命令则自动停止
       require_stop_on_disconnect: false # 断开连接时是否强制停止
 
@@ -194,12 +194,35 @@ nodes:
 
       # ========== 调试参数 ==========
       enable_verbose_log: false        # 启用详细日志
-      dry_run_mode: false              # 干运行模式（不输出PWM，仅测试）
+      dry_run_mode: true               # 干运行模式（不输出PWM）；现场确认链路后改 false
                                        # 初次测试时建议设为true
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 数据连接（边）
 # ═══════════════════════════════════════════════════════════════════════════
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 资源安全绑定（节点异常退出契约）：pwm_driver 崩溃/被 SIGKILL 时由 runtime 回中位。
+# 当前 dry_run: true —— 只在死亡记录中写 planned，不触碰 sysfs。
+# 台架确认极性/周期后启用真实写入：本处 dry_run: false，并在
+# edge/nodes/io/pwm_driver/node.yaml 填写 failure_policy.deadline_ms。
+# （正常停止路径由 SDK 的 SIGTERM 优雅退出负责回中，不依赖本绑定。）
+# ═══════════════════════════════════════════════════════════════════════════
+safety_resources:
+  drive_pwm:
+    owner: pwm_driver
+    handler: linux_sysfs_pwm_pair
+    dry_run: true
+    params_from_owner:
+      frequency_hz: pwm_frequency
+      neutral_high_pulse_ns: pwm_center_ns
+      left_chip: left_pwmchip
+      left_channel: left_pwm_channel
+      right_chip: right_pwmchip
+      right_channel: right_pwm_channel
+      inverted_mapping: pwm_inverted_polarity
+      dry_run: dry_run_mode
+
 
 edges:
   # ┌─────────────────────────────────────────────────────────────────────┐

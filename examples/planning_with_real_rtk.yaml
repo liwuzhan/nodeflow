@@ -209,6 +209,29 @@ nodes:
 # 数据连接 (边)
 # ═══════════════════════════════════════════════════════════════════════════
 
+# ═══════════════════════════════════════════════════════════════════════════
+# 资源安全绑定（节点异常退出契约）：pwm_driver 崩溃/被 SIGKILL 时由 runtime 回中位。
+# 当前 dry_run: true —— 只在死亡记录中写 planned，不触碰 sysfs。
+# 台架确认极性/周期后启用真实写入：本处 dry_run: false，并在
+# edge/nodes/io/pwm_driver/node.yaml 填写 failure_policy.deadline_ms。
+# （正常停止路径由 SDK 的 SIGTERM 优雅退出负责回中，不依赖本绑定。）
+# ═══════════════════════════════════════════════════════════════════════════
+safety_resources:
+  drive_pwm:
+    owner: pwm_driver
+    handler: linux_sysfs_pwm_pair
+    dry_run: true
+    params_from_owner:
+      frequency_hz: pwm_frequency
+      neutral_high_pulse_ns: pwm_center_ns
+      left_chip: left_pwmchip
+      left_channel: left_pwm_channel
+      right_chip: right_pwmchip
+      right_channel: right_pwm_channel
+      inverted_mapping: pwm_inverted_polarity
+      dry_run: dry_run_mode
+
+
 edges:
   # ┌─────────────────────────────────────────────────────────────────────┐
   # │ 地块规划流程                                                          │

@@ -124,7 +124,7 @@ def list_records(records_dir: str) -> List[Dict[str, Any]]:
                     if frames:
                         start_time = frames[0].get('timestamp')
                         end_time = frames[-1].get('timestamp')
-            except:
+            except Exception:
                 pass
 
             records.append({

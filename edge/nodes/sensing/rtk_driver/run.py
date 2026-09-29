@@ -153,7 +153,7 @@ class RTKDriverNode:
             try:
                 self.raw_log_file.write(line + '\n')
                 self.raw_log_file.flush()
-            except:
+            except Exception:
                 pass
 
         # 解析NMEA消息
@@ -201,7 +201,7 @@ class RTKDriverNode:
         if self.raw_log_file:
             try:
                 self.raw_log_file.close()
-            except:
+            except Exception:
                 pass
 
         # 关闭SDK
